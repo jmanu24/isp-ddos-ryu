@@ -1,31 +1,20 @@
-from core.models import DetectionEvent
-from config.settings import LOW_SLOW_NEW_FLOWS, LOW_SLOW_MIN_BYTES
+from .base import BaseDetector
 
-class LowSlowDetector:
+
+class LowSlowDetector(BaseDetector):
 
     def __init__(self):
-        self.flows = {}
+        self.byte_threshold = 500
+        self.packet_threshold = 20
 
-    def detect(self, event):
+    def detect(self, flow):
 
-        f = self.flows.get(event.src_ip, {
-            "flows": 0,
-            "bytes": 0
-        })
+        if flow.packets < self.packet_threshold and flow.bytes > self.byte_threshold:
 
-        f["flows"] += 1
-        f["bytes"] += event.bytes
-
-        self.flows[event.src_ip] = f
-
-        if (
-            f["flows"] > LOW_SLOW_NEW_FLOWS and
-            f["bytes"] < LOW_SLOW_MIN_BYTES
-        ):
-            return DetectionEvent(
-                detector="low_slow",
-                src_ip=event.src_ip,
-                score=0.95
-            )
+            return {
+                "type": "LOW_SLOW",
+                "src_ip": flow.src_ip,
+                "score": flow.bytes
+            }
 
         return None

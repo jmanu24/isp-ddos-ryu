@@ -1,17 +1,16 @@
-from dataclasses import dataclass
-
-@dataclass
 class FlowEvent:
-    src_ip: str
-    dst_ip: str
-    protocol: int
-    packets: int
-    bytes: int
-    flow_id: str
 
+    def __init__(self,
+                 src_ip,
+                 dst_ip,
+                 protocol,
+                 packets,
+                 bytes,
+                 flow_id):
 
-@dataclass
-class DetectionEvent:
-    detector: str
-    src_ip: str
-    score: float
+        self.src_ip = src_ip
+        self.dst_ip = dst_ip
+        self.protocol = protocol
+        self.packets = packets
+        self.bytes = bytes
+        self.flow_id = flow_id

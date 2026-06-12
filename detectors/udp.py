@@ -1,24 +1,22 @@
-from core.models import DetectionEvent
-from config.settings import UDP_THRESHOLD
+from .base import BaseDetector
 
-class UDPDetector:
+
+class UDPDetector(BaseDetector):
 
     def __init__(self):
-        self.counter = {}
+        self.threshold = 300
 
-    def detect(self, event):
+    def detect(self, flow):
 
-        if event.protocol != 17:
+        if flow.protocol != 17:
             return None
 
-        self.counter[event.src_ip] = self.counter.get(event.src_ip, 0) + 1
+        if flow.packets > self.threshold:
 
-        if self.counter[event.src_ip] > UDP_THRESHOLD:
-
-            return DetectionEvent(
-                detector="udp",
-                src_ip=event.src_ip,
-                score=0.8
-            )
+            return {
+                "type": "UDP_FLOOD",
+                "src_ip": flow.src_ip,
+                "score": flow.packets
+            }
 
         return None

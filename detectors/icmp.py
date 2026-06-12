@@ -1,24 +1,22 @@
-from core.models import DetectionEvent
-from config.settings import ICMP_THRESHOLD
+from .base import BaseDetector
 
-class ICMPDetector:
+
+class ICMPDetector(BaseDetector):
 
     def __init__(self):
-        self.counter = {}
+        self.threshold = 150
 
-    def detect(self, event):
+    def detect(self, flow):
 
-        if event.protocol != 1:
+        if flow.protocol != 1:
             return None
 
-        self.counter[event.src_ip] = self.counter.get(event.src_ip, 0) + 1
+        if flow.packets > self.threshold:
 
-        if self.counter[event.src_ip] > ICMP_THRESHOLD:
-
-            return DetectionEvent(
-                detector="icmp",
-                src_ip=event.src_ip,
-                score=0.7
-            )
+            return {
+                "type": "ICMP_FLOOD",
+                "src_ip": flow.src_ip,
+                "score": flow.packets
+            }
 
         return None

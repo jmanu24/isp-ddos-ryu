@@ -1,7 +1,4 @@
-from abc import ABC, abstractmethod
+class BaseDetector:
 
-class BaseDetector(ABC):
-
-    @abstractmethod
-    def detect(self, event):
-        pass
+    def detect(self, flow_event):
+        raise NotImplementedError

@@ -1,28 +1,22 @@
-from collections import defaultdict
-from core.models import DetectionEvent
-from config.settings import SYN_THRESHOLD
+from .base import BaseDetector
 
-class SYNDetector:
+
+class SYNDetector(BaseDetector):
+
     def __init__(self):
-        self.syn = defaultdict(int)
-        self.ack = defaultdict(int)
+        self.threshold = 200  # packets per flow window
 
-    def detect(self, event):
+    def detect(self, flow):
 
-        key = event.src_ip + "-" + event.dst_ip
-
-        if event.protocol != 6:
+        if flow.protocol != 6:  # TCP
             return None
 
-        self.syn[key] += 1
+        if flow.packets > self.threshold:
 
-        ratio = self.syn[key] / max(self.ack[key], 1)
+            return {
+                "type": "SYN_FLOOD",
+                "src_ip": flow.src_ip,
+                "score": flow.packets
+            }
 
-        if ratio > SYN_THRESHOLD:
-
-            return DetectionEvent(
-                detector="syn",
-                src_ip=event.src_ip,
-                score=0.9
-            )
         return None

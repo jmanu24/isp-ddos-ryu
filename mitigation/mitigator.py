@@ -1,10 +1,19 @@
+from ryu.ofproto import ofproto_v1_3
+
+
 class FlowMitigator:
 
-    def __init__(self, timeout=60):
-        self.timeout = timeout
+    def __init__(self):
+        self.blocked = set()
 
     def block(self, datapath, ip):
 
+        if ip in self.blocked:
+            return
+
+        self.blocked.add(ip)
+
+        ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
         match = parser.OFPMatch(
@@ -12,12 +21,22 @@ class FlowMitigator:
             ipv4_src=ip
         )
 
+        actions = []
+
+        inst = [
+            parser.OFPInstructionActions(
+                ofproto.OFPIT_APPLY_ACTIONS,
+                actions
+            )
+        ]
+
         mod = parser.OFPFlowMod(
             datapath=datapath,
-            priority=500,
-            hard_timeout=self.timeout,
+            priority=100,
             match=match,
-            instructions=[]
+            instructions=inst
         )
 
         datapath.send_msg(mod)
+
+        print(f"[MITIGATION] Blocked IP: {ip}")
