@@ -1,14 +1,25 @@
-from collections import defaultdict
+from ryu.lib.packet import packet
+from ryu.lib.packet import ipv4
+
+from core.models import FlowEvent
+
 
 class FlowCollector:
-    def __init__(self):
-        self.history = defaultdict(list)
 
-    def update(self, flow_id, packets):
-        h = self.history[flow_id]
-        h.append(packets)
+    def collect(self, msg):
 
-        if len(h) > 20:
-            h.pop(0)
+        pkt = packet.Packet(msg.data)
 
-        return h
+        ip_pkt = pkt.get_protocol(ipv4.ipv4)
+
+        if not ip_pkt:
+            return None
+
+        return FlowEvent(
+            src_ip=ip_pkt.src,
+            dst_ip=ip_pkt.dst,
+            protocol=ip_pkt.proto,
+            packets=1,
+            bytes=len(msg.data),
+            flow_id=f"{ip_pkt.src}-{ip_pkt.dst}-{ip_pkt.proto}"
+        )

@@ -1,7 +1,14 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER, set_ev_cls
+from ryu.controller.handler import (
+    CONFIG_DISPATCHER,
+    MAIN_DISPATCHER,
+    set_ev_cls
+)
 from ryu.ofproto import ofproto_v1_3
+
+from forwarding.learning_switch import LearningSwitch
+from collectors.flow_collector import FlowCollector
 
 from detectors.syn import SYNDetector
 from detectors.udp import UDPDetector
@@ -11,8 +18,6 @@ from detectors.low_slow import LowSlowDetector
 from decision.engine import DecisionEngine
 from mitigation.mitigator import FlowMitigator
 
-from core.models import FlowEvent
-
 
 class ISPDDOS(app_manager.RyuApp):
 
@@ -21,6 +26,9 @@ class ISPDDOS(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self.forwarder = LearningSwitch()
+        self.collector = FlowCollector()
+
         self.detectors = [
             SYNDetector(),
             UDPDetector(),
@@ -28,48 +36,57 @@ class ISPDDOS(app_manager.RyuApp):
             LowSlowDetector()
         ]
 
-        self.decision = DecisionEngine()
+        self.decision_engine = DecisionEngine()
         self.mitigator = FlowMitigator()
 
-    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def packet_in(self, ev):
+    @set_ev_cls(
+        ofp_event.EventOFPSwitchFeatures,
+        CONFIG_DISPATCHER
+    )
+    def switch_features_handler(self, ev):
 
-        msg = ev.msg
-        pkt = msg.data
+        datapath = ev.msg.datapath
 
-        # simplificado: en producción parsear con ryu.lib.packet
-        src_ip = "0.0.0.0"
-        dst_ip = "0.0.0.0"
-        protocol = 0
-        packets = 1
-        bytes_ = len(pkt)
-
-        event = FlowEvent(
-            src_ip=src_ip,
-            dst_ip=dst_ip,
-            protocol=protocol,
-            packets=packets,
-            bytes=bytes_,
-            flow_id=f"{src_ip}-{dst_ip}"
+        self.forwarder.install_table_miss(
+            datapath
         )
+
+    @set_ev_cls(
+        ofp_event.EventOFPPacketIn,
+        MAIN_DISPATCHER
+    )
+    def packet_in_handler(self, ev):
+
+        self.forwarder.handle_packet(ev)
+
+        flow = self.collector.collect(
+            ev.msg
+        )
+
+        if not flow:
+            return
 
         detections = []
 
-        for d in self.detectors:
-            r = d.detect(event)
-            if r:
-                detections.append(r)
+        for detector in self.detectors:
 
-        decision = self.decision.evaluate(detections)
+            result = detector.detect(flow)
+
+            if result:
+                detections.append(result)
+
+        decision = self.decision_engine.evaluate(
+            detections
+        )
 
         if decision:
+
             self.logger.warning(
-                "ATTACK detected: %s from %s",
-                decision.detector,
-                decision.src_ip
+                "Attack detected %s",
+                decision.detector
             )
 
             self.mitigator.block(
-                msg.datapath,
+                ev.msg.datapath,
                 decision.src_ip
             )
