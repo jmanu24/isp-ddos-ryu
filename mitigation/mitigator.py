@@ -1,5 +1,3 @@
-from ryu.ofproto import ofproto_v1_3
-
 
 class FlowMitigator:
 
@@ -21,6 +19,7 @@ class FlowMitigator:
             ipv4_src=ip
         )
 
+        # drop rule (no actions)
         actions = []
 
         inst = [
