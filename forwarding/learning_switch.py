@@ -8,12 +8,7 @@ class LearningSwitch:
     def __init__(self):
         self.mac_to_port = {}
 
-    def add_flow(self,
-                 datapath,
-                 priority,
-                 match,
-                 actions):
-
+    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -24,16 +19,25 @@ class LearningSwitch:
             )
         ]
 
-        mod = parser.OFPFlowMod(
-            datapath=datapath,
-            priority=priority,
-            match=match,
-            instructions=inst
-        )
+        if buffer_id:
+            mod = parser.OFPFlowMod(
+                datapath=datapath,
+                buffer_id=buffer_id,
+                priority=priority,
+                match=match,
+                instructions=inst
+            )
+        else:
+            mod = parser.OFPFlowMod(
+                datapath=datapath,
+                priority=priority,
+                match=match,
+                instructions=inst
+            )
 
         datapath.send_msg(mod)
 
-    def install_table_miss(self, datapath):
+    def switch_features_handler(self, datapath):
 
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -49,12 +53,12 @@ class LearningSwitch:
 
         self.add_flow(
             datapath,
-            0,
-            match,
-            actions
+            priority=0,
+            match=match,
+            actions=actions
         )
 
-    def handle_packet(self, ev):
+    def packet_in_handler(self, ev):
 
         msg = ev.msg
         datapath = msg.datapath
@@ -62,13 +66,15 @@ class LearningSwitch:
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
+        dpid = datapath.id
+
+        self.mac_to_port.setdefault(dpid, {})
+
         in_port = msg.match["in_port"]
 
         pkt = packet.Packet(msg.data)
-        eth = pkt.get_protocol(ethernet.ethernet)
 
-        if eth is None:
-            return
+        eth = pkt.get_protocol(ethernet.ethernet)
 
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             return
@@ -76,9 +82,6 @@ class LearningSwitch:
         dst = eth.dst
         src = eth.src
 
-        dpid = datapath.id
-
-        self.mac_to_port.setdefault(dpid, {})
         self.mac_to_port[dpid][src] = in_port
 
         if dst in self.mac_to_port[dpid]:
@@ -98,6 +101,17 @@ class LearningSwitch:
                 eth_dst=dst
             )
 
+            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
+
+                self.add_flow(
+                    datapath,
+                    1,
+                    match,
+                    actions,
+                    msg.buffer_id
+                )
+                return
+
             self.add_flow(
                 datapath,
                 1,
@@ -105,12 +119,17 @@ class LearningSwitch:
                 actions
             )
 
+        data = None
+
+        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+            data = msg.data
+
         out = parser.OFPPacketOut(
             datapath=datapath,
-            buffer_id=ofproto.OFP_NO_BUFFER,
+            buffer_id=msg.buffer_id,
             in_port=in_port,
             actions=actions,
-            data=msg.data
+            data=data
         )
 
         datapath.send_msg(out)

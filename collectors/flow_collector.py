@@ -1,25 +1,46 @@
-from ryu.lib.packet import packet
-from ryu.lib.packet import ipv4
-
-from core.models import FlowEvent
+import time
 
 
 class FlowCollector:
 
-    def collect(self, msg):
+    def __init__(self):
+        self.prev_stats = {}
 
-        pkt = packet.Packet(msg.data)
+    def process_stats(self, dpid, body):
 
-        ip_pkt = pkt.get_protocol(ipv4.ipv4)
+        total_bytes = 0
+        total_packets = 0
 
-        if not ip_pkt:
-            return None
+        for stat in body:
+            total_bytes += stat.byte_count
+            total_packets += stat.packet_count
 
-        return FlowEvent(
-            src_ip=ip_pkt.src,
-            dst_ip=ip_pkt.dst,
-            protocol=ip_pkt.proto,
-            packets=1,
-            bytes=len(msg.data),
-            flow_id=f"{ip_pkt.src}-{ip_pkt.dst}-{ip_pkt.proto}"
+        prev = self.prev_stats.get(
+            dpid,
+            {
+                "bytes": 0,
+                "packets": 0,
+                "time": time.time()
+            }
         )
+
+        now = time.time()
+
+        dt = now - prev["time"]
+
+        if dt <= 0:
+            dt = 1
+
+        byte_rate = (total_bytes - prev["bytes"]) / dt
+        packet_rate = (total_packets - prev["packets"]) / dt
+
+        self.prev_stats[dpid] = {
+            "bytes": total_bytes,
+            "packets": total_packets,
+            "time": now
+        }
+
+        return {
+            "byte_rate": byte_rate,
+            "packet_rate": packet_rate
+        }

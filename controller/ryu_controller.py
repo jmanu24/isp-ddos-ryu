@@ -1,25 +1,32 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
+from ryu.controller.handler import (
+    CONFIG_DISPATCHER,
+    MAIN_DISPATCHER,
+    set_ev_cls
+)
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib import hub
 
-import time
+from forwarding.learning_switch import LearningSwitch
+from collectors.flow_collector import FlowCollector
 
 
 class FlowStatsIDS(app_manager.RyuApp):
+
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
+
         super(FlowStatsIDS, self).__init__(*args, **kwargs)
 
         self.datapaths = {}
 
-        # store previous stats for delta calculation
-        self.prev_stats = {}
+        self.forwarding = LearningSwitch()
 
-        # thresholds (ajusta según tu red)
-        self.byte_threshold = 1e6       # 1 MB entre intervalos
+        self.collector = FlowCollector()
+
+        self.byte_threshold = 1e6
         self.packet_threshold = 1000
 
         self.monitor_thread = hub.spawn(self._monitor)
@@ -27,80 +34,97 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.logger.info("FlowStats IDS iniciado")
 
     # -------------------------------------------------
-    # SWITCH CONNECTION
+    # SWITCH CONNECT
     # -------------------------------------------------
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+
+    @set_ev_cls(
+        ofp_event.EventOFPSwitchFeatures,
+        CONFIG_DISPATCHER
+    )
     def switch_features_handler(self, ev):
+
         datapath = ev.msg.datapath
 
         self.datapaths[datapath.id] = datapath
 
-        self.logger.info("Switch conectado: %s", datapath.id)
+        self.forwarding.switch_features_handler(
+            datapath
+        )
+
+        self.logger.info(
+            "Switch conectado: %s",
+            datapath.id
+        )
 
     # -------------------------------------------------
-    # MONITOR LOOP
+    # PACKET IN
     # -------------------------------------------------
+
+    @set_ev_cls(
+        ofp_event.EventOFPPacketIn,
+        MAIN_DISPATCHER
+    )
+    def packet_in_handler(self, ev):
+
+        self.forwarding.packet_in_handler(ev)
+
+    # -------------------------------------------------
+    # MONITOR
+    # -------------------------------------------------
+
     def _monitor(self):
+
         while True:
+
             for dp in list(self.datapaths.values()):
                 self._request_flow_stats(dp)
+
             hub.sleep(5)
 
-    # -------------------------------------------------
-    # REQUEST FLOW STATS
-    # -------------------------------------------------
     def _request_flow_stats(self, datapath):
-        ofproto = datapath.ofproto
+
         parser = datapath.ofproto_parser
 
         req = parser.OFPFlowStatsRequest(datapath)
+
         datapath.send_msg(req)
 
     # -------------------------------------------------
-    # FLOW STATS REPLY HANDLER
+    # FLOW STATS
     # -------------------------------------------------
-    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
-    def _flow_stats_reply_handler(self, ev):
-        body = ev.msg.body
+
+    @set_ev_cls(
+        ofp_event.EventOFPFlowStatsReply,
+        MAIN_DISPATCHER
+    )
+    def flow_stats_reply_handler(self, ev):
+
         dpid = ev.msg.datapath.id
 
-        total_bytes = 0
-        total_packets = 0
+        metrics = self.collector.process_stats(
+            dpid,
+            ev.msg.body
+        )
 
-        for stat in body:
-            total_bytes += stat.byte_count
-            total_packets += stat.packet_count
-
-        prev = self.prev_stats.get(dpid, {
-            "bytes": 0,
-            "packets": 0,
-            "time": time.time()
-        })
-
-        now = time.time()
-        time_diff = now - prev["time"] if now - prev["time"] > 0 else 1
-
-        # deltas
-        byte_rate = (total_bytes - prev["bytes"]) / time_diff
-        packet_rate = (total_packets - prev["packets"]) / time_diff
+        byte_rate = metrics["byte_rate"]
+        packet_rate = metrics["packet_rate"]
 
         self.logger.info(
             "SW %s | Byte/s: %.2f | Packet/s: %.2f",
-            dpid, byte_rate, packet_rate
+            dpid,
+            byte_rate,
+            packet_rate
         )
 
-        # -------------------------
-        # IDS DETECTION LOGIC
-        # -------------------------
-        if byte_rate > self.byte_threshold or packet_rate > self.packet_threshold:
-            self.logger.warning(
-                "⚠ POSIBLE DDoS en switch %s | Byte/s=%.2f Packet/s=%.2f",
-                dpid, byte_rate, packet_rate
-            )
+        if (
+            byte_rate > self.byte_threshold
+            or
+            packet_rate > self.packet_threshold
+        ):
 
-        # update snapshot
-        self.prev_stats[dpid] = {
-            "bytes": total_bytes,
-            "packets": total_packets,
-            "time": now
-        }
+            self.logger.warning(
+                "POSIBLE DDoS SW=%s Byte/s=%.2f Packet/s=%.2f",
+                dpid,
+                byte_rate,
+                packet_rate
+            )
