@@ -1,142 +1,54 @@
-import os
-import sys
-import time
-
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
+from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib import hub
-from ryu.app.wsgi import WSGIApplication
+
+import time
 
 
-# =========================
-# Fix de imports locales
-# =========================
-BASE_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
-)
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
-
-
-from detectors.syn import SYNDetector
-from detectors.udp import UDPDetector
-from detectors.icmp import ICMPDetector
-from detectors.low_slow import LowSlowDetector
-
-from decision.engine import DecisionEngine
-from mitigation.mitigator import FlowMitigator
-from core.models import FlowEvent
-
-
-# =========================
-# REST API placeholder
-# =========================
-class StatsAPI:
-    def __init__(self, req, link, data, **config):
-        self.req = req
-        self.app = data["app"]
-
-    # endpoint simple de prueba
-    def get_switches(self, req, **kwargs):
-        dps = list(self.app.datapaths.keys())
-        return {"switches": dps}
-
-
-# =========================
-# MAIN CONTROLLER
-# =========================
-class ISPDDOSFlowStats(app_manager.RyuApp):
-
+class FlowStatsIDS(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
-    # FIX CRÍTICO WSGI
-    _CONTEXTS = {
-        "wsgi": WSGIApplication
-    }
-
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super(FlowStatsIDS, self).__init__(*args, **kwargs)
 
-        # WSGI REGISTRATION (FIX DEL 404)
-        wsgi = kwargs["wsgi"]
-        wsgi.register(StatsAPI, {"app": self})
-
-        # datapaths conectados
         self.datapaths = {}
 
-        # IDS components
-        self.detectors = [
-            SYNDetector(),
-            UDPDetector(),
-            ICMPDetector(),
-            LowSlowDetector()
-        ]
+        # store previous stats for delta calculation
+        self.prev_stats = {}
 
-        self.decision = DecisionEngine()
-        self.mitigator = FlowMitigator()
+        # thresholds (ajusta según tu red)
+        self.byte_threshold = 1e6       # 1 MB entre intervalos
+        self.packet_threshold = 1000
 
-        # polling thread para flowstats
-        self.monitor_thread = hub.spawn(self._monitor_flow_stats)
+        self.monitor_thread = hub.spawn(self._monitor)
 
-        self.logger.info("ISP-DDOS FlowStats Controller iniciado correctamente")
+        self.logger.info("FlowStats IDS iniciado")
 
-    # =========================
-    # Switch features
-    # =========================
+    # -------------------------------------------------
+    # SWITCH CONNECTION
+    # -------------------------------------------------
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
+
         self.datapaths[datapath.id] = datapath
 
         self.logger.info("Switch conectado: %s", datapath.id)
 
-    # =========================
-    # PacketIn (fallback IDS)
-    # =========================
-    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def packet_in(self, ev):
-        msg = ev.msg
-        pkt = msg.data
-
-        event = FlowEvent(
-            src_ip="0.0.0.0",
-            dst_ip="0.0.0.0",
-            protocol=0,
-            packets=1,
-            bytes=len(pkt),
-            flow_id="unknown"
-        )
-
-        detections = []
-
-        for detector in self.detectors:
-            result = detector.detect(event)
-            if result:
-                detections.append(result)
-
-        decision = self.decision.evaluate(detections)
-
-        if decision:
-            self.logger.warning(
-                "ATTACK detected: %s from %s",
-                decision.detector,
-                decision.src_ip
-            )
-
-            self.mitigator.block(msg.datapath, decision.src_ip)
-
-    # =========================
-    # FLOW STATS MONITOR
-    # =========================
-    def _monitor_flow_stats(self):
+    # -------------------------------------------------
+    # MONITOR LOOP
+    # -------------------------------------------------
+    def _monitor(self):
         while True:
-            for dp in self.datapaths.values():
+            for dp in list(self.datapaths.values()):
                 self._request_flow_stats(dp)
-
             hub.sleep(5)
 
+    # -------------------------------------------------
+    # REQUEST FLOW STATS
+    # -------------------------------------------------
     def _request_flow_stats(self, datapath):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -144,17 +56,51 @@ class ISPDDOSFlowStats(app_manager.RyuApp):
         req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
 
-    # =========================
-    # FLOW STATS RESPONSE
-    # =========================
+    # -------------------------------------------------
+    # FLOW STATS REPLY HANDLER
+    # -------------------------------------------------
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
-    def flow_stats_reply_handler(self, ev):
+    def _flow_stats_reply_handler(self, ev):
         body = ev.msg.body
+        dpid = ev.msg.datapath.id
 
-        total_flows = len(body)
+        total_bytes = 0
+        total_packets = 0
+
+        for stat in body:
+            total_bytes += stat.byte_count
+            total_packets += stat.packet_count
+
+        prev = self.prev_stats.get(dpid, {
+            "bytes": 0,
+            "packets": 0,
+            "time": time.time()
+        })
+
+        now = time.time()
+        time_diff = now - prev["time"] if now - prev["time"] > 0 else 1
+
+        # deltas
+        byte_rate = (total_bytes - prev["bytes"]) / time_diff
+        packet_rate = (total_packets - prev["packets"]) / time_diff
 
         self.logger.info(
-            "Switch %s - Flows activos: %s",
-            ev.msg.datapath.id,
-            total_flows
+            "SW %s | Byte/s: %.2f | Packet/s: %.2f",
+            dpid, byte_rate, packet_rate
         )
+
+        # -------------------------
+        # IDS DETECTION LOGIC
+        # -------------------------
+        if byte_rate > self.byte_threshold or packet_rate > self.packet_threshold:
+            self.logger.warning(
+                "⚠ POSIBLE DDoS en switch %s | Byte/s=%.2f Packet/s=%.2f",
+                dpid, byte_rate, packet_rate
+            )
+
+        # update snapshot
+        self.prev_stats[dpid] = {
+            "bytes": total_bytes,
+            "packets": total_packets,
+            "time": now
+        }
