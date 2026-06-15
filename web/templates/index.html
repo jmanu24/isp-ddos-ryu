@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta charset="utf-8">
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+<style>
+
+body{
+    font-family:Arial;
+    margin:20px;
+}
+
+.card{
+    border:1px solid #ccc;
+    padding:10px;
+    margin:10px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<h1>ISP DDoS Dashboard</h1>
+
+<h2>Switches</h2>
+
+<div id="switches"></div>
+
+<h2>Eventos</h2>
+
+<div id="events"></div>
+
+<h2>Ataques</h2>
+
+<div id="attacks"></div>
+
+<script>
+
+const socket = io();
+
+socket.on(
+    "state_update",
+    data => {
+
+        document.getElementById(
+            "switches"
+        ).innerHTML =
+        data.switches.map(
+            s => `
+            <div class="card">
+            SW ${s.dpid}<br>
+            Byte/s: ${s.byte_rate}<br>
+            Packet/s: ${s.packet_rate}
+            </div>
+            `
+        ).join("");
+
+        document.getElementById(
+            "events"
+        ).innerHTML =
+        data.events.map(
+            e => `
+            <div>
+            ${e.timestamp}
+            -
+            ${e.message}
+            </div>
+            `
+        ).join("");
+
+        document.getElementById(
+            "attacks"
+        ).innerHTML =
+        data.attacks.map(
+            a => `
+            <div style="color:red">
+            SW ${a.switch}
+            Byte/s ${a.byte_rate}
+            Packet/s ${a.packet_rate}
+            </div>
+            `
+        ).join("");
+    }
+);
+
+</script>
+
+</body>
+</html>

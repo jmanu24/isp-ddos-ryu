@@ -1,2 +1,6 @@
 ryu>=4.34
 numpy>=1.26
+Flask==3.0.3
+Flask-SocketIO==5.3.6
+python-socketio==5.11.2
+eventlet==0.36.1
