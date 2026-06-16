@@ -165,7 +165,7 @@ class FlowStatsIDS(app_manager.RyuApp):
                 except Exception as e:
                     self.logger.error("Stats error: %s", str(e))
 
-            hub.sleep(5)
+            hub.sleep(1)
 
     def _request_flow_stats(self, datapath):
 
