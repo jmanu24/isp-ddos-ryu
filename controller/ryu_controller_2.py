@@ -38,6 +38,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         super(FlowStatsIDS, self).__init__(*args, **kwargs)
 
         self.datapaths = {}
+        self.port_stats_prev = {}
 
         self.forwarding = LearningSwitch()
         self.collector = FlowCollector()
@@ -161,6 +162,7 @@ class FlowStatsIDS(app_manager.RyuApp):
 
                 try:
                     self._request_flow_stats(dp)
+                    self._request_port_stats(dp)
 
                 except Exception as e:
                     self.logger.error("Stats error: %s", str(e))
@@ -171,6 +173,19 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         parser = datapath.ofproto_parser
         req = parser.OFPFlowStatsRequest(datapath)
+        datapath.send_msg(req)
+
+    def _request_port_stats(self, datapath):
+
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        req = parser.OFPPortStatsRequest(
+            datapath,
+            0,
+            ofproto.OFPP_ANY
+        )
+
         datapath.send_msg(req)
 
     # ---------------------------------------------
@@ -215,3 +230,61 @@ class FlowStatsIDS(app_manager.RyuApp):
                 byte_rate,
                 packet_rate
             )
+
+
+    # ---------------------------------------------
+    # PORT STATS
+    # ---------------------------------------------
+
+    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
+    def port_stats_reply_handler(self, ev):
+
+        dpid = ev.msg.datapath.id
+        ofproto = ev.msg.datapath.ofproto
+
+        for stat in sorted(ev.msg.body, key=lambda x: x.port_no):
+
+            if stat.port_no == ofproto.OFPP_LOCAL:
+                continue
+
+            key = (dpid, stat.port_no)
+
+            current_rx_bytes = stat.rx_bytes
+            current_tx_bytes = stat.tx_bytes
+            current_rx_packets = stat.rx_packets
+            current_tx_packets = stat.tx_packets
+
+            if key in self.port_stats_prev:
+
+                previous = self.port_stats_prev[key]
+
+                rx_byte_rate = current_rx_bytes - previous["rx_bytes"]
+                tx_byte_rate = current_tx_bytes - previous["tx_bytes"]
+
+                rx_packet_rate = current_rx_packets - previous["rx_packets"]
+                tx_packet_rate = current_tx_packets - previous["tx_packets"]
+
+                total_byte_rate = rx_byte_rate + tx_byte_rate
+                total_packet_rate = rx_packet_rate + tx_packet_rate
+
+                self.logger.info(
+                    "PORT | SW=%s PORT=%s RX_B/s=%d TX_B/s=%d RX_P/s=%d TX_P/s=%d TOTAL_B/s=%d TOTAL_P/s=%d DROP_RX=%d DROP_TX=%d",
+                    dpid,
+                    stat.port_no,
+                    rx_byte_rate,
+                    tx_byte_rate,
+                    rx_packet_rate,
+                    tx_packet_rate,
+                    total_byte_rate,
+                    total_packet_rate,
+                    stat.rx_dropped,
+                    stat.tx_dropped
+                )
+
+            self.port_stats_prev[key] = {
+                "rx_bytes": current_rx_bytes,
+                "tx_bytes": current_tx_bytes,
+                "rx_packets": current_rx_packets,
+                "tx_packets": current_tx_packets
+            }
+
