@@ -55,6 +55,8 @@ class LearningSwitch:
 
     def switch_features_handler(self, datapath):
 
+        print("INSTALANDO TABLE MISS EN", datapath.id)
+
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
