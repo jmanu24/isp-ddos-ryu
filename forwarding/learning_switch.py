@@ -1,6 +1,9 @@
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
+from ryu.lib.packet import ipv4
+from ryu.lib.packet import tcp
+from ryu.lib.packet import udp
 
 
 class LearningSwitch:
@@ -97,11 +100,40 @@ class LearningSwitch:
 
         if out_port != ofproto.OFPP_FLOOD:
 
-            match = parser.OFPMatch(
-                in_port=in_port,
-                eth_src=src,
-                eth_dst=dst
-            )
+            ip_pkt = pkt.get_protocol(ipv4.ipv4)
+
+            if ip_pkt:
+
+                tcp_pkt = pkt.get_protocol(tcp.tcp)
+                udp_pkt = pkt.get_protocol(udp.udp)
+
+                match_fields = {
+                    "in_port": in_port,
+                    "eth_type": 0x0800,
+                    "ipv4_src": ip_pkt.src,
+                    "ipv4_dst": ip_pkt.dst,
+                    "ip_proto": ip_pkt.proto
+                }
+
+                if tcp_pkt:
+
+                    match_fields["tcp_src"] = tcp_pkt.src_port
+                    match_fields["tcp_dst"] = tcp_pkt.dst_port
+
+                elif udp_pkt:
+
+                    match_fields["udp_src"] = udp_pkt.src_port
+                    match_fields["udp_dst"] = udp_pkt.dst_port
+
+                match = parser.OFPMatch(**match_fields)
+
+            else:
+
+                match = parser.OFPMatch(
+                    in_port=in_port,
+                    eth_src=src,
+                    eth_dst=dst
+                )
 
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
 
