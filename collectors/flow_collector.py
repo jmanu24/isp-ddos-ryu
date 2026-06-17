@@ -32,23 +32,11 @@ class FlowCollector:
             src_port = None
             dst_port = None
 
-            if proto == 6:
-
-                src_port = match.get("tcp_src")
-                dst_port = match.get("tcp_dst")
-
-            elif proto == 17:
-
-                src_port = match.get("udp_src")
-                dst_port = match.get("udp_dst")
-
             key = (
                 dpid,
                 src_ip,
                 dst_ip,
-                proto,
-                src_port,
-                dst_port
+                proto
             )
 
             prev = self.prev_flows.get(key)
@@ -88,8 +76,8 @@ class FlowCollector:
                 "src_ip": src_ip,
                 "dst_ip": dst_ip,
                 "protocol": proto,
-                "src_port": src_port,
-                "dst_port": dst_port,
+                "src_port": None,
+                "dst_port": None,
                 "byte_rate": byte_rate,
                 "packet_rate": packet_rate,
                 "bytes": stat.byte_count,
