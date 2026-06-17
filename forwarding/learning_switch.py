@@ -1,7 +1,6 @@
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
-from ryu.lib.packet import ipv4
 
 
 class LearningSwitch:
@@ -28,58 +27,44 @@ class LearningSwitch:
             )
         ]
 
+        kwargs = {
+            "datapath": datapath,
+            "priority": priority,
+            "match": match,
+            "instructions": inst
+        }
+
         if buffer_id is not None:
+            kwargs["buffer_id"] = buffer_id
 
-            mod = parser.OFPFlowMod(
-                datapath=datapath,
-                buffer_id=buffer_id,
-                priority=priority,
-                match=match,
-                instructions=inst,
-                idle_timeout=5,
-                hard_timeout=10
-            )
-
-        else:
-
-            mod = parser.OFPFlowMod(
-                datapath=datapath,
-                priority=priority,
-                match=match,
-                instructions=inst,
-                idle_timeout=5,
-                hard_timeout=10
-            )
+        mod = parser.OFPFlowMod(**kwargs)
 
         datapath.send_msg(mod)
 
     def switch_features_handler(self, datapath):
 
-    ofproto = datapath.ofproto
-    parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
 
-    mod = parser.OFPFlowMod(
-        datapath=datapath,
-        priority=0,
-        match=parser.OFPMatch(),
-        instructions=[
-            parser.OFPInstructionActions(
-                ofproto.OFPIT_APPLY_ACTIONS,
-                [
-                    parser.OFPActionOutput(
-                        ofproto.OFPP_CONTROLLER,
-                        ofproto.OFPCML_NO_BUFFER
-                    )
-                ]
+        match = parser.OFPMatch()
+
+        actions = [
+            parser.OFPActionOutput(
+                ofproto.OFPP_CONTROLLER,
+                ofproto.OFPCML_NO_BUFFER
             )
         ]
-    )
 
-    datapath.send_msg(mod)
+        self.add_flow(
+            datapath,
+            0,
+            match,
+            actions
+        )
 
-    print(
-        f"TABLE MISS INSTALADA DIRECTAMENTE EN SW={datapath.id}"
-    )
+        print(
+            f"INSTALANDO TABLE MISS EN {datapath.id}"
+        )
 
     def packet_in_handler(self, ev):
 
@@ -91,13 +76,18 @@ class LearningSwitch:
 
         dpid = datapath.id
 
-        self.mac_to_port.setdefault(dpid, {})
+        self.mac_to_port.setdefault(
+            dpid,
+            {}
+        )
 
         in_port = msg.match["in_port"]
 
         pkt = packet.Packet(msg.data)
 
-        eth = pkt.get_protocol(ethernet.ethernet)
+        eth = pkt.get_protocol(
+            ethernet.ethernet
+        )
 
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             return
@@ -118,29 +108,11 @@ class LearningSwitch:
 
         if out_port != ofproto.OFPP_FLOOD:
 
-            ip_pkt = pkt.get_protocol(ipv4.ipv4)
-
-            #
-            # IMPORTANTE:
-            # flujo agregado por protocolo IP
-            # útil para detectar ataques DDoS
-            #
-
-            if ip_pkt:
-
-                match = parser.OFPMatch(
-                    in_port=in_port,
-                    eth_type=0x0800,
-                    ip_proto=ip_pkt.proto
-                )
-
-            else:
-
-                match = parser.OFPMatch(
-                    in_port=in_port,
-                    eth_src=src,
-                    eth_dst=dst
-                )
+            match = parser.OFPMatch(
+                in_port=in_port,
+                eth_src=src,
+                eth_dst=dst
+            )
 
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
 
@@ -151,6 +123,7 @@ class LearningSwitch:
                     actions,
                     msg.buffer_id
                 )
+
                 return
 
             self.add_flow(
