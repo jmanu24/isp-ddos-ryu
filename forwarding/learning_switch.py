@@ -25,7 +25,9 @@ class LearningSwitch:
                 buffer_id=buffer_id,
                 priority=priority,
                 match=match,
-                instructions=inst
+                instructions=inst,
+                idle_timeout=5,
+                hard_timeout=10
             )
         else:
             mod = parser.OFPFlowMod(

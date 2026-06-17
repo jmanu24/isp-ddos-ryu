@@ -19,6 +19,7 @@ import threading
 
 from forwarding.learning_switch import LearningSwitch
 from collectors.flow_collector import FlowCollector
+from collectors.ddos_collector import DDoSCollector
 
 from web.state import dashboard_state
 from web.socket_server import (
@@ -42,6 +43,7 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         self.forwarding = LearningSwitch()
         self.collector = FlowCollector()
+        self.ddos_collector = DDoSCollector()
 
         self.byte_threshold = 1e6
         self.packet_threshold = 1000
@@ -148,8 +150,37 @@ class FlowStatsIDS(app_manager.RyuApp):
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
 
-        self.forwarding.packet_in_handler(ev)
+        result = self.ddos_collector.process_packet(
+            ev.msg
+        )
 
+        if result:
+
+            self.logger.warning(
+                "DDoS_STATS "
+                "DST=%s:%s "
+                "PROTO=%s "
+                "PPS=%.2f "
+                "BPS=%.2f",
+                result["dst_ip"],
+                result["dst_port"],
+                result["protocol"],
+                result["pps"],
+                result["bps"]
+            )
+
+            if result["pps"] > self.packet_threshold:
+
+                dashboard_state.add_event(
+                    f"DDoS DETECTADO "
+                    f"DST={result['dst_ip']}:{result['dst_port']} "
+                    f"PPS={result['pps']:.2f}"
+                )
+
+                emit_update()
+
+        self.forwarding.packet_in_handler(ev)
+ 
     # ---------------------------------------------
     # MONITOR
     # ---------------------------------------------
