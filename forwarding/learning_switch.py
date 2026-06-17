@@ -19,8 +19,9 @@ class LearningSwitch:
         priority,
         match,
         actions,
-        buffer_id=None
-    ):
+        buffer_id=None,
+        idle_timeout=0,
+        hard_timeout=0):
 
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -32,19 +33,15 @@ class LearningSwitch:
             )
         ]
 
-        kwargs = {
-            "datapath": datapath,
-            "priority": priority,
-            "match": match,
-            "instructions": inst,
-            "idle_timeout": 30,
-            "hard_timeout": 60
-        }
-
-        if buffer_id != ofproto.OFP_NO_BUFFER:
-            kwargs["buffer_id"] = buffer_id
-
-        mod = parser.OFPFlowMod(**kwargs)
+        mod = parser.OFPFlowMod(
+            datapath=datapath,
+            priority=priority,
+            match=match,
+            instructions=inst,
+            idle_timeout=idle_timeout,
+            hard_timeout=hard_timeout,
+            buffer_id=buffer_id if buffer_id is not None else ofproto.OFP_NO_BUFFER
+        )
 
         datapath.send_msg(mod)
 
@@ -67,7 +64,8 @@ class LearningSwitch:
             priority=0,
             match=match,
             actions=actions,
-            buffer_id=ofproto.OFP_NO_BUFFER
+            idle_timeout=0,
+            hard_timeout=0
         )
 
         print(
@@ -175,7 +173,8 @@ class LearningSwitch:
             priority=10,
             match=match,
             actions=actions,
-            buffer_id=msg.buffer_id
+            idle_timeout=60,
+            hard_timeout=0
         )
 
         data = None
