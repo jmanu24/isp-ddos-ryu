@@ -7,7 +7,11 @@ class FlowCollector:
 
         self.prev_flows = {}
 
-    def process_stats(self, dpid, body):
+    def process_stats(
+        self,
+        dpid,
+        body
+    ):
 
         flows = []
 
@@ -17,8 +21,11 @@ class FlowCollector:
 
             match = stat.match
 
-            src_ip = match.get("ipv4_src", "N/A")
-            dst_ip = match.get("ipv4_dst", "N/A")
+            if match.get("eth_type") != 0x0800:
+                continue
+
+            src_ip = match.get("ipv4_src")
+            dst_ip = match.get("ipv4_dst")
 
             proto = match.get("ip_proto", 0)
 
@@ -27,13 +34,13 @@ class FlowCollector:
 
             if proto == 6:
 
-                src_port = match.get("tcp_src", 0)
-                dst_port = match.get("tcp_dst", 0)
+                src_port = match.get("tcp_src")
+                dst_port = match.get("tcp_dst")
 
             elif proto == 17:
 
-                src_port = match.get("udp_src", 0)
-                dst_port = match.get("udp_dst", 0)
+                src_port = match.get("udp_src")
+                dst_port = match.get("udp_dst")
 
             key = (
                 dpid,
@@ -44,29 +51,38 @@ class FlowCollector:
                 dst_port
             )
 
-            prev = self.prev_flows.get(
-                key,
-                {
+            prev = self.prev_flows.get(key)
+
+            if prev is None:
+
+                self.prev_flows[key] = {
                     "bytes": stat.byte_count,
                     "packets": stat.packet_count,
                     "time": now
                 }
-            )
+
+                continue
 
             dt = now - prev["time"]
 
             if dt <= 0:
-                dt = 1
+                continue
 
-            byte_rate = (
-                stat.byte_count -
-                prev["bytes"]
-            ) / dt
+            byte_delta = stat.byte_count - prev["bytes"]
+            packet_delta = stat.packet_count - prev["packets"]
 
-            packet_rate = (
-                stat.packet_count -
-                prev["packets"]
-            ) / dt
+            if byte_delta < 0 or packet_delta < 0:
+
+                self.prev_flows[key] = {
+                    "bytes": stat.byte_count,
+                    "packets": stat.packet_count,
+                    "time": now
+                }
+
+                continue
+
+            byte_rate = byte_delta / dt
+            packet_rate = packet_delta / dt
 
             flows.append({
                 "src_ip": src_ip,

@@ -2,10 +2,15 @@ from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from ryu.lib.packet import ipv4
+from ryu.lib.packet import tcp
+from ryu.lib.packet import udp
+from ryu.lib.packet import icmp
+
 
 class LearningSwitch:
 
     def __init__(self):
+
         self.mac_to_port = {}
 
     def add_flow(
@@ -31,10 +36,12 @@ class LearningSwitch:
             "datapath": datapath,
             "priority": priority,
             "match": match,
-            "instructions": inst
+            "instructions": inst,
+            "idle_timeout": 30,
+            "hard_timeout": 60
         }
 
-        if buffer_id is not None:
+        if buffer_id != ofproto.OFP_NO_BUFFER:
             kwargs["buffer_id"] = buffer_id
 
         mod = parser.OFPFlowMod(**kwargs)
@@ -57,9 +64,10 @@ class LearningSwitch:
 
         self.add_flow(
             datapath,
-            0,
-            match,
-            actions
+            priority=0,
+            match=match,
+            actions=actions,
+            buffer_id=ofproto.OFP_NO_BUFFER
         )
 
         print(
@@ -76,38 +84,22 @@ class LearningSwitch:
 
         dpid = datapath.id
 
-        self.mac_to_port.setdefault(
-            dpid,
-            {}
-        )
+        self.mac_to_port.setdefault(dpid, {})
 
         in_port = msg.match["in_port"]
 
         pkt = packet.Packet(msg.data)
 
-        ip_pkt = pkt.get_protocol(ipv4.ipv4)
+        eth = pkt.get_protocol(ethernet.ethernet)
 
-        if ip_pkt:
-            print(
-                "IP DETECTADA",
-                ip_pkt.src,
-                "->",
-                ip_pkt.dst,
-                "PROTO",
-                ip_pkt.proto
-            )
-        else:
-            print("NO ES IP")
-
-        eth = pkt.get_protocol(
-            ethernet.ethernet
-        )
+        if eth is None:
+            return
 
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             return
 
-        dst = eth.dst
         src = eth.src
+        dst = eth.dst
 
         self.mac_to_port[dpid][src] = in_port
 
@@ -120,7 +112,57 @@ class LearningSwitch:
             parser.OFPActionOutput(out_port)
         ]
 
-        if out_port != ofproto.OFPP_FLOOD:
+        if out_port == ofproto.OFPP_FLOOD:
+
+            data = None
+
+            if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+                data = msg.data
+
+            out = parser.OFPPacketOut(
+                datapath=datapath,
+                buffer_id=msg.buffer_id,
+                in_port=in_port,
+                actions=actions,
+                data=data
+            )
+
+            datapath.send_msg(out)
+            return
+
+        ip_pkt = pkt.get_protocol(ipv4.ipv4)
+
+        if ip_pkt:
+
+            match_fields = {
+                "eth_type": 0x0800,
+                "ipv4_src": ip_pkt.src,
+                "ipv4_dst": ip_pkt.dst,
+                "ip_proto": ip_pkt.proto
+            }
+
+            tcp_pkt = pkt.get_protocol(tcp.tcp)
+            udp_pkt = pkt.get_protocol(udp.udp)
+
+            if tcp_pkt:
+
+                match_fields["tcp_src"] = tcp_pkt.src_port
+                match_fields["tcp_dst"] = tcp_pkt.dst_port
+
+            elif udp_pkt:
+
+                match_fields["udp_src"] = udp_pkt.src_port
+                match_fields["udp_dst"] = udp_pkt.dst_port
+
+            match = parser.OFPMatch(
+                **match_fields
+            )
+
+            print(
+                f"L3/L4 FLOW {ip_pkt.src} -> {ip_pkt.dst} proto={ip_pkt.proto}"
+            )
+
+        else:
 
             match = parser.OFPMatch(
                 in_port=in_port,
@@ -128,24 +170,13 @@ class LearningSwitch:
                 eth_dst=dst
             )
 
-            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-
-                self.add_flow(
-                    datapath,
-                    1,
-                    match,
-                    actions,
-                    msg.buffer_id
-                )
-
-                return
-
-            self.add_flow(
-                datapath,
-                1,
-                match,
-                actions
-            )
+        self.add_flow(
+            datapath,
+            priority=10,
+            match=match,
+            actions=actions,
+            buffer_id=msg.buffer_id
+        )
 
         data = None
 
