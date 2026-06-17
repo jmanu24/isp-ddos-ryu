@@ -251,24 +251,60 @@ class FlowStatsIDS(app_manager.RyuApp):
                 flow["packet_rate"]
             )
 
-            dashboard_state.update_stats(dpid, byte_rate, packet_rate)
+            total_byte_rate = 0
+            total_packet_rate = 0
+
+            for flow in flows:
+
+                total_byte_rate += flow["byte_rate"]
+                total_packet_rate += flow["packet_rate"]
+
+                self.logger.info(
+                    "FLOW SW=%s "
+                    "%s:%s -> %s:%s "
+                    "PROTO=%s "
+                    "B/s=%.2f "
+                    "P/s=%.2f",
+                    dpid,
+                    flow["src_ip"],
+                    flow["src_port"],
+                    flow["dst_ip"],
+                    flow["dst_port"],
+                    flow["protocol"],
+                    flow["byte_rate"],
+                    flow["packet_rate"]
+                )
+
+            dashboard_state.update_stats(
+                dpid,
+                total_byte_rate,
+                total_packet_rate
+            )
+
             emit_update()
 
             self.logger.info(
                 "SW %s | Byte/s %.2f | Packet/s %.2f",
                 dpid,
-                byte_rate,
-                packet_rate
+                total_byte_rate,
+                total_packet_rate
             )
 
             if (
-                byte_rate > self.byte_threshold
-                or packet_rate > self.packet_threshold
+                total_byte_rate > self.byte_threshold
+                or total_packet_rate > self.packet_threshold
             ):
 
-                dashboard_state.add_attack(dpid, byte_rate, packet_rate)
+                dashboard_state.add_attack(
+                    dpid,
+                    total_byte_rate,
+                    total_packet_rate
+                )
+
                 dashboard_state.add_event(
-                    f"POSIBLE DDoS SW={dpid} Byte/s={byte_rate:.2f} Packet/s={packet_rate:.2f}"
+                    f"POSIBLE DDoS SW={dpid} "
+                    f"Byte/s={total_byte_rate:.2f} "
+                    f"Packet/s={total_packet_rate:.2f}"
                 )
 
                 emit_update()
@@ -276,8 +312,8 @@ class FlowStatsIDS(app_manager.RyuApp):
                 self.logger.warning(
                     "POSIBLE DDoS SW=%s Byte/s=%.2f Packet/s=%.2f",
                     dpid,
-                    byte_rate,
-                    packet_rate
+                    total_byte_rate,
+                    total_packet_rate
                 )
 
 
