@@ -228,57 +228,57 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         dpid = ev.msg.datapath.id
 
-    flows = self.collector.process_stats(
-        dpid,
-        ev.msg.body
-    )
-
-    for flow in flows:
-
-        self.logger.info(
-            "FLOW SW=%s "
-            "%s:%s -> %s:%s "
-            "PROTO=%s "
-            "B/s=%.2f "
-            "P/s=%.2f",
+        flows = self.collector.process_stats(
             dpid,
-            flow["src_ip"],
-            flow["src_port"],
-            flow["dst_ip"],
-            flow["dst_port"],
-            flow["protocol"],
-            flow["byte_rate"],
-            flow["packet_rate"]
+            ev.msg.body
         )
 
-        dashboard_state.update_stats(dpid, byte_rate, packet_rate)
-        emit_update()
+        for flow in flows:
 
-        self.logger.info(
-            "SW %s | Byte/s %.2f | Packet/s %.2f",
-            dpid,
-            byte_rate,
-            packet_rate
-        )
-
-        if (
-            byte_rate > self.byte_threshold
-            or packet_rate > self.packet_threshold
-        ):
-
-            dashboard_state.add_attack(dpid, byte_rate, packet_rate)
-            dashboard_state.add_event(
-                f"POSIBLE DDoS SW={dpid} Byte/s={byte_rate:.2f} Packet/s={packet_rate:.2f}"
+            self.logger.info(
+                "FLOW SW=%s "
+                "%s:%s -> %s:%s "
+                "PROTO=%s "
+                "B/s=%.2f "
+                "P/s=%.2f",
+                dpid,
+                flow["src_ip"],
+                flow["src_port"],
+                flow["dst_ip"],
+                flow["dst_port"],
+                flow["protocol"],
+                flow["byte_rate"],
+                flow["packet_rate"]
             )
 
+            dashboard_state.update_stats(dpid, byte_rate, packet_rate)
             emit_update()
 
-            self.logger.warning(
-                "POSIBLE DDoS SW=%s Byte/s=%.2f Packet/s=%.2f",
+            self.logger.info(
+                "SW %s | Byte/s %.2f | Packet/s %.2f",
                 dpid,
                 byte_rate,
                 packet_rate
             )
+
+            if (
+                byte_rate > self.byte_threshold
+                or packet_rate > self.packet_threshold
+            ):
+
+                dashboard_state.add_attack(dpid, byte_rate, packet_rate)
+                dashboard_state.add_event(
+                    f"POSIBLE DDoS SW={dpid} Byte/s={byte_rate:.2f} Packet/s={packet_rate:.2f}"
+                )
+
+                emit_update()
+
+                self.logger.warning(
+                    "POSIBLE DDoS SW=%s Byte/s=%.2f Packet/s=%.2f",
+                    dpid,
+                    byte_rate,
+                    packet_rate
+                )
 
 
     # ---------------------------------------------
