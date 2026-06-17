@@ -1,7 +1,7 @@
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
-
+from ryu.lib.packet import ipv4
 
 class LearningSwitch:
 
@@ -84,6 +84,20 @@ class LearningSwitch:
         in_port = msg.match["in_port"]
 
         pkt = packet.Packet(msg.data)
+
+        ip_pkt = pkt.get_protocol(ipv4.ipv4)
+
+        if ip_pkt:
+            print(
+                "IP DETECTADA",
+                ip_pkt.src,
+                "->",
+                ip_pkt.dst,
+                "PROTO",
+                ip_pkt.proto
+            )
+        else:
+            print("NO ES IP")
 
         eth = pkt.get_protocol(
             ethernet.ethernet
