@@ -2,8 +2,6 @@ from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from ryu.lib.packet import ipv4
-from ryu.lib.packet import tcp
-from ryu.lib.packet import udp
 
 
 class LearningSwitch:
@@ -11,7 +9,15 @@ class LearningSwitch:
     def __init__(self):
         self.mac_to_port = {}
 
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
+    def add_flow(
+        self,
+        datapath,
+        priority,
+        match,
+        actions,
+        buffer_id=None
+    ):
+
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -22,7 +28,8 @@ class LearningSwitch:
             )
         ]
 
-        if buffer_id:
+        if buffer_id is not None:
+
             mod = parser.OFPFlowMod(
                 datapath=datapath,
                 buffer_id=buffer_id,
@@ -32,12 +39,16 @@ class LearningSwitch:
                 idle_timeout=5,
                 hard_timeout=10
             )
+
         else:
+
             mod = parser.OFPFlowMod(
                 datapath=datapath,
                 priority=priority,
                 match=match,
-                instructions=inst
+                instructions=inst,
+                idle_timeout=5,
+                hard_timeout=10
             )
 
         datapath.send_msg(mod)
@@ -102,30 +113,19 @@ class LearningSwitch:
 
             ip_pkt = pkt.get_protocol(ipv4.ipv4)
 
+            #
+            # IMPORTANTE:
+            # flujo agregado por protocolo IP
+            # útil para detectar ataques DDoS
+            #
+
             if ip_pkt:
 
-                tcp_pkt = pkt.get_protocol(tcp.tcp)
-                udp_pkt = pkt.get_protocol(udp.udp)
-
-                match_fields = {
-                    "in_port": in_port,
-                    "eth_type": 0x0800,
-                    "ipv4_src": ip_pkt.src,
-                    "ipv4_dst": ip_pkt.dst,
-                    "ip_proto": ip_pkt.proto
-                }
-
-                if tcp_pkt:
-
-                    match_fields["tcp_src"] = tcp_pkt.src_port
-                    match_fields["tcp_dst"] = tcp_pkt.dst_port
-
-                elif udp_pkt:
-
-                    match_fields["udp_src"] = udp_pkt.src_port
-                    match_fields["udp_dst"] = udp_pkt.dst_port
-
-                match = parser.OFPMatch(**match_fields)
+                match = parser.OFPMatch(
+                    in_port=in_port,
+                    eth_type=0x0800,
+                    ip_proto=ip_pkt.proto
+                )
 
             else:
 
