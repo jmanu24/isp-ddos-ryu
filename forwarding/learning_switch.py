@@ -55,26 +55,31 @@ class LearningSwitch:
 
     def switch_features_handler(self, datapath):
 
-        print("INSTALANDO TABLE MISS EN", datapath.id)
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
 
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        match = parser.OFPMatch()
-
-        actions = [
-            parser.OFPActionOutput(
-                ofproto.OFPP_CONTROLLER,
-                ofproto.OFPCML_NO_BUFFER
+    mod = parser.OFPFlowMod(
+        datapath=datapath,
+        priority=0,
+        match=parser.OFPMatch(),
+        instructions=[
+            parser.OFPInstructionActions(
+                ofproto.OFPIT_APPLY_ACTIONS,
+                [
+                    parser.OFPActionOutput(
+                        ofproto.OFPP_CONTROLLER,
+                        ofproto.OFPCML_NO_BUFFER
+                    )
+                ]
             )
         ]
+    )
 
-        self.add_flow(
-            datapath,
-            priority=0,
-            match=match,
-            actions=actions
-        )
+    datapath.send_msg(mod)
+
+    print(
+        f"TABLE MISS INSTALADA DIRECTAMENTE EN SW={datapath.id}"
+    )
 
     def packet_in_handler(self, ev):
 
