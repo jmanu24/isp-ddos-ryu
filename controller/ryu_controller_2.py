@@ -228,28 +228,28 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         dpid = ev.msg.datapath.id
 
-	flows = self.collector.process_stats(
-	    dpid,
-	    ev.msg.body
-	)
+    flows = self.collector.process_stats(
+        dpid,
+        ev.msg.body
+    )
 
-	for flow in flows:
+    for flow in flows:
 
-	    self.logger.info(
-        	"FLOW SW=%s "
-        	"%s:%s -> %s:%s "
-        	"PROTO=%s "
-        	"B/s=%.2f "
-        	"P/s=%.2f",
-        	dpid,
-        	flow["src_ip"],
-        	flow["src_port"],
-        	flow["dst_ip"],
-        	flow["dst_port"],
-        	flow["protocol"],
-        	flow["byte_rate"],
-        	flow["packet_rate"]
-    	)
+        self.logger.info(
+            "FLOW SW=%s "
+            "%s:%s -> %s:%s "
+            "PROTO=%s "
+            "B/s=%.2f "
+            "P/s=%.2f",
+            dpid,
+            flow["src_ip"],
+            flow["src_port"],
+            flow["dst_ip"],
+            flow["dst_port"],
+            flow["protocol"],
+            flow["byte_rate"],
+            flow["packet_rate"]
+        )
 
         dashboard_state.update_stats(dpid, byte_rate, packet_rate)
         emit_update()
