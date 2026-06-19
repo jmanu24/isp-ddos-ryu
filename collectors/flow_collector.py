@@ -25,11 +25,14 @@ class FlowCollector:
             # ---- ONLY destination port ----
             dst_port = None
 
-            if proto == 6:  # TCP
-                dst_port = match.get("tcp_dst")
+            if proto == 6:
+                dst_port = match.get("tcp_dst", 0)
 
-            elif proto == 17:  # UDP
-                dst_port = match.get("udp_dst")
+            elif proto == 17:
+                dst_port = match.get("udp_dst", 0)
+
+            if dst_port is None:
+                dst_port = 0
             # -------------------------------
 
             key = (

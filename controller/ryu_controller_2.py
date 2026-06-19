@@ -236,11 +236,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         for flow in flows:
 
             self.logger.info(
-                "FLOW SW=%s "
-                "%s:%s -> %s:%s "
-                "PROTO=%s "
-                "B/s=%.2f "
-                "P/s=%.2f",
+                "FLOW SW=%s %s -> %s:%s PROTO=%s B/s=%.2f P/s=%.2f",
                 dpid,
                 flow["src_ip"],
                 flow["dst_ip"],
