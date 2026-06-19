@@ -82,9 +82,11 @@ class DetectionResult:
     Output of the DDoS Detection Engine.
     Produced when a CorrelatedEvent exceeds attack thresholds.
 
-    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "LOW_SLOW"
+    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "LOW_SLOW" | "DDOS_DISTRIBUTED"
     score       : raw metric ratio (observed / threshold)
     confidence  : 0.0–1.0, boosted when attack spans multiple domains
+    sources     : distinct source IPs contributing — only populated for
+                  DDOS_DISTRIBUTED, where src_ip is "*" (no single attacker)
     """
     domain: str
     device_id: str
@@ -95,6 +97,7 @@ class DetectionResult:
     attack_type: str
     score: float
     confidence: float
+    sources: List[str] = field(default_factory=list)
     timestamp: float = field(
         default_factory=lambda: datetime.now().timestamp()
     )
@@ -114,6 +117,9 @@ class MitigationAction:
     dst_ip/dst_port/protocol : L4 5-tuple fields the mitigation backend
                                should match on (block by exact flow, not
                                just by source IP)
+    sources  : when src_ip == "*" (distributed attack), the distinct source
+               IPs seen — used to clean up the per-source forwarding rules
+               that were letting them through
     """
     domain: str
     device_id: str
@@ -123,3 +129,4 @@ class MitigationAction:
     protocol: str
     action: str
     duration: int = 60
+    sources: List[str] = field(default_factory=list)

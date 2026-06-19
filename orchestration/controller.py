@@ -141,6 +141,7 @@ class OrchestrationController:
                 dst_port=d.dst_port,
                 protocol=d.protocol,
                 action=action_type,
+                sources=d.sources,
             ))
 
         return actions
@@ -163,6 +164,13 @@ class OrchestrationController:
                 key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
                 self._active_blocks[key] = action
                 self._below_threshold_streak[key] = 0
+
+                if action.src_ip == "*" and action.sources:
+                    # The destination-wide block already outranks (higher
+                    # priority) any per-source forwarding rule, but clear
+                    # them anyway so the flow table doesn't keep filling up
+                    # with one-shot entries for spoofed sources.
+                    self.of_mitigator.clear_forwarding_rules(action.dst_ip, action.sources)
 
             return
 
