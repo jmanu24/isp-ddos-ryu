@@ -151,7 +151,7 @@ class OrchestrationController:
         """Map attack type + domain to a concrete mitigation action string."""
         if domain == "bgp":
             return "bgp_blackhole"
-        if attack_type in ("SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD"):
+        if attack_type in ("SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "DDOS_DISTRIBUTED"):
             return "block"
         return "rate_limit"
 
