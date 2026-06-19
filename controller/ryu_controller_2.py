@@ -36,6 +36,7 @@ from orchestration.controller import OrchestrationController
 # Web dashboard
 from web.state import dashboard_state
 from web.socket_server import start_server, emit_update
+from web import metrics
 
 import config.settings as settings
 
@@ -166,17 +167,9 @@ class FlowStatsIDS(app_manager.RyuApp):
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         # ── Stage 1: Telemetry Collection (packet-level) ──────────────
-        telemetry_evs = self.of_adapter.on_packet_in(ev.msg)
-
-        if telemetry_evs:
-            total_pps = sum(e.pps for e in telemetry_evs)
-            if total_pps > settings.UDP_THRESHOLD:
-                dashboard_state.add_event(
-                    f"DDoS DETECTADO "
-                    f"DST={telemetry_evs[0].dst_ip} "
-                    f"PPS={total_pps:.2f}"
-                )
-                emit_update()
+        # Classification happens once per cycle in _run_pipeline(); this
+        # handler only collects telemetry, it doesn't raise its own alert.
+        self.of_adapter.on_packet_in(ev.msg)
 
         # ── Forwarding ────────────────────────────────────────────────
         self.forwarding.packet_in_handler(ev)
@@ -228,6 +221,18 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Stage 3 — detect attack types
         detections = self.detector.analyze(correlated)
 
+        # Surface every detection in the event log, classified — this is
+        # the descriptive "what's happening" signal; raw traffic numbers
+        # live in Grafana via /metrics instead.
+        for d in detections:
+            msg = (
+                f"ATAQUE DETECTADO: {d.attack_type} "
+                f"origen={d.src_ip} destino={d.dst_ip}:{d.dst_port}/{d.protocol} "
+                f"[{d.domain}] confianza={d.confidence:.2f}"
+            )
+            dashboard_state.add_event(msg)
+            self.logger.warning(msg)
+
         # Mark destinations seen clean this cycle as validated — only now
         # can LearningSwitch start caching forwarding rules for them.
         self.orchestrator.validate(correlated, detections)
@@ -238,12 +243,15 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Reflect mitigations in the dashboard
         for action in actions:
             msg = (
-                f"MITIGACION: {action.action.upper()} "
-                f"{action.src_ip} [{action.domain}]"
+                f"MITIGACION: {action.action.upper()} ({action.attack_type}) "
+                f"origen={action.src_ip} destino={action.dst_ip}:{action.dst_port}/{action.protocol} "
+                f"[{action.domain}]"
             )
             dashboard_state.add_event(msg)
-            emit_update()
             self.logger.warning(msg)
+
+        if detections or actions:
+            emit_update()
 
     # ------------------------------------------------------------------
     # FLOW STATS
@@ -262,26 +270,13 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Stage 1 — push raw stats into the OpenFlow telemetry adapter
         events = self.of_adapter.on_flow_stats(dpid, ev.msg.body)
 
-        # Aggregate totals for the dashboard
+        # Traffic numbers go to Prometheus/Grafana, not the console or the
+        # event log — classification (Stage 3, in _run_pipeline) is what
+        # gets logged as an event.
         total_bps = sum(e.bps for e in events)
         total_pps = sum(e.pps for e in events)
-
+        metrics.update_switch_stats(dpid, total_bps, total_pps)
         dashboard_state.update_stats(dpid, total_bps, total_pps)
-        emit_update()
-
-        self.logger.info(
-            "SW %s | B/s %.2f | P/s %.2f",
-            dpid, total_bps, total_pps
-        )
-
-        # Quick dashboard alert (coarse threshold for immediate feedback)
-        if total_pps > settings.UDP_THRESHOLD:
-            dashboard_state.add_attack(dpid, total_bps, total_pps)
-            dashboard_state.add_event(
-                f"POSIBLE DDoS SW={dpid} "
-                f"B/s={total_bps:.2f} P/s={total_pps:.2f}"
-            )
-            emit_update()
 
     # ------------------------------------------------------------------
     # PORT STATS
@@ -297,18 +292,9 @@ class FlowStatsIDS(app_manager.RyuApp):
             if stat.port_no == ofproto.OFPP_LOCAL:
                 continue
 
-            self.logger.info(
-                "PORT SW=%s PORT=%s RX_B=%d TX_B=%d RX_P=%d TX_P=%d "
-                "DROP_RX=%d DROP_TX=%d",
-                dpid,
-                stat.port_no,
-                stat.rx_bytes,
-                stat.tx_bytes,
-                stat.rx_packets,
-                stat.tx_packets,
-                stat.rx_dropped,
-                stat.tx_dropped,
-            )
+            # Raw port counters go straight to Prometheus/Grafana — no
+            # console dump.
+            metrics.update_port_stats(dpid, stat.port_no, stat)
 
     # ------------------------------------------------------------------
     # HELPERS

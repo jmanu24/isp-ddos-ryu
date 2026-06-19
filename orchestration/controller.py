@@ -6,6 +6,7 @@ from core.models import CorrelatedEvent, DetectionResult, MitigationAction
 from decision.engine import DecisionEngine, Decision
 from telemetry.base import DomainAdapter
 from mitigation.openflow_mitigator import OpenFlowMitigator
+from web import metrics
 
 
 _THRESHOLD_BY_PROTOCOL = {
@@ -94,6 +95,9 @@ class OrchestrationController:
         if not detections:
             return []
 
+        for d in detections:
+            metrics.record_detection(d.attack_type, d.domain)
+
         # Convert DetectionResults to the dict format expected by DecisionEngine
         det_dicts = [
             {
@@ -150,6 +154,7 @@ class OrchestrationController:
                 protocol=d.protocol,
                 action=action_type,
                 sources=d.sources,
+                attack_type=decision.attack_type,
             ))
 
         return actions
@@ -165,6 +170,8 @@ class OrchestrationController:
 
     def _dispatch(self, action: MitigationAction) -> None:
         """Send action to the correct backend."""
+        metrics.record_mitigation(action.attack_type, action.action, action.domain)
+
         if action.domain == "openflow":
             self.of_mitigator.apply(action)
 
@@ -172,6 +179,7 @@ class OrchestrationController:
                 key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
                 self._active_blocks[key] = action
                 self._below_threshold_streak[key] = 0
+                metrics.set_active_blocks(len(self._active_blocks))
 
                 if action.src_ip == "*" and action.sources:
                     # The destination-wide block already outranks (higher
@@ -330,6 +338,7 @@ class OrchestrationController:
                 self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
                 del self._active_blocks[key]
                 del self._below_threshold_streak[key]
+                metrics.set_active_blocks(len(self._active_blocks))
                 # Force re-validation: a destination that was just under
                 # attack shouldn't get its forwarding rules trusted again
                 # without going through at least one more clean cycle.

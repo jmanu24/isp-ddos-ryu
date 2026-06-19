@@ -117,9 +117,11 @@ class MitigationAction:
     dst_ip/dst_port/protocol : L4 5-tuple fields the mitigation backend
                                should match on (block by exact flow, not
                                just by source IP)
-    sources  : when src_ip == "*" (distributed attack), the distinct source
-               IPs seen — used to clean up the per-source forwarding rules
-               that were letting them through
+    sources     : when src_ip == "*" (distributed attack), the distinct
+                  source IPs seen — used to clean up the per-source
+                  forwarding rules that were letting them through
+    attack_type : the DetectionResult.attack_type that triggered this
+                  action — carried through purely for descriptive logging
     """
     domain: str
     device_id: str
@@ -130,3 +132,4 @@ class MitigationAction:
     action: str
     duration: int = 60
     sources: List[str] = field(default_factory=list)
+    attack_type: str = ""

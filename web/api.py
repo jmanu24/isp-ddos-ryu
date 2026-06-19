@@ -1,8 +1,16 @@
 from flask import Flask
 from flask import jsonify
+from flask import Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from web.state import dashboard_state
 
 app = Flask(__name__)
+
+@app.route("/metrics")
+def metrics():
+    # Scraped by Prometheus; Grafana queries Prometheus for dashboards —
+    # this is the only place traffic/attack data is exposed for that.
+    return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 @app.route("/api/switches")
 def switches():
