@@ -144,7 +144,8 @@ class LearningSwitch:
                 match = parser.OFPMatch(
                     in_port=in_port,
                     eth_src=src,
-                    eth_dst=dst
+                    eth_dst=dst,
+                    eth_type=eth.ethertype
                 )
 
                 self.add_flow(
