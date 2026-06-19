@@ -64,6 +64,13 @@ class OrchestrationController:
         # threshold. Reset to 0 whenever traffic rises back above it.
         self._below_threshold_streak: Dict[Tuple[str, str, int, str], int] = {}
 
+        # Destination IPs that have completed at least one full detection
+        # cycle without triggering an attack. LearningSwitch refuses to
+        # cache *any* rule — permit or block — for a destination until it's
+        # in this set, so brand-new traffic always goes through the
+        # detection pipeline before the switch commits to anything.
+        self._validated_destinations: set = set()
+
     # ------------------------------------------------------------------
     # Datapath lifecycle (called from the Ryu controller)
     # ------------------------------------------------------------------
@@ -201,6 +208,33 @@ class OrchestrationController:
         """
         return ("*", dst_ip, dst_port, protocol) in self._active_blocks
 
+    def is_validated_destination(self, dst_ip: str) -> bool:
+        """
+        True once dst_ip has completed at least one full detection cycle
+        without being flagged as an attack. LearningSwitch checks this
+        before installing *any* flow rule for a destination — permit or
+        block — so brand-new traffic is always forwarded packet-by-packet
+        (no caching either way) until the pipeline has actually evaluated
+        it at least once.
+        """
+        return dst_ip in self._validated_destinations
+
+    def validate(self, correlated: List[CorrelatedEvent], detections: List[DetectionResult]) -> None:
+        """
+        Called once per pipeline cycle, after detection. Any destination
+        that was observed this cycle and did NOT trigger a detection has
+        now been evaluated and found clean — mark it validated so
+        LearningSwitch can start caching forwarding rules for it. A
+        destination that did trigger a detection is left unvalidated; it
+        gets blocked instead, and stays unvalidated until traffic toward
+        it is reassessed clean in some future cycle.
+        """
+        flagged_dsts = {d.dst_ip for d in detections}
+
+        for c in correlated:
+            if c.dst_ip not in flagged_dsts:
+                self._validated_destinations.add(c.dst_ip)
+
     # ------------------------------------------------------------------
     # Continuous sweep — catches forwarding rules clear_forwarding_rules()
     # missed at block time
@@ -296,3 +330,7 @@ class OrchestrationController:
                 self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
                 del self._active_blocks[key]
                 del self._below_threshold_streak[key]
+                # Force re-validation: a destination that was just under
+                # attack shouldn't get its forwarding rules trusted again
+                # without going through at least one more clean cycle.
+                self._validated_destinations.discard(dst_ip)

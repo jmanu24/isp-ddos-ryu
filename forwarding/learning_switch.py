@@ -9,7 +9,7 @@ from ryu.lib.packet import icmp
 
 class LearningSwitch:
 
-    def __init__(self, is_blocked=None):
+    def __init__(self, is_blocked=None, is_validated=None):
 
         self.mac_to_port = {}
 
@@ -18,6 +18,14 @@ class LearningSwitch:
         # layer veto caching traffic toward a destination that's already
         # under an active distributed-attack block.
         self._is_blocked = is_blocked
+
+        # Optional Callable[[dst_ip], bool], queried before installing an IP
+        # forwarding rule. Until the destination has been through at least
+        # one full detection cycle without triggering an attack, no rule —
+        # permit or block — gets cached for it; packets are still forwarded,
+        # just one at a time via packet-out, going through the controller
+        # every time until validation completes.
+        self._is_validated = is_validated
 
     def add_flow(
         self,
@@ -155,20 +163,27 @@ class LearningSwitch:
 
             if ip_pkt:
 
-                match = parser.OFPMatch(
-                    eth_type=0x0800,
-                    ipv4_src=ip_pkt.src,
-                    ipv4_dst=ip_pkt.dst
-                )
+                if self._is_validated is None or self._is_validated(ip_pkt.dst):
 
-                self.add_flow(
-                    datapath,
-                    priority=10,
-                    match=match,
-                    actions=actions,
-                    idle_timeout=60,
-                    hard_timeout=0
-                )
+                    match = parser.OFPMatch(
+                        eth_type=0x0800,
+                        ipv4_src=ip_pkt.src,
+                        ipv4_dst=ip_pkt.dst
+                    )
+
+                    self.add_flow(
+                        datapath,
+                        priority=10,
+                        match=match,
+                        actions=actions,
+                        idle_timeout=60,
+                        hard_timeout=0
+                    )
+
+                # else: destination hasn't completed a clean detection
+                # cycle yet — forward this packet only, cache nothing, so
+                # every further packet keeps coming through the controller
+                # until it's validated.
 
             else:
 

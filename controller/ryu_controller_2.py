@@ -64,13 +64,14 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.datapaths = {}
 
         # ── Forwarding ────────────────────────────────────────────────
-        # is_blocked is resolved lazily (self.orchestrator doesn't exist
-        # yet at this point in __init__) so it must stay a lambda, not a
-        # bound method reference.
+        # is_blocked/is_validated are resolved lazily (self.orchestrator
+        # doesn't exist yet at this point in __init__) so they must stay
+        # lambdas, not bound method references.
         self.forwarding = LearningSwitch(
             is_blocked=lambda dst_ip, dst_port, proto: self.orchestrator.is_blocked_destination(
                 dst_ip, dst_port, proto
-            )
+            ),
+            is_validated=lambda dst_ip: self.orchestrator.is_validated_destination(dst_ip),
         )
 
         # ── Stage 1: Telemetry Collection ────────────────────────────
@@ -226,6 +227,10 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         # Stage 3 — detect attack types
         detections = self.detector.analyze(correlated)
+
+        # Mark destinations seen clean this cycle as validated — only now
+        # can LearningSwitch start caching forwarding rules for them.
+        self.orchestrator.validate(correlated, detections)
 
         # Stages 4 + 5 — decide and orchestrate
         actions = self.orchestrator.process(detections)
