@@ -5,7 +5,7 @@ from core.models import MitigationAction
 from mitigation.base import MitigationAdapter
 
 
-_PROTO_NUMBERS = {"TCP": 6, "UDP": 17, "ICMP": 1}
+PROTO_NUMBERS = {"TCP": 6, "UDP": 17, "ICMP": 1}
 
 
 class OpenFlowMitigator(MitigationAdapter):

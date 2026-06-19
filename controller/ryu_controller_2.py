@@ -210,10 +210,11 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.correlator.ingest(all_events)
         correlated = self.correlator.correlate()
 
-        # Release blocks whose flow volume has died down — runs every cycle,
-        # even an empty one, since "no traffic at all" is itself the signal
-        # that an attack has stopped.
-        self.orchestrator.check_unblocks(correlated)
+        # Release blocks whose flow volume has died down — driven by the
+        # drop rules' own counters (sampled in flow_stats_reply_handler),
+        # not by `correlated`, since a blocked flow's packets never reach
+        # this pipeline's telemetry again.
+        self.orchestrator.check_unblocks()
 
         if not correlated:
             return
@@ -266,6 +267,11 @@ class FlowStatsIDS(app_manager.RyuApp):
         # at block time, so stragglers from the detection race window
         # eventually get swept too.
         self.orchestrator.sweep_blocked_forwarding(ev.msg.body)
+
+        # Sample each active block's own drop-rule counters — the only
+        # remaining signal of whether an attacker is still flooding a
+        # blocked flow, since its packets never reach packet_in again.
+        self.orchestrator.record_block_traffic(dpid, ev.msg.body)
 
         # Stage 1 — push raw stats into the OpenFlow telemetry adapter
         events = self.of_adapter.on_flow_stats(dpid, ev.msg.body)

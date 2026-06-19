@@ -1,3 +1,4 @@
+import time
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
@@ -5,7 +6,7 @@ import config.settings as settings
 from core.models import CorrelatedEvent, DetectionResult, MitigationAction
 from decision.engine import DecisionEngine, Decision
 from telemetry.base import DomainAdapter
-from mitigation.openflow_mitigator import OpenFlowMitigator
+from mitigation.openflow_mitigator import OpenFlowMitigator, PROTO_NUMBERS
 from web import metrics
 
 
@@ -71,6 +72,19 @@ class OrchestrationController:
         # in this set, so brand-new traffic always goes through the
         # detection pipeline before the switch commits to anything.
         self._validated_destinations: set = set()
+
+        # (key, dpid) -> last sample of the matching drop rule's counters.
+        # Once blocked, an attacker's packets are dropped in the fast path
+        # and never reach packet_in again, and FlowCollector deliberately
+        # excludes drop-rule entries from telemetry (so the mitigation's
+        # own counters don't get re-detected as a fresh attack) — so this
+        # is tracked independently, purely to answer "is this still being
+        # hit" for check_unblocks.
+        self._block_traffic_samples: Dict[Tuple[Tuple[str, str, int, str], int], dict] = {}
+
+        # key -> most recently computed pps for its drop rule, summed
+        # across all switches that reported a fresh-enough sample.
+        self._block_pps: Dict[Tuple[str, str, int, str], float] = {}
 
     # ------------------------------------------------------------------
     # Datapath lifecycle (called from the Ryu controller)
@@ -293,35 +307,109 @@ class OrchestrationController:
             self.of_mitigator.clear_forwarding_rules(dst_ip, sources)
 
     # ------------------------------------------------------------------
-    # Unblocking — driven by the current volume of each blocked flow
+    # Continuous measurement of each block's own drop-rule traffic
     # ------------------------------------------------------------------
 
-    def check_unblocks(self, correlated: List[CorrelatedEvent]) -> None:
+    def record_block_traffic(self, dpid: int, body) -> None:
         """
-        Re-evaluate every active openflow block against this cycle's
-        correlated traffic. A block is released once its flow's pps has
-        stayed below UNBLOCK_RATIO of the triggering threshold for
-        UNBLOCK_CONFIRM_CYCLES consecutive cycles — i.e. once the
-        controller no longer "feels" the attack, confirmed rather than
-        on a single quiet sample.
+        Sample the packet/byte counters of each active block's drop rule
+        on this switch and turn the delta since the last sample into a
+        pps figure check_unblocks() can use. Called every flow_stats_reply
+        cycle, same as sweep_blocked_forwarding().
         """
         if not self._active_blocks:
             return
 
-        by_dst = {c.dst_ip: c for c in correlated}
+        now = time.time()
+
+        for stat in body:
+            if stat.priority != self.of_mitigator.DROP_PRIORITY:
+                continue
+
+            match = stat.match
+
+            for key in self._active_blocks:
+                if not self._stat_matches_block(match, key):
+                    continue
+
+                sample_key = (key, dpid)
+                prev = self._block_traffic_samples.get(sample_key)
+
+                self._block_traffic_samples[sample_key] = {
+                    "bytes": stat.byte_count,
+                    "packets": stat.packet_count,
+                    "time": now,
+                }
+
+                if prev is None:
+                    break
+
+                dt = now - prev["time"]
+
+                if dt < settings.MIN_FLOW_RATE_DT:
+                    break
+
+                packet_delta = stat.packet_count - prev["packets"]
+
+                if packet_delta < 0:
+                    break
+
+                self._block_pps[key] = packet_delta / dt
+                break
+
+    @staticmethod
+    def _stat_matches_block(match, key) -> bool:
+        src_ip, dst_ip, dst_port, protocol = key
+
+        if match.get("eth_type") != 0x0800:
+            return False
+        if match.get("ipv4_dst") != dst_ip:
+            return False
+
+        match_src = match.get("ipv4_src")
+        if src_ip == "*":
+            if match_src:
+                return False  # this is some other, source-specific rule
+        elif match_src != src_ip:
+            return False
+
+        if match.get("ip_proto") != PROTO_NUMBERS.get(protocol):
+            return False
+
+        if protocol == "TCP" and match.get("tcp_dst", 0) != dst_port:
+            return False
+        if protocol == "UDP" and match.get("udp_dst", 0) != dst_port:
+            return False
+
+        return True
+
+    def _forget_block_traffic(self, key) -> None:
+        self._block_pps.pop(key, None)
+        for sample_key in [k for k in self._block_traffic_samples if k[0] == key]:
+            del self._block_traffic_samples[sample_key]
+
+    # ------------------------------------------------------------------
+    # Unblocking — driven by the current volume of each blocked flow
+    # ------------------------------------------------------------------
+
+    def check_unblocks(self) -> None:
+        """
+        Re-evaluate every active openflow block. A block is released once
+        its drop rule's own pps (see record_block_traffic — telemetry from
+        the regular pipeline goes silent for a blocked flow, since its
+        packets never reach packet_in again and FlowCollector excludes
+        drop-rule entries) has stayed below UNBLOCK_RATIO of the
+        triggering threshold for UNBLOCK_CONFIRM_CYCLES consecutive
+        cycles — i.e. once the controller no longer "feels" the attack,
+        confirmed rather than on a single quiet sample.
+        """
+        if not self._active_blocks:
+            return
 
         for key in list(self._active_blocks):
             src_ip, dst_ip, dst_port, protocol = key
 
-            correlated_event = by_dst.get(dst_ip)
-            pps = 0.0
-            if correlated_event:
-                pps = sum(
-                    e.pps for e in correlated_event.events
-                    if (src_ip == "*" or e.src_ip == src_ip)
-                    and e.protocol == protocol
-                    and e.dst_port == dst_port
-                )
+            pps = self._block_pps.get(key, 0.0)
 
             if src_ip == "*":
                 threshold = settings.DIST_PPS_THRESHOLD
@@ -338,6 +426,7 @@ class OrchestrationController:
                 self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
                 del self._active_blocks[key]
                 del self._below_threshold_streak[key]
+                self._forget_block_traffic(key)
                 metrics.set_active_blocks(len(self._active_blocks))
                 # Force re-validation: a destination that was just under
                 # attack shouldn't get its forwarding rules trusted again
