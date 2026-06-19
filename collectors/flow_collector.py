@@ -4,17 +4,11 @@ import time
 class FlowCollector:
 
     def __init__(self):
-
         self.prev_flows = {}
 
-    def process_stats(
-        self,
-        dpid,
-        body
-    ):
+    def process_stats(self, dpid, body):
 
         flows = []
-
         now = time.time()
 
         for stat in body:
@@ -26,29 +20,34 @@ class FlowCollector:
 
             src_ip = match.get("ipv4_src")
             dst_ip = match.get("ipv4_dst")
-
             proto = match.get("ip_proto", 0)
 
-            src_port = None
+            # ---- ONLY destination port ----
             dst_port = None
+
+            if proto == 6:  # TCP
+                dst_port = match.get("tcp_dst")
+
+            elif proto == 17:  # UDP
+                dst_port = match.get("udp_dst")
+            # -------------------------------
 
             key = (
                 dpid,
                 src_ip,
                 dst_ip,
-                proto
+                proto,
+                dst_port
             )
 
             prev = self.prev_flows.get(key)
 
             if prev is None:
-
                 self.prev_flows[key] = {
                     "bytes": stat.byte_count,
                     "packets": stat.packet_count,
                     "time": now
                 }
-
                 continue
 
             dt = now - prev["time"]
@@ -60,13 +59,11 @@ class FlowCollector:
             packet_delta = stat.packet_count - prev["packets"]
 
             if byte_delta < 0 or packet_delta < 0:
-
                 self.prev_flows[key] = {
                     "bytes": stat.byte_count,
                     "packets": stat.packet_count,
                     "time": now
                 }
-
                 continue
 
             byte_rate = byte_delta / dt
@@ -76,8 +73,7 @@ class FlowCollector:
                 "src_ip": src_ip,
                 "dst_ip": dst_ip,
                 "protocol": proto,
-                "src_port": None,
-                "dst_port": None,
+                "dst_port": dst_port,
                 "byte_rate": byte_rate,
                 "packet_rate": packet_rate,
                 "bytes": stat.byte_count,
