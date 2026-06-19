@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+#
+# Installs and configures Prometheus + Grafana on Ubuntu, wired to scrape
+# this project's controller metrics endpoint (GET /metrics on port 5000,
+# see web/metrics.py and web/api.py).
+#
+# Usage:
+#   chmod +x deploy/install_monitoring.sh
+#   sudo ./deploy/install_monitoring.sh
+#
+# Idempotent — safe to re-run (it overwrites the prometheus.yml scrape
+# config and restarts both services each time).
+
+set -euo pipefail
+
+PROMETHEUS_VERSION="2.53.0"
+CONTROLLER_METRICS_TARGET="${CONTROLLER_METRICS_TARGET:-localhost:5000}"
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Run this as root (sudo $0)" >&2
+    exit 1
+fi
+
+ARCH="$(dpkg --print-architecture)"
+case "$ARCH" in
+    amd64) PROM_ARCH="amd64" ;;
+    arm64) PROM_ARCH="arm64" ;;
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+esac
+
+echo "==> Installing dependencies"
+apt-get update -qq
+apt-get install -y -qq curl wget tar adduser libfontconfig1 apt-transport-https software-properties-common
+
+# ---------------------------------------------------------------------------
+# Prometheus — installed as a binary + systemd service, not via apt (Ubuntu's
+# repo version lags well behind upstream).
+# ---------------------------------------------------------------------------
+
+echo "==> Installing Prometheus ${PROMETHEUS_VERSION}"
+
+if ! id prometheus &>/dev/null; then
+    useradd --no-create-home --shell /usr/sbin/nologin prometheus
+fi
+
+mkdir -p /etc/prometheus /var/lib/prometheus
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+PROM_TARBALL="prometheus-${PROMETHEUS_VERSION}.linux-${PROM_ARCH}.tar.gz"
+curl -sSL -o "${TMP_DIR}/${PROM_TARBALL}" \
+    "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${PROM_TARBALL}"
+
+tar -xzf "${TMP_DIR}/${PROM_TARBALL}" -C "$TMP_DIR"
+PROM_SRC_DIR="${TMP_DIR}/prometheus-${PROMETHEUS_VERSION}.linux-${PROM_ARCH}"
+
+install -m 755 "${PROM_SRC_DIR}/prometheus" /usr/local/bin/prometheus
+install -m 755 "${PROM_SRC_DIR}/promtool" /usr/local/bin/promtool
+cp -r "${PROM_SRC_DIR}/consoles" "${PROM_SRC_DIR}/console_libraries" /etc/prometheus/
+
+cat > /etc/prometheus/prometheus.yml <<EOF
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: "isp_ddos_controller"
+    static_configs:
+      - targets: ["${CONTROLLER_METRICS_TARGET}"]
+EOF
+
+chown -R prometheus:prometheus /etc/prometheus /var/lib/prometheus
+
+cat > /etc/systemd/system/prometheus.service <<'EOF'
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file=/etc/prometheus/prometheus.yml \
+    --storage.tsdb.path=/var/lib/prometheus \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries \
+    --web.listen-address=0.0.0.0:9090
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ---------------------------------------------------------------------------
+# Grafana — via the official apt repo.
+# ---------------------------------------------------------------------------
+
+echo "==> Installing Grafana"
+
+if [ ! -f /etc/apt/sources.list.d/grafana.list ]; then
+    mkdir -p /etc/apt/keyrings
+    wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+        > /etc/apt/sources.list.d/grafana.list
+fi
+
+apt-get update -qq
+apt-get install -y -qq grafana
+
+# Auto-provision the Prometheus datasource so it's there on first login —
+# no manual "Add data source" click needed.
+mkdir -p /etc/grafana/provisioning/datasources
+cat > /etc/grafana/provisioning/datasources/prometheus.yml <<'EOF'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+EOF
+
+# ---------------------------------------------------------------------------
+# Start everything
+# ---------------------------------------------------------------------------
+
+echo "==> Starting services"
+systemctl daemon-reload
+systemctl enable --now prometheus
+systemctl enable --now grafana-server
+systemctl restart prometheus
+systemctl restart grafana-server
+
+echo ""
+echo "==> Done"
+echo "Prometheus : http://<vm-ip>:9090  (scraping ${CONTROLLER_METRICS_TARGET}/metrics every 5s)"
+echo "Grafana    : http://<vm-ip>:3000  (default login admin/admin, will prompt to change)"
+echo ""
+echo "Prometheus datasource is already provisioned in Grafana."
+echo "Import deploy/grafana_dashboard.json (Dashboards > New > Import) to get the starter panels."
