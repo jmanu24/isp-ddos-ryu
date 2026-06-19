@@ -1,4 +1,4 @@
-from typing import Dict, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from core.models import MitigationAction
 from mitigation.base import MitigationAdapter
@@ -23,6 +23,10 @@ class OpenFlowMitigator(MitigationAdapter):
 
     # OpenFlow flow rule priority for drop rules (higher than forwarding rules)
     DROP_PRIORITY = 100
+
+    # Priority LearningSwitch uses for its L3 (ipv4_src/ipv4_dst) forwarding
+    # rules — needed to delete exactly those entries, not the drop rules.
+    FORWARDING_PRIORITY = 10
 
     def __init__(self):
         # (src_ip, dst_ip, dst_port, protocol) tuples currently blocked
@@ -92,6 +96,28 @@ class OpenFlowMitigator(MitigationAdapter):
 
         print(f"[OF_MITIGATOR] Unblocked {src_ip} -> {dst_ip}:{dst_port}/{protocol}")
 
+    def clear_forwarding_rules(self, dst_ip: str, sources: List[str]) -> None:
+        """
+        Delete the per-source L3 forwarding rules (installed by
+        LearningSwitch, priority=10) that were letting these specific
+        sources reach dst_ip. Used right after installing a destination-wide
+        block ("*" src) for a distributed attack: that block already wins
+        on priority regardless, but leaving thousands of one-shot spoofed-
+        source forwarding entries around just wastes flow table space.
+
+        Deletes with an exact (priority, match) using OFPFC_DELETE_STRICT,
+        scoped per known source, so the drop rule for this same dst_ip
+        (priority=100, a different match/priority) is never touched.
+        """
+        for datapath in self._datapaths.values():
+            for src_ip in sources:
+                self._delete_forwarding_rule(datapath, src_ip, dst_ip)
+
+        print(
+            f"[OF_MITIGATOR] Cleared {len(sources)} forwarding rule(s) "
+            f"toward {dst_ip} on {len(self._datapaths)} switch(es)"
+        )
+
     # ------------------------------------------------------------------
     # Internal OpenFlow helpers
     # ------------------------------------------------------------------
@@ -145,6 +171,22 @@ class OpenFlowMitigator(MitigationAdapter):
             datapath=datapath,
             command=ofproto.OFPFC_DELETE,
             priority=self.DROP_PRIORITY,
+            match=match,
+            out_port=ofproto.OFPP_ANY,
+            out_group=ofproto.OFPG_ANY,
+        )
+        datapath.send_msg(mod)
+
+    def _delete_forwarding_rule(self, datapath, src_ip: str, dst_ip: str) -> None:
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        match = parser.OFPMatch(eth_type=0x0800, ipv4_src=src_ip, ipv4_dst=dst_ip)
+
+        mod = parser.OFPFlowMod(
+            datapath=datapath,
+            command=ofproto.OFPFC_DELETE_STRICT,
+            priority=self.FORWARDING_PRIORITY,
             match=match,
             out_port=ofproto.OFPP_ANY,
             out_group=ofproto.OFPG_ANY,

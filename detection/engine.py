@@ -48,48 +48,87 @@ class DDoSDetectionEngine:
     # Internal classification logic
     # ------------------------------------------------------------------
 
+    # Per-protocol (attack_type, pps threshold) checked in order.
+    _PROTOCOL_CHECKS = (
+        ("TCP", "SYN_FLOOD", "SYN_THRESHOLD"),
+        ("UDP", "UDP_FLOOD", "UDP_THRESHOLD"),
+        ("ICMP", "ICMP_FLOOD", "ICMP_THRESHOLD"),
+    )
+
     def _classify(self, event: CorrelatedEvent) -> Optional[DetectionResult]:
         """
         Classify a single CorrelatedEvent.
-        Returns a DetectionResult if a threshold is exceeded, else None.
+
+        For each protocol whose aggregate pps exceeds its threshold, the
+        source-IP distribution decides *how* to classify it — concentrated
+        in one/few sources (low entropy) means a single attacker; spread
+        evenly across many distinct sources (high entropy) means a
+        distributed/spoofed-source flood. This check happens before picking
+        an attack_type, so a high aggregate total doesn't get blamed on
+        whichever single source happened to have the most pps that cycle.
         """
-        tcp_pps  = self._sum_pps(event.events, "TCP")
-        udp_pps  = self._sum_pps(event.events, "UDP")
-        icmp_pps = self._sum_pps(event.events, "ICMP")
+        for protocol, attack_type, threshold_name in self._PROTOCOL_CHECKS:
+            threshold = getattr(settings, threshold_name)
 
-        attack_type: Optional[str] = None
-        score: float = 0.0
+            proto_events = [e for e in event.events if e.protocol == protocol]
+            total_pps = sum(e.pps for e in proto_events)
 
-        if tcp_pps > settings.SYN_THRESHOLD:
-            attack_type = "SYN_FLOOD"
-            score = tcp_pps / settings.SYN_THRESHOLD
+            if total_pps <= threshold:
+                continue
 
-        elif udp_pps > settings.UDP_THRESHOLD:
-            attack_type = "UDP_FLOOD"
-            score = udp_pps / settings.UDP_THRESHOLD
+            return self._build_result(event, proto_events, total_pps, threshold, attack_type)
 
-        elif icmp_pps > settings.ICMP_THRESHOLD:
-            attack_type = "ICMP_FLOOD"
-            score = icmp_pps / settings.ICMP_THRESHOLD
+        # No single protocol's aggregate crossed its threshold — still check
+        # the protocol-agnostic case (e.g. raw/no-flag floods tagged "IP").
+        return self._classify_distributed(event, event.events, settings.DIST_PPS_THRESHOLD)
 
-        if attack_type is None:
-            # No single source is over threshold — check whether the
-            # destination is being flooded by many distinct sources at once.
-            return self._classify_distributed(event)
+    def _build_result(
+        self,
+        event: CorrelatedEvent,
+        proto_events: List[TelemetryEvent],
+        total_pps: float,
+        threshold: float,
+        single_source_attack_type: str,
+    ) -> DetectionResult:
+        """
+        Decide, for traffic that already crossed a protocol's threshold,
+        whether it's concentrated in one source (single-source flood) or
+        spread across many (distributed flood), and build the matching
+        DetectionResult.
+        """
+        pps_by_src: Dict[str, float] = defaultdict(float)
+        for e in proto_events:
+            pps_by_src[e.src_ip] += e.pps
 
-        # Base confidence derived from how far above threshold we are
-        base_confidence = min(score / 10.0, 1.0)
+        distinct_sources = len(pps_by_src)
+        entropy = self._normalized_entropy(pps_by_src.values())
 
-        # Boost if the attack is visible across more than one domain
-        multidomain = len(event.domains) > 1
-        confidence = min(
-            base_confidence * (self.MULTIDOMAIN_BOOST if multidomain else 1.0),
-            1.0
+        is_distributed = (
+            distinct_sources >= settings.DIST_MIN_SOURCES
+            and entropy >= settings.DIST_ENTROPY_THRESHOLD
         )
 
-        # Use the highest-pps event as the representative source/device —
-        # the attacking source, not just whichever event happened to be first
-        representative: TelemetryEvent = max(event.events, key=lambda e: e.pps)
+        score = total_pps / threshold
+        multidomain = len(event.domains) > 1
+        representative: TelemetryEvent = max(proto_events, key=lambda e: e.pps)
+
+        if is_distributed:
+            confidence = min(entropy * (self.MULTIDOMAIN_BOOST if multidomain else 1.0), 1.0)
+            return DetectionResult(
+                domain=representative.domain,
+                device_id=representative.device_id,
+                src_ip="*",
+                dst_ip=event.dst_ip,
+                dst_port=representative.dst_port,
+                protocol=representative.protocol,
+                attack_type="DDOS_DISTRIBUTED",
+                score=score,
+                confidence=confidence,
+                sources=list(pps_by_src.keys()),
+            )
+
+        base_confidence = min(score / 10.0, 1.0)
+        confidence = min(base_confidence * (self.MULTIDOMAIN_BOOST if multidomain else 1.0), 1.0)
 
         return DetectionResult(
             domain=representative.domain,
@@ -98,7 +137,7 @@ class DDoSDetectionEngine:
             dst_ip=event.dst_ip,
             dst_port=representative.dst_port,
             protocol=representative.protocol,
-            attack_type=attack_type,
+            attack_type=single_source_attack_type,
             score=score,
             confidence=confidence,
         )
@@ -107,21 +146,24 @@ class DDoSDetectionEngine:
     def _sum_pps(events: List[TelemetryEvent], protocol: str) -> float:
         return sum(e.pps for e in events if e.protocol == protocol)
 
-    def _classify_distributed(self, event: CorrelatedEvent) -> Optional[DetectionResult]:
+    def _classify_distributed(
+        self,
+        event: CorrelatedEvent,
+        candidate_events: List[TelemetryEvent],
+        pps_threshold: float,
+    ) -> Optional[DetectionResult]:
         """
-        Detect a distributed/spoofed-source flood: aggregate volume toward
-        this destination exceeds DIST_PPS_THRESHOLD, coming from at least
-        DIST_MIN_SOURCES distinct source IPs whose individual contributions
-        are distributed close to evenly (high normalized entropy) — unlike
-        a single attacker (low entropy, one dominant source).
+        Protocol-agnostic fallback distributed-flood check, used only when
+        no single protocol's aggregate pps crossed its own threshold (e.g.
+        raw IP traffic with no recognizable L4 protocol).
         """
-        total_pps = sum(e.pps for e in event.events)
+        total_pps = sum(e.pps for e in candidate_events)
 
-        if total_pps < settings.DIST_PPS_THRESHOLD:
+        if total_pps < pps_threshold:
             return None
 
         pps_by_src: Dict[str, float] = defaultdict(float)
-        for e in event.events:
+        for e in candidate_events:
             pps_by_src[e.src_ip] += e.pps
 
         if len(pps_by_src) < settings.DIST_MIN_SOURCES:
@@ -132,7 +174,7 @@ class DDoSDetectionEngine:
         if entropy < settings.DIST_ENTROPY_THRESHOLD:
             return None
 
-        score = total_pps / settings.DIST_PPS_THRESHOLD
+        score = total_pps / pps_threshold
 
         multidomain = len(event.domains) > 1
         confidence = min(
@@ -142,7 +184,7 @@ class DDoSDetectionEngine:
 
         # No single attacking IP to point at — representative is just used
         # for domain/device/protocol/port context.
-        representative: TelemetryEvent = max(event.events, key=lambda e: e.pps)
+        representative: TelemetryEvent = max(candidate_events, key=lambda e: e.pps)
 
         return DetectionResult(
             domain=representative.domain,
@@ -154,6 +196,7 @@ class DDoSDetectionEngine:
             attack_type="DDOS_DISTRIBUTED",
             score=score,
             confidence=confidence,
+            sources=list(pps_by_src.keys()),
         )
 
     @staticmethod
