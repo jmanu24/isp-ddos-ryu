@@ -202,12 +202,15 @@ class OrchestrationController:
             if correlated_event:
                 pps = sum(
                     e.pps for e in correlated_event.events
-                    if e.src_ip == src_ip
+                    if (src_ip == "*" or e.src_ip == src_ip)
                     and e.protocol == protocol
                     and e.dst_port == dst_port
                 )
 
-            threshold = _THRESHOLD_BY_PROTOCOL.get(protocol, settings.UDP_THRESHOLD)
+            if src_ip == "*":
+                threshold = settings.DIST_PPS_THRESHOLD
+            else:
+                threshold = _THRESHOLD_BY_PROTOCOL.get(protocol, settings.UDP_THRESHOLD)
 
             if pps >= threshold * self.UNBLOCK_RATIO:
                 self._below_threshold_streak[key] = 0

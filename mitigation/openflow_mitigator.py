@@ -98,7 +98,12 @@ class OpenFlowMitigator(MitigationAdapter):
 
     @staticmethod
     def _l4_match_fields(src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> dict:
-        fields = {"eth_type": 0x0800, "ipv4_src": src_ip, "ipv4_dst": dst_ip}
+        fields = {"eth_type": 0x0800, "ipv4_dst": dst_ip}
+
+        # "*" marks a distributed/spoofed-source attack — there's no single
+        # attacker IP to match on, so the rule drops by destination alone.
+        if src_ip and src_ip != "*":
+            fields["ipv4_src"] = src_ip
 
         proto_num = _PROTO_NUMBERS.get(protocol)
         if proto_num is None:
