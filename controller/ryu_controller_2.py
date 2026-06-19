@@ -158,15 +158,17 @@ class FlowStatsIDS(app_manager.RyuApp):
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         # ── Stage 1: Telemetry Collection (packet-level) ──────────────
-        telemetry_ev = self.of_adapter.on_packet_in(ev.msg)
+        telemetry_evs = self.of_adapter.on_packet_in(ev.msg)
 
-        if telemetry_ev and telemetry_ev.pps > settings.UDP_THRESHOLD:
-            dashboard_state.add_event(
-                f"DDoS DETECTADO "
-                f"DST={telemetry_ev.dst_ip} "
-                f"PPS={telemetry_ev.pps:.2f}"
-            )
-            emit_update()
+        if telemetry_evs:
+            total_pps = sum(e.pps for e in telemetry_evs)
+            if total_pps > settings.UDP_THRESHOLD:
+                dashboard_state.add_event(
+                    f"DDoS DETECTADO "
+                    f"DST={telemetry_evs[0].dst_ip} "
+                    f"PPS={total_pps:.2f}"
+                )
+                emit_update()
 
         # ── Forwarding ────────────────────────────────────────────────
         self.forwarding.packet_in_handler(ev)

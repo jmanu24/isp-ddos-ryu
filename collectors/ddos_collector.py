@@ -7,9 +7,21 @@ from ryu.lib.packet import udp
 
 
 class DDoSCollector:
+    """
+    Aggregates packet-in traffic per destination (dst_ip, dst_port, protocol)
+    rather than per full (src, dst, port, protocol) flow.
+
+    Keying by destination only — instead of including src_ip in the key —
+    matters for spoofed-source / distributed floods: a single-source flood
+    repeats the same key across packets, so a per-flow key works fine, but a
+    spoofed attack uses a different source on (almost) every packet, so a
+    src-inclusive key would never see the same key twice and could never
+    compute a rate. Aggregating by destination, with a per-source packet
+    breakdown inside that window, captures both cases: a dominant single
+    source (low entropy) or many evenly-spread sources (high entropy).
+    """
 
     def __init__(self):
-
         self.stats = {}
 
     def process_packet(self, msg):
@@ -35,8 +47,10 @@ class DDoSCollector:
             protocol = "UDP"
             dst_port = udp_pkt.dst_port
 
+        elif ip_pkt.proto == 1:
+            protocol = "ICMP"
+
         key = (
-            ip_pkt.src,
             ip_pkt.dst,
             dst_port,
             protocol
@@ -44,18 +58,18 @@ class DDoSCollector:
 
         now = time()
 
-        if key not in self.stats:
+        entry = self.stats.get(key)
 
-            self.stats[key] = {
-                "packets": 1,
-                "bytes": len(msg.data),
+        if entry is None:
+            entry = {
+                "src_packets": {},
+                "bytes": 0,
+                "packets": 0,
                 "timestamp": now
             }
+            self.stats[key] = entry
 
-            return None
-
-        entry = self.stats[key]
-
+        entry["src_packets"][ip_pkt.src] = entry["src_packets"].get(ip_pkt.src, 0) + 1
         entry["packets"] += 1
         entry["bytes"] += len(msg.data)
 
@@ -65,14 +79,18 @@ class DDoSCollector:
             return None
 
         result = {
-            "src_ip": ip_pkt.src,
-            "dst_ip": ip_pkt.dst,
-            "dst_port": dst_port,
-            "protocol": protocol,
+            "dst_ip": key[0],
+            "dst_port": key[1],
+            "protocol": key[2],
             "pps": entry["packets"] / delta,
-            "bps": entry["bytes"] / delta
+            "bps": entry["bytes"] / delta,
+            "src_pps": {
+                src: count / delta
+                for src, count in entry["src_packets"].items()
+            },
         }
 
+        entry["src_packets"] = {}
         entry["packets"] = 0
         entry["bytes"] = 0
         entry["timestamp"] = now

@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from ryu.lib.packet import packet, ipv4, tcp, udp
 
@@ -80,29 +80,43 @@ class OpenFlowAdapter(DomainAdapter):
         self._pending.extend(events)
         return events
 
-    def on_packet_in(self, msg) -> Optional[TelemetryEvent]:
+    def on_packet_in(self, msg) -> List[TelemetryEvent]:
         """
         Process a packet-in message for per-destination DDoS metrics.
         Called by the controller's packet_in_handler.
+
+        Returns one TelemetryEvent per distinct source IP seen toward this
+        destination during the window — not a single aggregate event —
+        so the Correlation/Detection layers can compute source-IP entropy
+        for distributed/spoofed-source attacks.
         """
         self._remember_flow_meta(msg)
 
         result = self._ddos_collector.process_packet(msg)
         if not result:
-            return None
+            return []
 
-        ev = TelemetryEvent(
-            domain=self.domain_name,
-            device_id="packet_in",
-            src_ip=result["src_ip"],
-            dst_ip=result["dst_ip"],
-            dst_port=result["dst_port"],
-            protocol=result["protocol"],
-            pps=result["pps"],
-            bps=result["bps"],
-        )
-        self._pending.append(ev)
-        return ev
+        # Distribute the window's aggregate bps proportionally across
+        # sources by their share of packets, since bytes aren't tracked
+        # per-source.
+        bytes_per_packet = result["bps"] / result["pps"] if result["pps"] else 0.0
+
+        events = [
+            TelemetryEvent(
+                domain=self.domain_name,
+                device_id="packet_in",
+                src_ip=src_ip,
+                dst_ip=result["dst_ip"],
+                dst_port=result["dst_port"],
+                protocol=result["protocol"],
+                pps=pps,
+                bps=pps * bytes_per_packet,
+            )
+            for src_ip, pps in result["src_pps"].items()
+        ]
+
+        self._pending.extend(events)
+        return events
 
     def _remember_flow_meta(self, msg) -> None:
         """
