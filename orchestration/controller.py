@@ -105,6 +105,9 @@ class OrchestrationController:
                 domain=d.domain,
                 device_id=d.device_id,
                 src_ip=decision.src_ip,
+                dst_ip=d.dst_ip,
+                dst_port=d.dst_port,
+                protocol=d.protocol,
                 action=action_type,
             ))
 

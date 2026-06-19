@@ -88,6 +88,8 @@ class DDoSDetectionEngine:
             device_id=representative.device_id,
             src_ip=representative.src_ip,
             dst_ip=event.dst_ip,
+            dst_port=representative.dst_port,
+            protocol=representative.protocol,
             attack_type=attack_type,
             score=score,
             confidence=confidence,

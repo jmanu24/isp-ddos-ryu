@@ -90,6 +90,8 @@ class DetectionResult:
     device_id: str
     src_ip: str
     dst_ip: str
+    dst_port: int
+    protocol: str
     attack_type: str
     score: float
     confidence: float
@@ -109,9 +111,15 @@ class MitigationAction:
 
     action   : "block" | "rate_limit" | "bgp_blackhole"
     duration : how long the rule should stay active (seconds)
+    dst_ip/dst_port/protocol : L4 5-tuple fields the mitigation backend
+                               should match on (block by exact flow, not
+                               just by source IP)
     """
     domain: str
     device_id: str
     src_ip: str
+    dst_ip: str
+    dst_port: int
+    protocol: str
     action: str
     duration: int = 60

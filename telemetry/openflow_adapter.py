@@ -1,4 +1,6 @@
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
+
+from ryu.lib.packet import packet, ipv4, tcp, udp
 
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
@@ -17,6 +19,13 @@ class OpenFlowAdapter(DomainAdapter):
     OFPFlowStatsReply) and DDoSCollector (real-time packet-in analysis)
     to produce normalized TelemetryEvents for the Correlation layer.
 
+    Forwarding flow rules are installed at L3 only (src/dst IP), so
+    OFPFlowStatsReply carries no L4 detail. To keep attack classification
+    and mitigation L4-aware anyway, this adapter remembers the protocol/
+    dst_port seen on the first packet of each (src_ip, dst_ip) pair (via
+    packet-in) and reapplies it to the bulk volume events that come later
+    from flow stats.
+
     Mitigation for this domain is handled by OpenFlowMitigator, which
     needs a live datapath reference — so apply_mitigation() is intentionally
     a no-op here.
@@ -28,6 +37,9 @@ class OpenFlowAdapter(DomainAdapter):
         self._flow_collector = FlowCollector()
         self._ddos_collector = DDoSCollector()
         self._pending: List[TelemetryEvent] = []
+        # (src_ip, dst_ip) -> {"protocol": str, "dst_port": int}, learned
+        # from the first packet-in of each flow.
+        self._flow_meta: Dict[Tuple[str, str], dict] = {}
 
     # ------------------------------------------------------------------
     # Push handlers — called from Ryu event callbacks
@@ -42,13 +54,23 @@ class OpenFlowAdapter(DomainAdapter):
         events: List[TelemetryEvent] = []
 
         for flow in flows:
-            proto = _PROTO_NAMES.get(flow["protocol"], "IP")
+            src_ip = flow.get("src_ip") or "0.0.0.0"
+            dst_ip = flow.get("dst_ip") or "0.0.0.0"
+
+            meta = self._flow_meta.get((src_ip, dst_ip))
+            if meta:
+                proto = meta["protocol"]
+                dst_port = meta["dst_port"]
+            else:
+                proto = _PROTO_NAMES.get(flow["protocol"], "IP")
+                dst_port = flow.get("dst_port", 0)
+
             ev = TelemetryEvent(
                 domain=self.domain_name,
                 device_id=str(dpid),
-                src_ip=flow.get("src_ip") or "0.0.0.0",
-                dst_ip=flow.get("dst_ip") or "0.0.0.0",
-                dst_port=flow.get("dst_port", 0),
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
                 protocol=proto,
                 pps=flow["packet_rate"],
                 bps=flow["byte_rate"],
@@ -63,6 +85,8 @@ class OpenFlowAdapter(DomainAdapter):
         Process a packet-in message for per-destination DDoS metrics.
         Called by the controller's packet_in_handler.
         """
+        self._remember_flow_meta(msg)
+
         result = self._ddos_collector.process_packet(msg)
         if not result:
             return None
@@ -79,6 +103,33 @@ class OpenFlowAdapter(DomainAdapter):
         )
         self._pending.append(ev)
         return ev
+
+    def _remember_flow_meta(self, msg) -> None:
+        """
+        Record the L4 protocol/port for this (src_ip, dst_ip) pair so that
+        later, L4-blind flow-stats volume events can be tagged correctly.
+        """
+        pkt = packet.Packet(msg.data)
+        ip_pkt = pkt.get_protocol(ipv4.ipv4)
+        if not ip_pkt:
+            return
+
+        tcp_pkt = pkt.get_protocol(tcp.tcp)
+        udp_pkt = pkt.get_protocol(udp.udp)
+
+        if tcp_pkt:
+            proto, dst_port = "TCP", tcp_pkt.dst_port
+        elif udp_pkt:
+            proto, dst_port = "UDP", udp_pkt.dst_port
+        elif ip_pkt.proto == 1:
+            proto, dst_port = "ICMP", 0
+        else:
+            proto, dst_port = "IP", 0
+
+        self._flow_meta[(ip_pkt.src, ip_pkt.dst)] = {
+            "protocol": proto,
+            "dst_port": dst_port,
+        }
 
     # ------------------------------------------------------------------
     # DomainAdapter interface

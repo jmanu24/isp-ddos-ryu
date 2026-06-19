@@ -1,15 +1,20 @@
-from typing import Dict, Set
+from typing import Dict, Set, Tuple
 
 from core.models import MitigationAction
 from mitigation.base import MitigationAdapter
+
+
+_PROTO_NUMBERS = {"TCP": 6, "UDP": 17, "ICMP": 1}
 
 
 class OpenFlowMitigator(MitigationAdapter):
     """
     Mitigation backend for the OpenFlow / SDN domain.
 
-    Installs high-priority drop rules on all registered Ryu datapaths
-    to block traffic originating from an attacking source IP.
+    Installs high-priority drop rules on all registered Ryu datapaths to
+    block traffic matching an attack's exact L4 flow — src_ip, dst_ip,
+    protocol and dst_port — rather than blanket-blocking the source IP.
+    Forwarding rules stay L3-only; only mitigation needs L4 precision.
 
     The controller registers/deregisters datapaths as switches connect
     and disconnect; this mitigator then applies rules to every active
@@ -20,7 +25,8 @@ class OpenFlowMitigator(MitigationAdapter):
     DROP_PRIORITY = 100
 
     def __init__(self):
-        self._blocked: Set[str] = set()
+        # (src_ip, dst_ip, dst_port, protocol) tuples currently blocked
+        self._blocked: Set[Tuple[str, str, int, str]] = set()
         self._datapaths: Dict[int, object] = {}   # dpid -> Ryu datapath
 
     # ------------------------------------------------------------------
@@ -41,7 +47,7 @@ class OpenFlowMitigator(MitigationAdapter):
 
     def apply(self, action: MitigationAction) -> bool:
         if action.action == "block":
-            self.block(action.src_ip)
+            self.block(action.src_ip, action.dst_ip, action.dst_port, action.protocol)
             return True
         return False
 
@@ -49,47 +55,69 @@ class OpenFlowMitigator(MitigationAdapter):
     # Public mitigation methods
     # ------------------------------------------------------------------
 
-    def block(self, src_ip: str) -> None:
+    def block(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> None:
         """
-        Install a drop rule for src_ip on all active OpenFlow switches.
-        Idempotent — calling block() on an already-blocked IP is a no-op.
+        Install an L4 drop rule (src_ip, dst_ip, protocol, dst_port) on all
+        active OpenFlow switches. Idempotent — calling block() again on an
+        already-blocked 4-tuple is a no-op.
         """
-        if src_ip in self._blocked:
+        key = (src_ip, dst_ip, dst_port, protocol)
+
+        if key in self._blocked:
             return
 
-        self._blocked.add(src_ip)
+        self._blocked.add(key)
 
         for datapath in self._datapaths.values():
-            self._install_drop_rule(datapath, src_ip)
+            self._install_drop_rule(datapath, src_ip, dst_ip, dst_port, protocol)
 
         print(
-            f"[OF_MITIGATOR] Blocked {src_ip} "
+            f"[OF_MITIGATOR] Blocked {src_ip} -> {dst_ip}:{dst_port}/{protocol} "
             f"on {len(self._datapaths)} switch(es)"
         )
 
-    def unblock(self, src_ip: str) -> None:
+    def unblock(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> None:
         """
-        Remove the drop rule for src_ip from all active switches.
+        Remove the drop rule for this L4 flow from all active switches.
         """
-        if src_ip not in self._blocked:
+        key = (src_ip, dst_ip, dst_port, protocol)
+
+        if key not in self._blocked:
             return
 
-        self._blocked.discard(src_ip)
+        self._blocked.discard(key)
 
         for datapath in self._datapaths.values():
-            self._delete_drop_rule(datapath, src_ip)
+            self._delete_drop_rule(datapath, src_ip, dst_ip, dst_port, protocol)
 
-        print(f"[OF_MITIGATOR] Unblocked {src_ip}")
+        print(f"[OF_MITIGATOR] Unblocked {src_ip} -> {dst_ip}:{dst_port}/{protocol}")
 
     # ------------------------------------------------------------------
     # Internal OpenFlow helpers
     # ------------------------------------------------------------------
 
-    def _install_drop_rule(self, datapath, src_ip: str) -> None:
+    @staticmethod
+    def _l4_match_fields(src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> dict:
+        fields = {"eth_type": 0x0800, "ipv4_src": src_ip, "ipv4_dst": dst_ip}
+
+        proto_num = _PROTO_NUMBERS.get(protocol)
+        if proto_num is None:
+            return fields
+
+        fields["ip_proto"] = proto_num
+
+        if protocol == "TCP" and dst_port:
+            fields["tcp_dst"] = dst_port
+        elif protocol == "UDP" and dst_port:
+            fields["udp_dst"] = dst_port
+
+        return fields
+
+    def _install_drop_rule(self, datapath, src_ip, dst_ip, dst_port, protocol) -> None:
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        match = parser.OFPMatch(eth_type=0x0800, ipv4_src=src_ip)
+        match = parser.OFPMatch(**self._l4_match_fields(src_ip, dst_ip, dst_port, protocol))
         inst = [
             parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, [])
         ]
@@ -102,11 +130,11 @@ class OpenFlowMitigator(MitigationAdapter):
         )
         datapath.send_msg(mod)
 
-    def _delete_drop_rule(self, datapath, src_ip: str) -> None:
+    def _delete_drop_rule(self, datapath, src_ip, dst_ip, dst_port, protocol) -> None:
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        match = parser.OFPMatch(eth_type=0x0800, ipv4_src=src_ip)
+        match = parser.OFPMatch(**self._l4_match_fields(src_ip, dst_ip, dst_port, protocol))
 
         mod = parser.OFPFlowMod(
             datapath=datapath,
