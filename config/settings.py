@@ -19,6 +19,15 @@ BLOCK_TIME = 60
 # fresh attack and trigger a second, redundant block.
 MITIGATION_DROP_PRIORITY = 100
 
+# Minimum elapsed time (seconds) between two samples of the same flow
+# before FlowCollector trusts the resulting rate. Two OFPFlowStatsReply
+# messages can land back-to-back (e.g. two switches replying close
+# together, or the controller catching up after being busy) with a near-
+# zero dt — dividing a normal packet_delta by that tiny dt produces a
+# physically impossible rate (seen once: ~470M pps). Below this floor the
+# sample is skipped rather than trusted.
+MIN_FLOW_RATE_DT = 0.5
+
 # Distributed / spoofed-source attack detection (IP flow entropy).
 # A destination under attack from many distinct, individually-low-volume
 # sources looks like an even (high-entropy) distribution of traffic across

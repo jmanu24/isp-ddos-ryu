@@ -64,7 +64,12 @@ class FlowCollector:
 
             dt = now - prev["time"]
 
-            if dt <= 0:
+            if dt < settings.MIN_FLOW_RATE_DT:
+                # Too little time between samples to trust a rate from —
+                # likely two stats replies landing almost simultaneously
+                # rather than a real second sample. Leave prev_flows
+                # untouched so the next, properly-spaced sample measures
+                # across the full elapsed window instead of this sliver.
                 continue
 
             byte_delta = stat.byte_count - prev["bytes"]
