@@ -185,6 +185,22 @@ class OrchestrationController:
             )
 
     # ------------------------------------------------------------------
+    # Queried by the forwarding layer before caching a new flow
+    # ------------------------------------------------------------------
+
+    def is_blocked_destination(self, dst_ip: str, dst_port: int, protocol: str) -> bool:
+        """
+        True if there's an active destination-wide ("*" src) block covering
+        this exact (dst_ip, dst_port, protocol). LearningSwitch checks this
+        before installing a new per-source forwarding rule, so once a
+        distributed attack's destination is blocked, new spoofed sources
+        stop generating pointless one-shot forwarding entries — the drop
+        rule would win on priority anyway, but there's no reason to let the
+        flow table fill up with entries that can never deliver traffic.
+        """
+        return ("*", dst_ip, dst_port, protocol) in self._active_blocks
+
+    # ------------------------------------------------------------------
     # Unblocking — driven by the current volume of each blocked flow
     # ------------------------------------------------------------------
 

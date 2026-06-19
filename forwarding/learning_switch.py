@@ -9,9 +9,15 @@ from ryu.lib.packet import icmp
 
 class LearningSwitch:
 
-    def __init__(self):
+    def __init__(self, is_blocked=None):
 
         self.mac_to_port = {}
+
+        # Optional Callable[[dst_ip, dst_port, protocol], bool], queried
+        # before installing a new IP forwarding rule. Lets the Orchestration
+        # layer veto caching traffic toward a destination that's already
+        # under an active distributed-attack block.
+        self._is_blocked = is_blocked
 
     def add_flow(
         self,
@@ -115,6 +121,31 @@ class LearningSwitch:
         # ---------------------------------
 
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
+
+        # ---------------------------------
+        # DESTINO BAJO BLOQUEO DISTRIBUIDO
+        # ---------------------------------
+
+        if ip_pkt and self._is_blocked:
+
+            tcp_pkt = pkt.get_protocol(tcp.tcp)
+            udp_pkt = pkt.get_protocol(udp.udp)
+
+            if tcp_pkt:
+                proto, dst_port = "TCP", tcp_pkt.dst_port
+            elif udp_pkt:
+                proto, dst_port = "UDP", udp_pkt.dst_port
+            elif ip_pkt.proto == 1:
+                proto, dst_port = "ICMP", 0
+            else:
+                proto, dst_port = "IP", 0
+
+            if self._is_blocked(ip_pkt.dst, dst_port, proto):
+                # Drop silently — no forwarding rule, no packet-out. The
+                # destination already has an active distributed-attack
+                # block; caching another per-source rule here would just
+                # be a flow table entry that can never deliver traffic.
+                return
 
         # ---------------------------------
         # INSTALAR FLOW

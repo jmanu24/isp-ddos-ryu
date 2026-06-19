@@ -64,7 +64,14 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.datapaths = {}
 
         # ── Forwarding ────────────────────────────────────────────────
-        self.forwarding = LearningSwitch()
+        # is_blocked is resolved lazily (self.orchestrator doesn't exist
+        # yet at this point in __init__) so it must stay a lambda, not a
+        # bound method reference.
+        self.forwarding = LearningSwitch(
+            is_blocked=lambda dst_ip, dst_port, proto: self.orchestrator.is_blocked_destination(
+                dst_ip, dst_port, proto
+            )
+        )
 
         # ── Stage 1: Telemetry Collection ────────────────────────────
         self.of_adapter = OpenFlowAdapter()
