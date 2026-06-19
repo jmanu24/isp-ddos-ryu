@@ -9,6 +9,15 @@ from ryu.lib.packet import icmp
 
 class LearningSwitch:
 
+    # Lifetime, in seconds, of the provisional flow installed for a
+    # destination that hasn't been validated yet. Far shorter than the
+    # detection cycle (COLLECT_INTERVAL=5s in config/settings.py), so it
+    # never amounts to a long-term trust decision — it just keeps a
+    # high-rate flood from punting every single packet to the controller
+    # (which would starve the detection pipeline itself of CPU time) while
+    # validation keeps being re-checked on every expiry.
+    PROVISIONAL_TIMEOUT = 2
+
     def __init__(self, is_blocked=None, is_validated=None):
 
         self.mac_to_port = {}
@@ -163,13 +172,13 @@ class LearningSwitch:
 
             if ip_pkt:
 
-                if self._is_validated is None or self._is_validated(ip_pkt.dst):
+                match = parser.OFPMatch(
+                    eth_type=0x0800,
+                    ipv4_src=ip_pkt.src,
+                    ipv4_dst=ip_pkt.dst
+                )
 
-                    match = parser.OFPMatch(
-                        eth_type=0x0800,
-                        ipv4_src=ip_pkt.src,
-                        ipv4_dst=ip_pkt.dst
-                    )
+                if self._is_validated is None or self._is_validated(ip_pkt.dst):
 
                     self.add_flow(
                         datapath,
@@ -180,10 +189,21 @@ class LearningSwitch:
                         hard_timeout=0
                     )
 
-                # else: destination hasn't completed a clean detection
-                # cycle yet — forward this packet only, cache nothing, so
-                # every further packet keeps coming through the controller
-                # until it's validated.
+                else:
+
+                    # Not validated yet — install a short-lived provisional
+                    # rule instead of caching nothing. It expires on its
+                    # own well before the next detection cycle runs, so it
+                    # never becomes a standing permit; it just offloads the
+                    # switch so a flood doesn't starve the controller.
+                    self.add_flow(
+                        datapath,
+                        priority=10,
+                        match=match,
+                        actions=actions,
+                        idle_timeout=0,
+                        hard_timeout=self.PROVISIONAL_TIMEOUT
+                    )
 
             else:
 
