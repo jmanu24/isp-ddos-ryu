@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Dict, List, Tuple
 
 import config.settings as settings
@@ -199,6 +200,55 @@ class OrchestrationController:
         flow table fill up with entries that can never deliver traffic.
         """
         return ("*", dst_ip, dst_port, protocol) in self._active_blocks
+
+    # ------------------------------------------------------------------
+    # Continuous sweep — catches forwarding rules clear_forwarding_rules()
+    # missed at block time
+    # ------------------------------------------------------------------
+
+    def sweep_blocked_forwarding(self, body) -> None:
+        """
+        Delete any L3 forwarding rule (priority=FORWARDING_PRIORITY) whose
+        destination is currently under an active "*" (distributed) block.
+
+        clear_forwarding_rules() at block time only knows the sources the
+        detection had already seen by then. Sources that slip in during the
+        race window between the attack starting and the block actually
+        taking effect — especially one-shot spoofed sources that never get
+        a second flow-stats sample — never make it into that list and
+        would otherwise sit in the flow table forever (harmless, since the
+        drop rule outranks them, but exactly the clutter we want gone).
+
+        Called every flow_stats_reply cycle with the raw OFPFlowStatsReply
+        body for one switch, so it sees the table as OVS actually has it,
+        not just what detection inferred.
+        """
+        blocked_dsts = {
+            dst_ip for (src_ip, dst_ip, _, _) in self._active_blocks if src_ip == "*"
+        }
+
+        if not blocked_dsts:
+            return
+
+        stale_sources_by_dst: Dict[str, List[str]] = defaultdict(list)
+
+        for stat in body:
+            if stat.priority != self.of_mitigator.FORWARDING_PRIORITY:
+                continue
+
+            match = stat.match
+
+            if match.get("eth_type") != 0x0800:
+                continue
+
+            dst_ip = match.get("ipv4_dst")
+            src_ip = match.get("ipv4_src")
+
+            if dst_ip in blocked_dsts and src_ip:
+                stale_sources_by_dst[dst_ip].append(src_ip)
+
+        for dst_ip, sources in stale_sources_by_dst.items():
+            self.of_mitigator.clear_forwarding_rules(dst_ip, sources)
 
     # ------------------------------------------------------------------
     # Unblocking — driven by the current volume of each blocked flow

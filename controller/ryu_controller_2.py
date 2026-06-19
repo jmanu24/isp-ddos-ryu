@@ -248,6 +248,12 @@ class FlowStatsIDS(app_manager.RyuApp):
     def flow_stats_reply_handler(self, ev):
         dpid = ev.msg.datapath.id
 
+        # Clean up forwarding rules left behind for destinations already
+        # under an active distributed block — runs every cycle, not just
+        # at block time, so stragglers from the detection race window
+        # eventually get swept too.
+        self.orchestrator.sweep_blocked_forwarding(ev.msg.body)
+
         # Stage 1 — push raw stats into the OpenFlow telemetry adapter
         events = self.of_adapter.on_flow_stats(dpid, ev.msg.body)
 
