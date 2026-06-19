@@ -1,5 +1,7 @@
 import time
 
+import config.settings as settings
+
 
 class FlowCollector:
 
@@ -12,6 +14,13 @@ class FlowCollector:
         now = time.time()
 
         for stat in body:
+
+            # Skip mitigation drop rules — they keep counting matched
+            # (dropped) packets, and feeding that volume back into
+            # telemetry would make the mitigation's own counters look like
+            # a fresh attack and trigger a second, redundant block.
+            if stat.priority >= settings.MITIGATION_DROP_PRIORITY:
+                continue
 
             match = stat.match
 

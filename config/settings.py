@@ -12,6 +12,13 @@ DECISION_THRESHOLD = 1.5
 
 BLOCK_TIME = 60
 
+# Flow priority used for mitigation drop rules (OpenFlowMitigator). Shared
+# with FlowCollector so it can exclude these from polled flow stats — a
+# drop rule still counts matched (dropped) packets, and if that volume got
+# fed back into telemetry, the mitigation's own counters would look like a
+# fresh attack and trigger a second, redundant block.
+MITIGATION_DROP_PRIORITY = 100
+
 # Distributed / spoofed-source attack detection (IP flow entropy).
 # A destination under attack from many distinct, individually-low-volume
 # sources looks like an even (high-entropy) distribution of traffic across

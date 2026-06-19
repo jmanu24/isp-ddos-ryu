@@ -1,5 +1,6 @@
 from typing import Dict, List, Set, Tuple
 
+import config.settings as settings
 from core.models import MitigationAction
 from mitigation.base import MitigationAdapter
 
@@ -21,8 +22,10 @@ class OpenFlowMitigator(MitigationAdapter):
     datapath at once so the block is network-wide within the SDN domain.
     """
 
-    # OpenFlow flow rule priority for drop rules (higher than forwarding rules)
-    DROP_PRIORITY = 100
+    # OpenFlow flow rule priority for drop rules (higher than forwarding
+    # rules). Shared with FlowCollector (config/settings.py) so it can
+    # exclude these from polled flow stats.
+    DROP_PRIORITY = settings.MITIGATION_DROP_PRIORITY
 
     # Priority LearningSwitch uses for its L3 (ipv4_src/ipv4_dst) forwarding
     # rules — needed to delete exactly those entries, not the drop rules.
