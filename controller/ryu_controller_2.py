@@ -203,12 +203,17 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Stage 1 — collect from OpenFlow adapter (others return [] for now)
         all_events = self.of_adapter.collect()
 
-        if not all_events:
-            return
-
         # Stage 2 — correlate across domains
         self.correlator.ingest(all_events)
         correlated = self.correlator.correlate()
+
+        # Release blocks whose flow volume has died down — runs every cycle,
+        # even an empty one, since "no traffic at all" is itself the signal
+        # that an attack has stopped.
+        self.orchestrator.check_unblocks(correlated)
+
+        if not correlated:
+            return
 
         # Stage 3 — detect attack types
         detections = self.detector.analyze(correlated)

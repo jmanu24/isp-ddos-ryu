@@ -1,9 +1,17 @@
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
-from core.models import DetectionResult, MitigationAction
+import config.settings as settings
+from core.models import CorrelatedEvent, DetectionResult, MitigationAction
 from decision.engine import DecisionEngine, Decision
 from telemetry.base import DomainAdapter
 from mitigation.openflow_mitigator import OpenFlowMitigator
+
+
+_THRESHOLD_BY_PROTOCOL = {
+    "TCP": settings.SYN_THRESHOLD,
+    "UDP": settings.UDP_THRESHOLD,
+    "ICMP": settings.ICMP_THRESHOLD,
+}
 
 
 class OrchestrationController:
@@ -21,7 +29,22 @@ class OrchestrationController:
     The OpenFlowMitigator is kept separate from the DomainAdapter list because
     it requires live Ryu datapath references (registered/deregistered by the
     Ryu controller as switches connect and disconnect).
+
+    Unblocking is traffic-driven rather than time-driven: a blocked flow's
+    drop rule keeps counting matched (dropped) packets, so check_unblocks()
+    can tell whether the attacker is still flooding and release the block
+    once that flow's volume falls back under a fraction of the threshold
+    that triggered it.
     """
+
+    # Release a block once the flow's pps falls below this fraction of the
+    # detection threshold that originally triggered it.
+    UNBLOCK_RATIO = 0.5
+
+    # Require this many consecutive below-threshold cycles before actually
+    # unblocking, so a brief lull in a bursty attack doesn't lift the block
+    # only for the next burst to need re-detection from scratch.
+    UNBLOCK_CONFIRM_CYCLES = 3
 
     def __init__(self, adapters: List[DomainAdapter]):
         # Index adapters by domain name for O(1) dispatch
@@ -30,6 +53,15 @@ class OrchestrationController:
         }
         self._decision_engine = DecisionEngine()
         self.of_mitigator = OpenFlowMitigator()
+
+        # (src_ip, dst_ip, dst_port, protocol) -> MitigationAction currently
+        # enforced, only for the openflow domain (the only one with a real
+        # drop-rule backend so far).
+        self._active_blocks: Dict[Tuple[str, str, int, str], MitigationAction] = {}
+
+        # Same keys -> count of consecutive cycles seen below the unblock
+        # threshold. Reset to 0 whenever traffic rises back above it.
+        self._below_threshold_streak: Dict[Tuple[str, str, int, str], int] = {}
 
     # ------------------------------------------------------------------
     # Datapath lifecycle (called from the Ryu controller)
@@ -126,6 +158,12 @@ class OrchestrationController:
         """Send action to the correct backend."""
         if action.domain == "openflow":
             self.of_mitigator.apply(action)
+
+            if action.action == "block":
+                key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
+                self._active_blocks[key] = action
+                self._below_threshold_streak[key] = 0
+
             return
 
         adapter = self._adapters.get(action.domain)
@@ -137,3 +175,47 @@ class OrchestrationController:
                 f"[ORCHESTRATION] No adapter registered "
                 f"for domain '{action.domain}'"
             )
+
+    # ------------------------------------------------------------------
+    # Unblocking — driven by the current volume of each blocked flow
+    # ------------------------------------------------------------------
+
+    def check_unblocks(self, correlated: List[CorrelatedEvent]) -> None:
+        """
+        Re-evaluate every active openflow block against this cycle's
+        correlated traffic. A block is released once its flow's pps has
+        stayed below UNBLOCK_RATIO of the triggering threshold for
+        UNBLOCK_CONFIRM_CYCLES consecutive cycles — i.e. once the
+        controller no longer "feels" the attack, confirmed rather than
+        on a single quiet sample.
+        """
+        if not self._active_blocks:
+            return
+
+        by_dst = {c.dst_ip: c for c in correlated}
+
+        for key in list(self._active_blocks):
+            src_ip, dst_ip, dst_port, protocol = key
+
+            correlated_event = by_dst.get(dst_ip)
+            pps = 0.0
+            if correlated_event:
+                pps = sum(
+                    e.pps for e in correlated_event.events
+                    if e.src_ip == src_ip
+                    and e.protocol == protocol
+                    and e.dst_port == dst_port
+                )
+
+            threshold = _THRESHOLD_BY_PROTOCOL.get(protocol, settings.UDP_THRESHOLD)
+
+            if pps >= threshold * self.UNBLOCK_RATIO:
+                self._below_threshold_streak[key] = 0
+                continue
+
+            self._below_threshold_streak[key] += 1
+
+            if self._below_threshold_streak[key] >= self.UNBLOCK_CONFIRM_CYCLES:
+                self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
+                del self._active_blocks[key]
+                del self._below_threshold_streak[key]
