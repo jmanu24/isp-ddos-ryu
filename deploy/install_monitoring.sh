@@ -109,6 +109,11 @@ fi
 apt-get update -qq
 apt-get install -y -qq grafana
 
+# Grafana's default http_addr is 127.0.0.1 (loopback-only) — listen on all
+# interfaces so it's reachable from outside the VM, not just from a shell
+# on the host itself.
+sed -i 's/^;\?http_addr =.*/http_addr = 0.0.0.0/' /etc/grafana/grafana.ini
+
 # Auto-provision the Prometheus datasource so it's there on first login —
 # no manual "Add data source" click needed.
 mkdir -p /etc/grafana/provisioning/datasources
