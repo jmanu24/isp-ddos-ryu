@@ -70,7 +70,7 @@ class OpenFlowAdapter(DomainAdapter):
         ev = TelemetryEvent(
             domain=self.domain_name,
             device_id="packet_in",
-            src_ip="unknown",
+            src_ip=result["src_ip"],
             dst_ip=result["dst_ip"],
             dst_port=result["dst_port"],
             protocol=result["protocol"],

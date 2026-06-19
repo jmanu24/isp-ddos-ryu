@@ -36,6 +36,7 @@ class DDoSCollector:
             dst_port = udp_pkt.dst_port
 
         key = (
+            ip_pkt.src,
             ip_pkt.dst,
             dst_port,
             protocol
@@ -64,6 +65,7 @@ class DDoSCollector:
             return None
 
         result = {
+            "src_ip": ip_pkt.src,
             "dst_ip": ip_pkt.dst,
             "dst_port": dst_port,
             "protocol": protocol,

@@ -79,8 +79,9 @@ class DDoSDetectionEngine:
             1.0
         )
 
-        # Use the first event as representative source/device
-        representative: TelemetryEvent = event.events[0]
+        # Use the highest-pps event as the representative source/device —
+        # the attacking source, not just whichever event happened to be first
+        representative: TelemetryEvent = max(event.events, key=lambda e: e.pps)
 
         return DetectionResult(
             domain=representative.domain,
