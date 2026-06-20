@@ -36,6 +36,14 @@ class DDoSCollector:
         tcp_pkt = pkt.get_protocol(tcp.tcp)
         udp_pkt = pkt.get_protocol(udp.udp)
 
+        if tcp_pkt and (tcp_pkt.bits & tcp.TCP_RST):
+            # A victim sends RST in plain response to an unwanted/closed-
+            # port SYN — that's it defending itself, not a second attack.
+            # hping3 (and similar floods) vary the source port per probe,
+            # so each reply burst lands on a different ephemeral dst_port
+            # and gets misread as its own short-lived SYN_FLOOD otherwise.
+            return None
+
         protocol = "IP"
         dst_port = 0
 
