@@ -134,7 +134,13 @@ class FlowStatsIDS(app_manager.RyuApp):
             # Hosts LearningSwitch has confirmed an edge-port location for
             # — drawn as extra nodes linked to the switch they're attached
             # to, so the graph isn't just switches floating with no leaves.
+            # Router/gateway interfaces (always x.x.x.1 by this project's
+            # topology convention) are skipped — they clutter the graph
+            # with one node per subnet for what's conceptually one device.
             for host in self.forwarding.get_known_hosts():
+                if host["ip"].endswith(".1"):
+                    continue
+
                 host_id = f"host-{host['ip']}"
                 nodes.append({"id": host_id, "label": host["ip"], "group": "host"})
                 links.append({"source": host_id, "target": str(host["dpid"])})
