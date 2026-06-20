@@ -278,7 +278,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             msg = (
                 f"ATAQUE DETECTADO: {d.attack_type} "
                 f"origen={d.src_ip} destino={d.dst_ip}:{d.dst_port}/{d.protocol} "
-                f"[{d.domain}] confianza={d.confidence:.2f}"
+                f"[{d.domain}]"
             )
             dashboard_state.add_event(msg)
             self.logger.warning(msg)

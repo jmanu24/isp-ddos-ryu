@@ -162,6 +162,13 @@ class OpenFlowAdapter(DomainAdapter):
         tcp_pkt = pkt.get_protocol(tcp.tcp)
         udp_pkt = pkt.get_protocol(udp.udp)
 
+        if tcp_pkt and (tcp_pkt.bits & tcp.TCP_RST):
+            # Same reasoning as DDoSCollector: a victim's RST reply isn't
+            # part of any flood — don't let it tag this (src,dst) pair's
+            # metadata, or later flow-stats volume for the reply direction
+            # would inherit a misleading "TCP" classification from it.
+            return
+
         if tcp_pkt:
             proto, dst_port = "TCP", tcp_pkt.dst_port
         elif udp_pkt:
