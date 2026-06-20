@@ -106,6 +106,15 @@ class OrchestrationController:
         Evaluate detections, decide on a response, and dispatch mitigation.
         Returns the list of MitigationActions that were issued (empty if no
         attack scored above the decision threshold).
+
+        Detections are grouped by attacker identity (src_ip, dst_ip,
+        dst_port, protocol) first, and each group gets its own independent
+        decision/threshold check — DecisionEngine.evaluate() only ever
+        returns the single best-scoring entry it's given, so without this
+        grouping, two simultaneous distinct attacks (e.g. a bidirectional
+        ICMP flood, or two unrelated attackers) would compete for one
+        "winner" slot each cycle and only ever get mitigated one at a
+        time, alternating cycle to cycle as their relative scores shift.
         """
         if not detections:
             return []
@@ -113,40 +122,35 @@ class OrchestrationController:
         for d in detections:
             metrics.record_detection(d.attack_type, d.domain)
 
-        # Convert DetectionResults to the dict format expected by DecisionEngine
-        det_dicts = [
-            {
-                "type": d.attack_type,
-                "src_ip": d.src_ip,
-                "score": d.score * d.confidence,
-            }
-            for d in detections
-        ]
+        groups: Dict[Tuple[str, str, int, str], List[DetectionResult]] = defaultdict(list)
+        for d in detections:
+            groups[(d.src_ip, d.dst_ip, d.dst_port, d.protocol)].append(d)
 
-        decision: Decision = self._decision_engine.evaluate(det_dicts)
+        all_actions: List[MitigationAction] = []
 
-        if decision is None:
-            return []
+        for group in groups.values():
+            det_dicts = [
+                {
+                    "type": d.attack_type,
+                    "src_ip": d.src_ip,
+                    "score": d.score * d.confidence,
+                }
+                for d in group
+            ]
 
-        # Only act on detections that are actually part of the attack the
-        # decision picked (same attack_type + src_ip) — e.g. an ICMP flood
-        # also makes the victim's replies look like a second, reverse-
-        # direction "attack" that scores independently; mixing its dst_ip
-        # with the winning decision's src_ip would build a nonsensical
-        # src==dst action. Multiple domains can still each contribute one
-        # action for this same attacker (that's the point of the dedup-by-
-        # domain loop in _build_actions).
-        matching = [
-            d for d in detections
-            if d.attack_type == decision.attack_type and d.src_ip == decision.src_ip
-        ]
+            decision: Decision = self._decision_engine.evaluate(det_dicts)
 
-        actions = self._build_actions(decision, matching)
+            if decision is None:
+                continue
 
-        for action in actions:
-            self._dispatch(action)
+            actions = self._build_actions(decision, group)
 
-        return actions
+            for action in actions:
+                self._dispatch(action)
+
+            all_actions.extend(actions)
+
+        return all_actions
 
     # ------------------------------------------------------------------
     # Internal helpers
