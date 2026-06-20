@@ -60,6 +60,18 @@ class LearningSwitch:
             return None
         return self._host_location.get(mac)
 
+    def get_known_hosts(self):
+        """
+        [{ip, dpid, port}, ...] for every IP with a confirmed edge-port
+        location — used to draw hosts on the topology graph.
+        """
+        hosts = []
+        for ip, mac in self._ip_to_mac.items():
+            location = self._host_location.get(mac)
+            if location:
+                hosts.append({"ip": ip, "dpid": location[0], "port": location[1]})
+        return hosts
+
     def add_flow(
         self,
         datapath,

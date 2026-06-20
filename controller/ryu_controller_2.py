@@ -122,7 +122,7 @@ class FlowStatsIDS(app_manager.RyuApp):
     def _update_topology(self):
         try:
             nodes = [
-                {"id": str(sw.dp.id), "label": f"s{sw.dp.id}"}
+                {"id": str(sw.dp.id), "label": f"s{sw.dp.id}", "group": "switch"}
                 for sw in get_switch(self, None)
             ]
             raw_links = get_link(self, None)
@@ -130,6 +130,15 @@ class FlowStatsIDS(app_manager.RyuApp):
                 {"source": str(lk.src.dpid), "target": str(lk.dst.dpid)}
                 for lk in raw_links
             ]
+
+            # Hosts LearningSwitch has confirmed an edge-port location for
+            # — drawn as extra nodes linked to the switch they're attached
+            # to, so the graph isn't just switches floating with no leaves.
+            for host in self.forwarding.get_known_hosts():
+                host_id = f"host-{host['ip']}"
+                nodes.append({"id": host_id, "label": host["ip"], "group": "host"})
+                links.append({"source": host_id, "target": str(host["dpid"])})
+
             dashboard_state.update_topology(nodes, links)
             emit_update()
 
@@ -219,6 +228,10 @@ class FlowStatsIDS(app_manager.RyuApp):
                     self.logger.error("Stats request error: %s", e)
 
             hub.sleep(settings.COLLECT_INTERVAL)
+
+            # Refresh hosts on the topology graph — switch/link events
+            # alone wouldn't pick up a newly-learned host location.
+            self._update_topology()
 
             # Run the full 5-stage pipeline
             self._run_pipeline()
