@@ -33,6 +33,10 @@ class TelemetryEvent:
     protocol  : "TCP" | "UDP" | "ICMP" | "IP"
     pps       : packets per second
     bps       : bytes per second
+    in_port   : physical switch port the traffic entered on, when known
+                (only packet-in-derived events know this — flow-stats-
+                derived ones leave it 0, since LearningSwitch's L3
+                forwarding match doesn't carry in_port)
     flags     : optional protocol flags, e.g. {"SYN": True}
     """
     domain: str
@@ -43,6 +47,7 @@ class TelemetryEvent:
     protocol: str
     pps: float
     bps: float
+    in_port: int = 0
     flags: dict = field(default_factory=dict)
     timestamp: float = field(
         default_factory=lambda: datetime.now().timestamp()
@@ -87,6 +92,10 @@ class DetectionResult:
     confidence  : 0.0–1.0, boosted when attack spans multiple domains
     sources     : distinct source IPs contributing — only populated for
                   DDOS_DISTRIBUTED, where src_ip is "*" (no single attacker)
+    in_port     : ingress switch port of the representative event, when
+                  known — lets mitigation scope a block to the exact
+                  switch+port closest to the attacker instead of the
+                  whole network
     """
     domain: str
     device_id: str
@@ -98,6 +107,7 @@ class DetectionResult:
     score: float
     confidence: float
     sources: List[str] = field(default_factory=list)
+    in_port: int = 0
     timestamp: float = field(
         default_factory=lambda: datetime.now().timestamp()
     )
@@ -122,6 +132,11 @@ class MitigationAction:
                   forwarding rules that were letting them through
     attack_type : the DetectionResult.attack_type that triggered this
                   action — carried through purely for descriptive logging
+    in_port     : ingress switch port closest to the attacker, when known
+                  (0 if unknown, e.g. distributed attacks or flow-stats-
+                  only visibility) — lets OpenFlowMitigator scope the
+                  drop rule to a single switch+port instead of the whole
+                  network
     """
     domain: str
     device_id: str
@@ -133,3 +148,4 @@ class MitigationAction:
     duration: int = 60
     sources: List[str] = field(default_factory=list)
     attack_type: str = ""
+    in_port: int = 0

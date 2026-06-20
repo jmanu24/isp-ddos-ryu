@@ -101,27 +101,41 @@ class OpenFlowAdapter(DomainAdapter):
         # per-source.
         bytes_per_packet = result["bps"] / result["pps"] if result["pps"] else 0.0
 
-        events = [
-            TelemetryEvent(
+        # Fallback for sources this window's aggregation picked up that
+        # weren't the one that just triggered _remember_flow_meta above —
+        # still better than nothing, since a source typically keeps
+        # entering via the same physical port in a static topology.
+        fallback_dpid = msg.datapath.id
+        fallback_in_port = msg.match["in_port"]
+
+        events = []
+        for src_ip, pps in result["src_pps"].items():
+            meta = self._flow_meta.get((src_ip, result["dst_ip"]))
+            dpid = meta["dpid"] if meta else fallback_dpid
+            in_port = meta["in_port"] if meta else fallback_in_port
+
+            events.append(TelemetryEvent(
                 domain=self.domain_name,
-                device_id="packet_in",
+                device_id=str(dpid),
                 src_ip=src_ip,
                 dst_ip=result["dst_ip"],
                 dst_port=result["dst_port"],
                 protocol=result["protocol"],
                 pps=pps,
                 bps=pps * bytes_per_packet,
-            )
-            for src_ip, pps in result["src_pps"].items()
-        ]
+                in_port=in_port,
+            ))
 
         self._pending.extend(events)
         return events
 
     def _remember_flow_meta(self, msg) -> None:
         """
-        Record the L4 protocol/port for this (src_ip, dst_ip) pair so that
-        later, L4-blind flow-stats volume events can be tagged correctly.
+        Record the L4 protocol/port and ingress (dpid, in_port) for this
+        (src_ip, dst_ip) pair so that later, L4-blind flow-stats volume
+        events can be tagged correctly, and mitigation can scope a block
+        to the switch+port closest to this source instead of the whole
+        network.
         """
         pkt = packet.Packet(msg.data)
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
@@ -143,6 +157,8 @@ class OpenFlowAdapter(DomainAdapter):
         self._flow_meta[(ip_pkt.src, ip_pkt.dst)] = {
             "protocol": proto,
             "dst_port": dst_port,
+            "dpid": msg.datapath.id,
+            "in_port": msg.match["in_port"],
         }
 
     # ------------------------------------------------------------------

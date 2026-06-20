@@ -110,9 +110,12 @@ class DDoSDetectionEngine:
 
         score = total_pps / threshold
         multidomain = len(event.domains) > 1
-        representative: TelemetryEvent = max(proto_events, key=lambda e: e.pps)
 
         if is_distributed:
+            # No single attacker to scope a switch/port block to — many
+            # sources, so the representative is just domain/protocol/port
+            # context, picked from whichever event has the most pps.
+            representative = self._pick_representative(proto_events)
             confidence = min(entropy * (self.MULTIDOMAIN_BOOST if multidomain else 1.0), 1.0)
             return DetectionResult(
                 domain=representative.domain,
@@ -127,6 +130,14 @@ class DDoSDetectionEngine:
                 sources=list(pps_by_src.keys()),
             )
 
+        # Single attacker — narrow down to its own events first, then among
+        # those prefer one tagged with a real ingress port (from packet-in)
+        # over a flow-stats-derived one (which never carries in_port), so
+        # mitigation can scope the block to the switch+port closest to it.
+        dominant_src = max(pps_by_src, key=pps_by_src.get)
+        dominant_events = [e for e in proto_events if e.src_ip == dominant_src]
+        representative = self._pick_representative(dominant_events)
+
         base_confidence = min(score / 10.0, 1.0)
         confidence = min(base_confidence * (self.MULTIDOMAIN_BOOST if multidomain else 1.0), 1.0)
 
@@ -140,7 +151,20 @@ class DDoSDetectionEngine:
             attack_type=single_source_attack_type,
             score=score,
             confidence=confidence,
+            in_port=representative.in_port,
         )
+
+    @staticmethod
+    def _pick_representative(events: List[TelemetryEvent]) -> TelemetryEvent:
+        """
+        Prefer an event tagged with a real ingress port (in_port != 0,
+        meaning it came from packet-in) over a flow-stats-derived one,
+        which never carries in_port. Among the preferred pool, pick the
+        highest-pps event.
+        """
+        tagged = [e for e in events if e.in_port]
+        pool = tagged if tagged else events
+        return max(pool, key=lambda e: e.pps)
 
     @staticmethod
     def _sum_pps(events: List[TelemetryEvent], protocol: str) -> float:

@@ -1,5 +1,6 @@
 import time
 from collections import defaultdict
+from datetime import datetime
 from typing import Dict, List, Tuple
 
 import config.settings as settings
@@ -169,6 +170,7 @@ class OrchestrationController:
                 action=action_type,
                 sources=d.sources,
                 attack_type=decision.attack_type,
+                in_port=d.in_port,
             ))
 
         return actions
@@ -210,6 +212,7 @@ class OrchestrationController:
             adapter.apply_mitigation(action)
         else:
             print(
+                f"{datetime.now():%Y-%m-%d %H:%M:%S} "
                 f"[ORCHESTRATION] No adapter registered "
                 f"for domain '{action.domain}'"
             )

@@ -1,3 +1,5 @@
+import logging
+
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import (
@@ -11,6 +13,17 @@ from ryu.topology import event
 from ryu.topology.api import get_switch, get_link
 
 import threading
+
+# force=True re-applies this format even though Ryu's own startup already
+# attached handlers to the root logger — without it, basicConfig() would be
+# a no-op and every self.logger.* call below would keep printing without a
+# timestamp.
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+    force=True,
+)
 
 # Forwarding
 from forwarding.learning_switch import LearningSwitch
