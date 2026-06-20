@@ -18,7 +18,7 @@ class LearningSwitch:
     # validation keeps being re-checked on every expiry.
     PROVISIONAL_TIMEOUT = 2
 
-    def __init__(self, is_blocked=None, is_validated=None):
+    def __init__(self, is_blocked=None, is_validated=None, is_interswitch_port=None):
 
         self.mac_to_port = {}
 
@@ -35,6 +35,30 @@ class LearningSwitch:
         # just one at a time via packet-out, going through the controller
         # every time until validation completes.
         self._is_validated = is_validated
+
+        # Optional Callable[[dpid, port_no], bool] — True if that port is a
+        # discovered switch-switch link. A packet with no matching flow
+        # rule triggers packet-in on every switch along its path, not just
+        # the one nearest the actual source, so this is needed to tell
+        # "this IP is truly attached here" apart from "this switch just
+        # forwarded the packet along".
+        self._is_interswitch_port = is_interswitch_port
+
+        # ip -> mac, and mac -> (dpid, port) where that mac was last seen
+        # arriving on a *non* switch-switch port — i.e. the genuine
+        # edge/host attachment point, not just any hop the traffic passed
+        # through. Used by the Orchestration layer to scope a mitigation
+        # block to the switch+port actually closest to an attacker.
+        self._ip_to_mac = {}
+        self._host_location = {}
+
+    def get_host_location(self, ip):
+        """(dpid, port) this IP's mac was last confirmed attached to via a
+        non switch-switch port, or None if not known yet."""
+        mac = self._ip_to_mac.get(ip)
+        if mac is None:
+            return None
+        return self._host_location.get(mac)
 
     def add_flow(
         self,
@@ -138,6 +162,23 @@ class LearningSwitch:
         # ---------------------------------
 
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
+
+        # ---------------------------------
+        # UBICACION REAL DEL HOST (para escopar mitigacion)
+        # ---------------------------------
+
+        if ip_pkt:
+            self._ip_to_mac[ip_pkt.src] = src
+
+            is_interswitch = bool(
+                self._is_interswitch_port and self._is_interswitch_port(dpid, in_port)
+            )
+            if not is_interswitch:
+                # This src mac just arrived on a genuine edge port — it's
+                # truly attached here, not just passing through. An entry
+                # learned this way is never overwritten by an interswitch
+                # hop's view of the same mac later.
+                self._host_location[src] = (dpid, in_port)
 
         # ---------------------------------
         # DESTINO BAJO BLOQUEO DISTRIBUIDO

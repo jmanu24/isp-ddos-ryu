@@ -50,13 +50,22 @@ class OrchestrationController:
     # only for the next burst to need re-detection from scratch.
     UNBLOCK_CONFIRM_CYCLES = 3
 
-    def __init__(self, adapters: List[DomainAdapter]):
+    def __init__(self, adapters: List[DomainAdapter], locate_host=None):
         # Index adapters by domain name for O(1) dispatch
         self._adapters: Dict[str, DomainAdapter] = {
             a.domain_name: a for a in adapters
         }
         self._decision_engine = DecisionEngine()
         self.of_mitigator = OpenFlowMitigator()
+
+        # Optional Callable[[ip], Optional[Tuple[int,int]]] — (dpid, port)
+        # an IP's mac was last confirmed attached to via a genuine edge
+        # port (LearningSwitch.get_host_location). This is the actual
+        # source of truth for scoping a block to the switch closest to an
+        # attacker — unlike a detection's own device_id/in_port, which
+        # just reflects whichever switch's packet-in happened to be
+        # processed, not necessarily the one nearest the source.
+        self._locate_host = locate_host
 
         # (src_ip, dst_ip, dst_port, protocol) -> MitigationAction currently
         # enforced, only for the openflow domain (the only one with a real
@@ -104,6 +113,11 @@ class OrchestrationController:
     def update_interswitch_ports(self, ports: set) -> None:
         """Called by the Ryu controller whenever topology is (re)discovered."""
         self._interswitch_ports = ports
+
+    def is_interswitch_port(self, dpid: int, port_no: int) -> bool:
+        """Queried by LearningSwitch before trusting a mac sighting as a
+        genuine host attachment point."""
+        return (dpid, port_no) in self._interswitch_ports
 
     def deregister_datapath(self, dpid: int) -> None:
         self.of_mitigator.deregister(dpid)
@@ -207,24 +221,28 @@ class OrchestrationController:
 
     def _scoped_ingress(self, d: DetectionResult) -> Tuple[str, int]:
         """
-        Validate (device_id, in_port) against discovered topology before
-        trusting it to scope a block to a single switch+port. A packet
+        Find the switch+port actually closest to this detection's src_ip,
+        via LearningSwitch's confirmed host-location tracking (mac
+        sightings filtered to genuine edge ports, never an inter-switch
+        hop's view of the same mac) — NOT the detection's own
+        device_id/in_port, which just reflects whichever switch's
+        packet-in happened to get processed for that traffic. A packet
         with no matching flow rule triggers packet-in on every switch it
-        passes through on its way in, not just the one nearest the
-        attacker — so if in_port turns out to be a switch-switch link
-        port, the dpid it was recorded on is probably just an
-        intermediate hop, not the true nearest switch. Both are discarded
-        in that case, falling back to a network-wide block.
+        passes through, not just the one nearest the actual source, so
+        that telemetry-derived info isn't reliable enough to scope a
+        block to a single switch+port — only an authoritative location
+        lookup is. No location known yet -> fall back to network-wide.
         """
-        if not d.device_id.isdigit():
-            return d.device_id, d.in_port  # not an openflow dpid, e.g. "*"-less domains
-
-        dpid = int(d.device_id)
-
-        if d.in_port and (dpid, d.in_port) in self._interswitch_ports:
+        if self._locate_host is None:
             return "", 0
 
-        return d.device_id, d.in_port
+        location = self._locate_host(d.src_ip)
+
+        if location is None:
+            return "", 0
+
+        dpid, port_no = location
+        return str(dpid), port_no
 
     @staticmethod
     def _action_for(attack_type: str, domain: str) -> str:

@@ -78,14 +78,15 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.datapaths = {}
 
         # ── Forwarding ────────────────────────────────────────────────
-        # is_blocked/is_validated are resolved lazily (self.orchestrator
-        # doesn't exist yet at this point in __init__) so they must stay
-        # lambdas, not bound method references.
+        # is_blocked/is_validated/is_interswitch_port are resolved lazily
+        # (self.orchestrator doesn't exist yet at this point in __init__)
+        # so they must stay lambdas, not bound method references.
         self.forwarding = LearningSwitch(
             is_blocked=lambda dst_ip, dst_port, proto: self.orchestrator.is_blocked_destination(
                 dst_ip, dst_port, proto
             ),
             is_validated=lambda dst_ip: self.orchestrator.is_validated_destination(dst_ip),
+            is_interswitch_port=lambda dpid, port: self.orchestrator.is_interswitch_port(dpid, port),
         )
 
         # ── Stage 1: Telemetry Collection ────────────────────────────
@@ -102,7 +103,9 @@ class FlowStatsIDS(app_manager.RyuApp):
         # ── Stages 2-5: Correlation → Detection → Decision → Control ─
         self.correlator  = MultidomainCorrelator()
         self.detector    = DDoSDetectionEngine()
-        self.orchestrator = OrchestrationController(all_adapters)
+        self.orchestrator = OrchestrationController(
+            all_adapters, locate_host=self.forwarding.get_host_location
+        )
 
         # ── Monitoring loop ───────────────────────────────────────────
         self.monitor_thread = hub.spawn(self._monitor)
