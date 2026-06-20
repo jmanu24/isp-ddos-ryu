@@ -57,6 +57,10 @@ class OpenFlowAdapter(DomainAdapter):
         # (src_ip, dst_ip) -> {"protocol": str, "dst_port": int}, learned
         # from the first packet-in of each flow.
         self._flow_meta: Dict[Tuple[str, str], dict] = {}
+        # dst_ip -> count of currently-stalled (old, low-byte) flows
+        # toward it, accumulated across all switches this cycle — see
+        # FlowCollector.count_low_volume_flows.
+        self._low_volume_flow_counts: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Push handlers — called from Ryu event callbacks
@@ -67,6 +71,11 @@ class OpenFlowAdapter(DomainAdapter):
         Process an OFPFlowStatsReply body and convert flows to TelemetryEvents.
         Called by the controller's flow_stats_reply_handler.
         """
+        for dst_ip, count in self._flow_collector.count_low_volume_flows(body).items():
+            self._low_volume_flow_counts[dst_ip] = (
+                self._low_volume_flow_counts.get(dst_ip, 0) + count
+            )
+
         flows = self._flow_collector.process_stats(dpid, body)
         events: List[TelemetryEvent] = []
 
@@ -193,6 +202,13 @@ class OpenFlowAdapter(DomainAdapter):
         if meta and (time.time() - meta["timestamp"]) <= _FLOW_META_TTL:
             return meta
         return None
+
+    def collect_low_volume_flow_counts(self) -> Dict[str, int]:
+        """Drain and return this cycle's dst_ip -> stalled-flow-count
+        accumulated across all switches, for low-and-slow detection."""
+        counts = self._low_volume_flow_counts
+        self._low_volume_flow_counts = {}
+        return counts
 
     # ------------------------------------------------------------------
     # DomainAdapter interface

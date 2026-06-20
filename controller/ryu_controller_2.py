@@ -265,11 +265,14 @@ class FlowStatsIDS(app_manager.RyuApp):
         # this pipeline's telemetry again.
         self.orchestrator.check_unblocks()
 
-        if not correlated:
-            return
-
-        # Stage 3 — detect attack types
-        detections = self.detector.analyze(correlated)
+        # Stage 3 — detect attack types. Low-and-slow is checked
+        # independently of `correlated`/pps-based detection — it's a flow
+        # *count* signature (many stalled connections), not a volumetric
+        # one, so it can fire even on a cycle with no other traffic.
+        detections = self.detector.analyze(correlated) if correlated else []
+        detections += self.detector.analyze_low_slow(
+            self.of_adapter.collect_low_volume_flow_counts()
+        )
 
         # Surface every detection in the event log, classified — this is
         # the descriptive "what's happening" signal; raw traffic numbers
@@ -284,8 +287,13 @@ class FlowStatsIDS(app_manager.RyuApp):
             self.logger.warning(msg)
 
         # Mark destinations seen clean this cycle as validated — only now
-        # can LearningSwitch start caching forwarding rules for them.
+        # can LearningSwitch start caching forwarding rules for them. Must
+        # run even when there were no detections, so normal traffic still
+        # gets validated.
         self.orchestrator.validate(correlated, detections)
+
+        if not detections:
+            return
 
         # Stages 4 + 5 — decide and orchestrate
         actions = self.orchestrator.process(detections)

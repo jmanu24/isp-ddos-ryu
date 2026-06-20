@@ -8,6 +8,14 @@ ICMP_THRESHOLD = 150
 LOW_SLOW_NEW_FLOWS = 20
 LOW_SLOW_MIN_BYTES = 500
 
+# Minimum age (seconds) a flow must have before a low byte count counts as
+# "stalled" rather than "just started, hasn't sent much yet". Must stay
+# comfortably below VALIDATED_FLOW_HARD_TIMEOUT (30s) — that hard_timeout
+# resets the underlying OpenFlow rule (and its duration_sec/byte_count
+# counters) periodically, so a threshold at or above it would never be
+# reachable within a single rule's lifetime.
+LOW_SLOW_MIN_AGE = 15
+
 DECISION_THRESHOLD = 1.5
 
 BLOCK_TIME = 60

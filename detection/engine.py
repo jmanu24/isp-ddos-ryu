@@ -18,7 +18,11 @@ class DDoSDetectionEngine:
     - SYN_FLOOD        : high TCP PPS toward the same destination
     - UDP_FLOOD        : high UDP PPS toward the same destination
     - ICMP_FLOOD       : high ICMP PPS toward the same destination
-    - LOW_SLOW         : many concurrent micro-flows with minimal bytes (placeholder)
+    - LOW_SLOW         : many concurrent connections toward one destination
+                         that have stayed open a while but barely sent any
+                         data (Slowloris-style) — caught by flow *count*,
+                         not pps/bps, since each connection alone never
+                         crosses any volumetric threshold
     - DDOS_DISTRIBUTED : many distinct (often spoofed) sources, each below the
                          single-source thresholds, jointly flooding one
                          destination with a near-uniform (high-entropy)
@@ -41,6 +45,39 @@ class DDoSDetectionEngine:
             detection = self._classify(event)
             if detection:
                 results.append(detection)
+
+        return results
+
+    def analyze_low_slow(self, flow_counts: Dict[str, int]) -> List[DetectionResult]:
+        """
+        flow_counts: dst_ip -> number of currently-stalled, low-byte flows
+        toward it this cycle (FlowCollector.count_low_volume_flows, via
+        OpenFlowAdapter.collect_low_volume_flow_counts). Flagged once that
+        count crosses LOW_SLOW_NEW_FLOWS — there's no single attacker to
+        point at here (could be one source opening many connections, or
+        many sources each opening a few), so src_ip is "*", same as a
+        distributed flood.
+        """
+        results = []
+
+        for dst_ip, count in flow_counts.items():
+            if count < settings.LOW_SLOW_NEW_FLOWS:
+                continue
+
+            score = count / settings.LOW_SLOW_NEW_FLOWS
+            confidence = min(score / 2.0, 1.0)
+
+            results.append(DetectionResult(
+                domain="openflow",
+                device_id="",
+                src_ip="*",
+                dst_ip=dst_ip,
+                dst_port=0,
+                protocol="IP",
+                attack_type="LOW_SLOW",
+                score=score,
+                confidence=confidence,
+            ))
 
         return results
 
