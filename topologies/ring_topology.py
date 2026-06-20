@@ -6,11 +6,14 @@ so all 4 subnets can reach each other.
 
 A ring is a physical L2 loop. LearningSwitch (forwarding/learning_switch.py)
 does not implement spanning tree or any other loop-prevention — broadcast
-traffic (ARP) would circulate forever and storm the network. STP is
-enabled directly via `ovs-vsctl set Bridge <sw> stp_enable=true` after
+traffic (ARP) would circulate forever and storm the network. RSTP (802.1w)
+is enabled directly via `ovs-vsctl set Bridge <sw> rstp_enable=true` after
 net.start() — OVSSwitch's `stp=True` constructor kwarg does NOT reliably
-turn this on (confirmed: `ovs-appctl stp/show` showed nothing and the
-ring stormed billions of packets in testing), so don't rely on it alone.
+turn even classic STP on (confirmed: `ovs-appctl stp/show` showed nothing
+and the ring stormed billions of packets in testing), so don't rely on it.
+RSTP converges in a couple of seconds via its proposal/agreement handshake
+instead of classic STP's fixed ~30-50s listening/learning timers, so the
+CLI unblocks much sooner.
 """
 
 import time
@@ -23,41 +26,43 @@ from mininet.link import TCLink
 from mininet.cli import CLI
 
 
-# STP states a port passes through before settling. While ANY port on ANY
-# switch is still in one of these, the ring isn't safe yet — broadcasts
-# could still loop. Only FORWARDING/BLOCKING/DISABLED are stable.
-_STP_TRANSITIONAL_STATES = ("LISTENING", "LEARNING")
+# RSTP port states before settling on a stable role. While ANY port on ANY
+# switch is still LEARNING, the ring isn't safe yet — broadcasts could
+# still loop. DISCARDING and FORWARDING are the stable end states (RSTP
+# has no separate listening/blocking phase the way classic STP does, which
+# is exactly why it converges so much faster).
+_RSTP_TRANSITIONAL_STATES = ("LEARNING",)
 
 
-def _stp_converged(switches):
+def _rstp_converged(switches):
     for s in switches:
-        output = s.cmd(f'ovs-appctl stp/show {s.name}').upper()
-        if any(state in output for state in _STP_TRANSITIONAL_STATES):
+        output = s.cmd(f'ovs-appctl rstp/show {s.name}').upper()
+        if any(state in output for state in _RSTP_TRANSITIONAL_STATES):
             return False
     return True
 
 
-def wait_for_stp_convergence(switches, timeout=90, poll_interval=2):
+def wait_for_rstp_convergence(switches, timeout=30, poll_interval=1):
     """
-    Block until every switch's STP ports have left their transitional
+    Block until every switch's RSTP ports have left their transitional
     states — i.e. until the ring has a loop-free spanning tree and it's
     actually safe to send traffic. Returns without granting CLI access
     otherwise; the caller (topology()) only calls CLI(net) after this
     returns True.
     """
-    print("*** Esperando convergencia de STP (no se habilitara la CLI hasta entonces)...")
+    print("*** Esperando convergencia de RSTP (no se habilitara la CLI hasta entonces)...")
 
     start = time.time()
 
     while time.time() - start < timeout:
-        if _stp_converged(switches):
-            print(f"*** STP convergido en {time.time() - start:.1f}s")
+        if _rstp_converged(switches):
+            print(f"*** RSTP convergido en {time.time() - start:.1f}s")
             return True
         time.sleep(poll_interval)
 
     print(
-        f"*** ADVERTENCIA: STP no convergio en {timeout}s — revisa "
-        "'ovs-appctl stp/show <switch>' manualmente. Continuando de "
+        f"*** ADVERTENCIA: RSTP no convergio en {timeout}s — revisa "
+        "'ovs-appctl rstp/show <switch>' manualmente. Continuando de "
         "todas formas para no bloquear la sesion indefinidamente."
     )
     return False
@@ -132,10 +137,10 @@ def topology():
 
     net.start()
 
-    print("*** Habilitando STP en cada bridge OVS (rompe el loop del anillo)")
+    print("*** Habilitando RSTP en cada bridge OVS (rompe el loop del anillo)")
 
     for s in switches:
-        s.cmd(f'ovs-vsctl set Bridge {s.name} stp_enable=true')
+        s.cmd(f'ovs-vsctl set Bridge {s.name} rstp_enable=true')
 
     print("*** Configurando interfaces del router")
 
@@ -145,7 +150,7 @@ def topology():
     print("*** Tabla de rutas del router")
     print(r1.cmd('ip route'))
 
-    wait_for_stp_convergence(switches)
+    wait_for_rstp_convergence(switches)
 
     CLI(net)
 
