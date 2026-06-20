@@ -1,3 +1,6 @@
+import config.settings as settings
+
+
 class Decision:
 
     def __init__(self, detector, src_ip, score, attack_type):
@@ -11,8 +14,15 @@ class DecisionEngine:
 
     def __init__(self):
 
-        # Umbral global (puedes ajustarlo por tesis)
-        self.global_threshold = 200
+        # `score` here is a ratio (observed pps / that protocol's threshold,
+        # e.g. 24.4 for an ICMP flood at 24.4x ICMP_THRESHOLD) — not an
+        # absolute pps count. DECISION_THRESHOLD (config/settings.py) is
+        # calibrated against that ratio: 1.5 means "confirmed past its own
+        # threshold, weighted", not "200x any protocol's threshold", which
+        # is what the previous hardcoded value of 200 effectively required
+        # — only an extreme flood (hundreds of thousands of pps) could ever
+        # cross it, so moderate attacks got detected but never mitigated.
+        self.global_threshold = settings.DECISION_THRESHOLD
 
         # ponderación por tipo de ataque
         self.weights = {
