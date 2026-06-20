@@ -5,6 +5,7 @@
 <meta charset="utf-8">
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 
 <style>
 
@@ -19,6 +20,12 @@ body{
     margin:10px;
 }
 
+#topology{
+    width:100%;
+    height:400px;
+    border:1px solid #ccc;
+}
+
 </style>
 
 </head>
@@ -26,6 +33,10 @@ body{
 <body>
 
 <h1>ISP DDoS Dashboard</h1>
+
+<h2>Topologia</h2>
+
+<div id="topology"></div>
 
 <h2>Switches</h2>
 
@@ -43,9 +54,54 @@ body{
 
 const socket = io();
 
+const topologyNodes = new vis.DataSet([]);
+const topologyEdges = new vis.DataSet([]);
+
+const topologyNetwork = new vis.Network(
+    document.getElementById("topology"),
+    { nodes: topologyNodes, edges: topologyEdges },
+    {
+        nodes: {
+            shape: "box",
+            color: { background: "#eef", border: "#88a" }
+        },
+        edges: {
+            color: "#888"
+        },
+        physics: { stabilization: true }
+    }
+);
+
+function renderTopology(topology) {
+
+    if (!topology) return;
+
+    topologyNodes.clear();
+    topologyEdges.clear();
+
+    topologyNodes.add(
+        topology.nodes.map(n => ({ id: n.id, label: n.label || n.id }))
+    );
+
+    topologyEdges.add(
+        topology.links.map(
+            (l, i) => ({ id: i, from: l.source, to: l.target })
+        )
+    );
+}
+
+// Initial paint from REST, in case the page loads before the first
+// socket "state_update" event arrives.
+fetch("/api/topology")
+    .then(r => r.json())
+    .then(renderTopology)
+    .catch(() => {});
+
 socket.on(
     "state_update",
     data => {
+
+        renderTopology(data.topology);
 
         document.getElementById(
             "switches"

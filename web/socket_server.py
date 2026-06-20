@@ -22,7 +22,10 @@ def emit_update():
             dashboard_state.events[-20:],
 
             "attacks":
-            dashboard_state.attacks[-20:]
+            dashboard_state.attacks[-20:],
+
+            "topology":
+            dashboard_state.topology
         }
     )
 

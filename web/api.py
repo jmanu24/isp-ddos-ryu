@@ -1,10 +1,15 @@
 from flask import Flask
 from flask import jsonify
+from flask import render_template
 from flask import Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from web.state import dashboard_state
 
 app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return render_template("index.html")
 
 @app.route("/metrics")
 def metrics():
@@ -38,12 +43,4 @@ def attacks():
 @app.route("/api/topology")
 def topology():
 
-    return jsonify({
-        "nodes": [
-            {
-                "id": s["dpid"]
-            }
-            for s in dashboard_state.switches.values()
-        ],
-        "links": []
-    })
+    return jsonify(dashboard_state.topology)
