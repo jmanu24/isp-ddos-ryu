@@ -1,7 +1,9 @@
+import time
 from typing import Dict, List, Tuple
 
 from ryu.lib.packet import packet, ipv4, tcp, udp
 
+import config.settings as settings
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
 from collectors.flow_collector import FlowCollector
@@ -9,6 +11,21 @@ from collectors.ddos_collector import DDoSCollector
 
 
 _PROTO_NAMES = {1: "ICMP", 6: "TCP", 17: "UDP"}
+
+# How long a _flow_meta entry is trusted for. Once a (src,dst) pair has a
+# cached L3 forwarding rule, traffic between them never triggers another
+# packet-in — even if a completely different L4 protocol starts flowing
+# through that same cached rule later (e.g. a ping, then minutes later a
+# UDP flood between the same two hosts). Without a TTL, flow-stats volume
+# would keep getting confidently mislabeled with whatever protocol the
+# *first* packet ever seen on that pair happened to be, for as long as the
+# rule stays alive (which, under continuous attack traffic, is forever —
+# idle_timeout keeps resetting). Past this TTL, an unrefreshed entry is
+# distrusted and classification falls back to generic "IP" rather than a
+# stale, possibly wrong protocol label. Matches
+# settings.VALIDATED_FLOW_HARD_TIMEOUT, which forces the cached rule
+# itself to expire and trigger a fresh packet-in before this TTL runs out.
+_FLOW_META_TTL = settings.VALIDATED_FLOW_HARD_TIMEOUT
 
 
 class OpenFlowAdapter(DomainAdapter):
@@ -57,7 +74,7 @@ class OpenFlowAdapter(DomainAdapter):
             src_ip = flow.get("src_ip") or "0.0.0.0"
             dst_ip = flow.get("dst_ip") or "0.0.0.0"
 
-            meta = self._flow_meta.get((src_ip, dst_ip))
+            meta = self._fresh_meta(src_ip, dst_ip)
             if meta:
                 proto = meta["protocol"]
                 dst_port = meta["dst_port"]
@@ -110,7 +127,7 @@ class OpenFlowAdapter(DomainAdapter):
 
         events = []
         for src_ip, pps in result["src_pps"].items():
-            meta = self._flow_meta.get((src_ip, result["dst_ip"]))
+            meta = self._fresh_meta(src_ip, result["dst_ip"])
             dpid = meta["dpid"] if meta else fallback_dpid
             in_port = meta["in_port"] if meta else fallback_in_port
 
@@ -159,7 +176,16 @@ class OpenFlowAdapter(DomainAdapter):
             "dst_port": dst_port,
             "dpid": msg.datapath.id,
             "in_port": msg.match["in_port"],
+            "timestamp": time.time(),
         }
+
+    def _fresh_meta(self, src_ip: str, dst_ip: str):
+        """_flow_meta entry for (src_ip, dst_ip) if it's younger than
+        _FLOW_META_TTL, else None."""
+        meta = self._flow_meta.get((src_ip, dst_ip))
+        if meta and (time.time() - meta["timestamp"]) <= _FLOW_META_TTL:
+            return meta
+        return None
 
     # ------------------------------------------------------------------
     # DomainAdapter interface

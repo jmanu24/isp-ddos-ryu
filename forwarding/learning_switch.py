@@ -6,6 +6,8 @@ from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
 from ryu.lib.packet import icmp
 
+import config.settings as settings
+
 
 class LearningSwitch:
 
@@ -233,13 +235,21 @@ class LearningSwitch:
 
                 if self._is_validated is None or self._is_validated(ip_pkt.dst):
 
+                    # hard_timeout forces this rule to expire — and the
+                    # next packet to trigger a fresh packet-in — even
+                    # under continuous traffic that would otherwise keep
+                    # resetting idle_timeout forever. Without it, a flow
+                    # cached from e.g. a ping could absorb a completely
+                    # different protocol's traffic between the same two
+                    # hosts later, and OpenFlowAdapter's protocol/port
+                    # metadata for that pair would never get refreshed.
                     self.add_flow(
                         datapath,
                         priority=10,
                         match=match,
                         actions=actions,
                         idle_timeout=60,
-                        hard_timeout=0
+                        hard_timeout=settings.VALIDATED_FLOW_HARD_TIMEOUT
                     )
 
                 else:

@@ -28,6 +28,19 @@ MITIGATION_DROP_PRIORITY = 100
 # sample is skipped rather than trusted.
 MIN_FLOW_RATE_DT = 0.5
 
+# Forced lifetime of a *validated* L3 forwarding rule (LearningSwitch),
+# regardless of how continuously it's being used. Without a hard_timeout,
+# a rule under continuous traffic never expires (idle_timeout keeps
+# resetting), so it never triggers a fresh packet-in either — meaning
+# OpenFlowAdapter's per-(src,dst) protocol/port metadata (_flow_meta),
+# learned only from packet-in, can go stale for as long as the rule lives.
+# E.g. a ping between two hosts caches an "ICMP" tag; if those same two
+# hosts start a UDP flood minutes later, it silently reuses the cached
+# rule and never refreshes that tag. This timeout forces periodic
+# re-classification — matches telemetry/openflow_adapter.py's
+# _FLOW_META_TTL so a rule never outlives the metadata it depends on.
+VALIDATED_FLOW_HARD_TIMEOUT = 30
+
 # Distributed / spoofed-source attack detection (IP flow entropy).
 # A destination under attack from many distinct, individually-low-volume
 # sources looks like an even (high-entropy) distribution of traffic across
