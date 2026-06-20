@@ -122,12 +122,26 @@ class FlowStatsIDS(app_manager.RyuApp):
                 {"id": str(sw.dp.id), "label": f"s{sw.dp.id}"}
                 for sw in get_switch(self, None)
             ]
+            raw_links = get_link(self, None)
             links = [
                 {"source": str(lk.src.dpid), "target": str(lk.dst.dpid)}
-                for lk in get_link(self, None)
+                for lk in raw_links
             ]
             dashboard_state.update_topology(nodes, links)
             emit_update()
+
+            # Every (dpid, port_no) on either side of a discovered switch-
+            # switch link — mitigation must never trust one of these as
+            # "the port closest to the attacker": a packet with no
+            # matching flow rule triggers packet-in on EVERY switch it
+            # passes through, not just the one nearest the source, so the
+            # ingress info recorded for an intermediate hop's uplink port
+            # is meaningless for scoping a block.
+            interswitch_ports = set()
+            for lk in raw_links:
+                interswitch_ports.add((lk.src.dpid, lk.src.port_no))
+                interswitch_ports.add((lk.dst.dpid, lk.dst.port_no))
+            self.orchestrator.update_interswitch_ports(interswitch_ports)
         except Exception as e:
             self.logger.error("Topology update error: %s", e)
 

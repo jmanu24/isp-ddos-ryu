@@ -87,12 +87,23 @@ class OrchestrationController:
         # across all switches that reported a fresh-enough sample.
         self._block_pps: Dict[Tuple[str, str, int, str], float] = {}
 
+        # (dpid, port_no) pairs known to be switch-switch links, from
+        # topology discovery. A packet with no matching flow rule triggers
+        # packet-in on every switch it passes through, not just the one
+        # nearest the source, so an ingress (dpid, in_port) that's actually
+        # one of these can't be trusted to scope a block to.
+        self._interswitch_ports: set = set()
+
     # ------------------------------------------------------------------
     # Datapath lifecycle (called from the Ryu controller)
     # ------------------------------------------------------------------
 
     def register_datapath(self, datapath) -> None:
         self.of_mitigator.register(datapath)
+
+    def update_interswitch_ports(self, ports: set) -> None:
+        """Called by the Ryu controller whenever topology is (re)discovered."""
+        self._interswitch_ports = ports
 
     def deregister_datapath(self, dpid: int) -> None:
         self.of_mitigator.deregister(dpid)
@@ -177,9 +188,11 @@ class OrchestrationController:
 
             action_type = self._action_for(decision.attack_type, d.domain)
 
+            device_id, in_port = self._scoped_ingress(d)
+
             actions.append(MitigationAction(
                 domain=d.domain,
-                device_id=d.device_id,
+                device_id=device_id,
                 src_ip=decision.src_ip,
                 dst_ip=d.dst_ip,
                 dst_port=d.dst_port,
@@ -187,10 +200,31 @@ class OrchestrationController:
                 action=action_type,
                 sources=d.sources,
                 attack_type=decision.attack_type,
-                in_port=d.in_port,
+                in_port=in_port,
             ))
 
         return actions
+
+    def _scoped_ingress(self, d: DetectionResult) -> Tuple[str, int]:
+        """
+        Validate (device_id, in_port) against discovered topology before
+        trusting it to scope a block to a single switch+port. A packet
+        with no matching flow rule triggers packet-in on every switch it
+        passes through on its way in, not just the one nearest the
+        attacker — so if in_port turns out to be a switch-switch link
+        port, the dpid it was recorded on is probably just an
+        intermediate hop, not the true nearest switch. Both are discarded
+        in that case, falling back to a network-wide block.
+        """
+        if not d.device_id.isdigit():
+            return d.device_id, d.in_port  # not an openflow dpid, e.g. "*"-less domains
+
+        dpid = int(d.device_id)
+
+        if d.in_port and (dpid, d.in_port) in self._interswitch_ports:
+            return "", 0
+
+        return d.device_id, d.in_port
 
     @staticmethod
     def _action_for(attack_type: str, domain: str) -> str:
