@@ -1,6 +1,7 @@
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ipv4
+from ryu.lib.packet import arp
 from ryu.lib.packet import ether_types
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
@@ -176,23 +177,33 @@ class LearningSwitch:
         # ---------------------------------
 
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
+        arp_pkt = pkt.get_protocol(arp.arp)
 
         # ---------------------------------
         # UBICACION REAL DEL HOST (para escopar mitigacion)
         # ---------------------------------
 
-        if ip_pkt:
-            self._ip_to_mac[ip_pkt.src] = src
+        # ip -> mac is learned ONLY from ARP, never from an arbitrary IP
+        # packet's Ethernet header. ARP never crosses a router — it's
+        # strictly local to one subnet/link — so it always reflects a
+        # host's real mac. A routed IP packet's eth.src, by contrast,
+        # changes at every hop (the router re-frames it with its own
+        # outgoing-interface mac), so trusting that would associate the
+        # ORIGINAL source's IP with the ROUTER's mac at the hop closest to
+        # the destination — scoping a block to the wrong end of the path.
+        if arp_pkt:
+            self._ip_to_mac[arp_pkt.src_ip] = src
 
-            is_interswitch = bool(
-                self._is_interswitch_port and self._is_interswitch_port(dpid, in_port)
-            )
-            if not is_interswitch:
-                # This src mac just arrived on a genuine edge port — it's
-                # truly attached here, not just passing through. An entry
-                # learned this way is never overwritten by an interswitch
-                # hop's view of the same mac later.
-                self._host_location[src] = (dpid, in_port)
+        is_interswitch = bool(
+            self._is_interswitch_port and self._is_interswitch_port(dpid, in_port)
+        )
+        if not is_interswitch:
+            # This mac just arrived on a genuine edge port — it's truly
+            # attached here, not just passing through. An entry learned
+            # this way is never overwritten by an interswitch hop's view
+            # of the same mac later. Tracked for every mac seen (hosts AND
+            # routers), independent of ip_to_mac above.
+            self._host_location[src] = (dpid, in_port)
 
         # ---------------------------------
         # DESTINO BAJO BLOQUEO DISTRIBUIDO
