@@ -128,7 +128,20 @@ class OrchestrationController:
         if decision is None:
             return []
 
-        actions = self._build_actions(decision, detections)
+        # Only act on detections that are actually part of the attack the
+        # decision picked (same attack_type + src_ip) — e.g. an ICMP flood
+        # also makes the victim's replies look like a second, reverse-
+        # direction "attack" that scores independently; mixing its dst_ip
+        # with the winning decision's src_ip would build a nonsensical
+        # src==dst action. Multiple domains can still each contribute one
+        # action for this same attacker (that's the point of the dedup-by-
+        # domain loop in _build_actions).
+        matching = [
+            d for d in detections
+            if d.attack_type == decision.attack_type and d.src_ip == decision.src_ip
+        ]
+
+        actions = self._build_actions(decision, matching)
 
         for action in actions:
             self._dispatch(action)
