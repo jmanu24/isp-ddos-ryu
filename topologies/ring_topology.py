@@ -13,12 +13,54 @@ turn this on (confirmed: `ovs-appctl stp/show` showed nothing and the
 ring stormed billions of packets in testing), so don't rely on it alone.
 """
 
+import time
+
 from mininet.net import Mininet
 from mininet.node import RemoteController
 from mininet.node import OVSSwitch
 from mininet.node import Node
 from mininet.link import TCLink
 from mininet.cli import CLI
+
+
+# STP states a port passes through before settling. While ANY port on ANY
+# switch is still in one of these, the ring isn't safe yet — broadcasts
+# could still loop. Only FORWARDING/BLOCKING/DISABLED are stable.
+_STP_TRANSITIONAL_STATES = ("LISTENING", "LEARNING")
+
+
+def _stp_converged(switches):
+    for s in switches:
+        output = s.cmd(f'ovs-appctl stp/show {s.name}').upper()
+        if any(state in output for state in _STP_TRANSITIONAL_STATES):
+            return False
+    return True
+
+
+def wait_for_stp_convergence(switches, timeout=90, poll_interval=2):
+    """
+    Block until every switch's STP ports have left their transitional
+    states — i.e. until the ring has a loop-free spanning tree and it's
+    actually safe to send traffic. Returns without granting CLI access
+    otherwise; the caller (topology()) only calls CLI(net) after this
+    returns True.
+    """
+    print("*** Esperando convergencia de STP (no se habilitara la CLI hasta entonces)...")
+
+    start = time.time()
+
+    while time.time() - start < timeout:
+        if _stp_converged(switches):
+            print(f"*** STP convergido en {time.time() - start:.1f}s")
+            return True
+        time.sleep(poll_interval)
+
+    print(
+        f"*** ADVERTENCIA: STP no convergio en {timeout}s — revisa "
+        "'ovs-appctl stp/show <switch>' manualmente. Continuando de "
+        "todas formas para no bloquear la sesion indefinidamente."
+    )
+    return False
 
 
 class LinuxRouter(Node):
@@ -103,11 +145,7 @@ def topology():
     print("*** Tabla de rutas del router")
     print(r1.cmd('ip route'))
 
-    print(
-        "*** STP habilitado en cada switch — espera ~30-45s a que "
-        "converja (verifica con 'ovs-appctl stp/show s1') antes de "
-        "correr pingall o cualquier tráfico"
-    )
+    wait_for_stp_convergence(switches)
 
     CLI(net)
 
