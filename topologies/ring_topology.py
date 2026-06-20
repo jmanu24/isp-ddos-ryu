@@ -7,8 +7,10 @@ so all 4 subnets can reach each other.
 A ring is a physical L2 loop. LearningSwitch (forwarding/learning_switch.py)
 does not implement spanning tree or any other loop-prevention — broadcast
 traffic (ARP) would circulate forever and storm the network. STP is
-enabled at the OVS level instead (stp=True per switch), independent of the
-controller, to block one ring link until a topology change requires it.
+enabled directly via `ovs-vsctl set Bridge <sw> stp_enable=true` after
+net.start() — OVSSwitch's `stp=True` constructor kwarg does NOT reliably
+turn this on (confirmed: `ovs-appctl stp/show` showed nothing and the
+ring stormed billions of packets in testing), so don't rely on it alone.
 """
 
 from mininet.net import Mininet
@@ -50,7 +52,7 @@ def topology():
     print("*** Agregando switches (anillo)")
 
     switches = [
-        net.addSwitch(f's{i}', protocols='OpenFlow13', stp=True)
+        net.addSwitch(f's{i}', protocols='OpenFlow13')
         for i in range(1, 5)
     ]
 
@@ -88,6 +90,11 @@ def topology():
 
     net.start()
 
+    print("*** Habilitando STP en cada bridge OVS (rompe el loop del anillo)")
+
+    for s in switches:
+        s.cmd(f'ovs-vsctl set Bridge {s.name} stp_enable=true')
+
     print("*** Configurando interfaces del router")
 
     for i in range(1, 5):
@@ -97,8 +104,9 @@ def topology():
     print(r1.cmd('ip route'))
 
     print(
-        "*** STP habilitado en cada switch — puede tardar ~30s en "
-        "converger antes de que el tráfico fluya por el anillo"
+        "*** STP habilitado en cada switch — espera ~30-45s a que "
+        "converja (verifica con 'ovs-appctl stp/show s1') antes de "
+        "correr pingall o cualquier tráfico"
     )
 
     CLI(net)
