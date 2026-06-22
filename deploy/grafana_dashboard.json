@@ -179,6 +179,48 @@
           "instant": true
         }
       ]
+    },
+    {
+      "id": 13,
+      "title": "13. LOW_SLOW: conexiones concurrentes (mono-origen)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "ddos_concurrent_connections",
+          "legendFormat": "{{src_ip}} -> {{dst_ip}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "14. LOW_SLOW: nuevas conexiones/seg (mono-origen)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "rate(ddos_new_connections_total[1m])",
+          "legendFormat": "{{src_ip}} -> {{dst_ip}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "15. LOW_SLOW: flujos estancados por destino (distribuido)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "ddos_low_slow_stalled_flows",
+          "legendFormat": "{{dst_ip}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "templating": {
