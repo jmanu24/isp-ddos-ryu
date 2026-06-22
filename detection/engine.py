@@ -85,9 +85,14 @@ class DDoSDetectionEngine:
     # Internal classification logic
     # ------------------------------------------------------------------
 
-    # Per-protocol (attack_type, pps threshold) checked in order.
+    # Per-protocol (attack_type, pps threshold) checked in order. SYN_FLOOD
+    # checks "TCP_SYN" specifically (bare SYN, no ACK — a connection
+    # attempt) rather than all TCP traffic, so a flood of *completed*
+    # connections (e.g. Slowloris-style: real handshakes, then a slow
+    # trickle) doesn't get misread as a SYN flood just because it's TCP —
+    # it should surface as LOW_SLOW instead once the connections age in.
     _PROTOCOL_CHECKS = (
-        ("TCP", "SYN_FLOOD", "SYN_THRESHOLD"),
+        ("TCP_SYN", "SYN_FLOOD", "SYN_THRESHOLD"),
         ("UDP", "UDP_FLOOD", "UDP_THRESHOLD"),
         ("ICMP", "ICMP_FLOOD", "ICMP_THRESHOLD"),
     )
@@ -160,7 +165,7 @@ class DDoSDetectionEngine:
                 src_ip="*",
                 dst_ip=event.dst_ip,
                 dst_port=representative.dst_port,
-                protocol=representative.protocol,
+                protocol=self._normalize_protocol(representative.protocol),
                 attack_type="DDOS_DISTRIBUTED",
                 score=score,
                 confidence=confidence,
@@ -184,12 +189,22 @@ class DDoSDetectionEngine:
             src_ip=representative.src_ip,
             dst_ip=event.dst_ip,
             dst_port=representative.dst_port,
-            protocol=representative.protocol,
+            protocol=self._normalize_protocol(representative.protocol),
             attack_type=single_source_attack_type,
             score=score,
             confidence=confidence,
             in_port=representative.in_port,
         )
+
+    @staticmethod
+    def _normalize_protocol(protocol: str) -> str:
+        """
+        "TCP_SYN" is an internal-only tag distinguishing bare SYN packets
+        for SYN_FLOOD matching — mitigation/openflow_mitigator.py's L4
+        match builder only knows "TCP"/"UDP"/"ICMP", so it's collapsed
+        back to "TCP" before ever leaving the detection engine.
+        """
+        return "TCP" if protocol == "TCP_SYN" else protocol
 
     @staticmethod
     def _pick_representative(events: List[TelemetryEvent]) -> TelemetryEvent:
@@ -253,7 +268,7 @@ class DDoSDetectionEngine:
             src_ip="*",
             dst_ip=event.dst_ip,
             dst_port=representative.dst_port,
-            protocol=representative.protocol,
+            protocol=self._normalize_protocol(representative.protocol),
             attack_type="DDOS_DISTRIBUTED",
             score=score,
             confidence=confidence,

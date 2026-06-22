@@ -179,7 +179,14 @@ class OpenFlowAdapter(DomainAdapter):
             return
 
         if tcp_pkt:
-            proto, dst_port = "TCP", tcp_pkt.dst_port
+            # Same SYN-vs-established distinction as DDoSCollector — only
+            # a bare SYN (no ACK) is a connection attempt worth feeding
+            # into SYN_FLOOD; established-connection traffic shouldn't
+            # keep tagging this pair's flow-stats volume as "the same
+            # attack" once the handshake is done.
+            is_bare_syn = (tcp_pkt.bits & tcp.TCP_SYN) and not (tcp_pkt.bits & tcp.TCP_ACK)
+            proto = "TCP_SYN" if is_bare_syn else "TCP"
+            dst_port = tcp_pkt.dst_port
         elif udp_pkt:
             proto, dst_port = "UDP", udp_pkt.dst_port
         elif ip_pkt.proto == 1:

@@ -48,7 +48,16 @@ class DDoSCollector:
         dst_port = 0
 
         if tcp_pkt:
-            protocol = "TCP"
+            # Bare SYN (no ACK) is a connection attempt — the actual
+            # signature of a SYN flood. Once the handshake completes,
+            # later packets carry ACK and are just normal (if slow)
+            # traffic on an established connection: e.g. a Slowloris-
+            # style attack opens real connections and then trickles data
+            # for a long time, which should surface as LOW_SLOW (flow
+            # count, low bytes, old age) rather than keep tripping
+            # SYN_FLOOD on every cycle just because it's TCP.
+            is_bare_syn = (tcp_pkt.bits & tcp.TCP_SYN) and not (tcp_pkt.bits & tcp.TCP_ACK)
+            protocol = "TCP_SYN" if is_bare_syn else "TCP"
             dst_port = tcp_pkt.dst_port
 
         elif udp_pkt:
