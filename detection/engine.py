@@ -1,6 +1,6 @@
 import math
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from core.models import CorrelatedEvent, DetectionResult, TelemetryEvent
 import config.settings as settings
@@ -71,6 +71,43 @@ class DDoSDetectionEngine:
                 domain="openflow",
                 device_id="",
                 src_ip="*",
+                dst_ip=dst_ip,
+                dst_port=0,
+                protocol="IP",
+                attack_type="LOW_SLOW",
+                score=score,
+                confidence=confidence,
+            ))
+
+        return results
+
+    def analyze_low_slow_single_source(
+        self, port_counts: Dict[Tuple[str, str], int]
+    ) -> List[DetectionResult]:
+        """
+        port_counts: (src_ip, dst_ip) -> distinct source ports that src_ip
+        has used toward dst_ip recently (DDoSCollector.get_connection_port_counts,
+        via OpenFlowAdapter.get_connection_port_counts). Catches the classic
+        single-attacker Slowloris pattern — one source opening many real
+        connections to the same destination — which analyze_low_slow's
+        flow-count check can't see: those connections all collapse into one
+        L3 forwarding rule (same src_ip, same dst_ip), so OpenFlow itself
+        never represents them as separate flows. Unlike analyze_low_slow,
+        there IS a single attacker to point at here.
+        """
+        results = []
+
+        for (src_ip, dst_ip), distinct_ports in port_counts.items():
+            if distinct_ports < settings.LOW_SLOW_NEW_FLOWS:
+                continue
+
+            score = distinct_ports / settings.LOW_SLOW_NEW_FLOWS
+            confidence = min(score / 2.0, 1.0)
+
+            results.append(DetectionResult(
+                domain="openflow",
+                device_id="",
+                src_ip=src_ip,
                 dst_ip=dst_ip,
                 dst_port=0,
                 protocol="IP",

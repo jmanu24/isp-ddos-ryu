@@ -16,6 +16,14 @@ LOW_SLOW_MIN_BYTES = 500
 # reachable within a single rule's lifetime.
 LOW_SLOW_MIN_AGE = 15
 
+# How long (seconds) a (src_ip, dst_ip) pair's distinct-source-port tally
+# (DDoSCollector.get_connection_port_counts, for single-source low-and-slow
+# detection) is kept after that pair last appeared in packet-in, before
+# being forgotten. Generous on purpose — a real attack keeps the same
+# connections open for a long time, and this entry only updates when
+# packet-in happens to see that pair at all (sparse for a slow attack).
+LOW_SLOW_PORT_IDLE_TTL = 90
+
 DECISION_THRESHOLD = 1.5
 
 BLOCK_TIME = 60

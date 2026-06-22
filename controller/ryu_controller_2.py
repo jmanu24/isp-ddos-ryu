@@ -273,6 +273,9 @@ class FlowStatsIDS(app_manager.RyuApp):
         detections += self.detector.analyze_low_slow(
             self.of_adapter.collect_low_volume_flow_counts()
         )
+        detections += self.detector.analyze_low_slow_single_source(
+            self.of_adapter.get_connection_port_counts()
+        )
 
         # Surface every detection in the event log, classified — this is
         # the descriptive "what's happening" signal; raw traffic numbers

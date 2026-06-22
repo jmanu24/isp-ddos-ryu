@@ -5,6 +5,8 @@ from ryu.lib.packet import ipv4
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
 
+import config.settings as settings
+
 
 class DDoSCollector:
     """
@@ -23,6 +25,16 @@ class DDoSCollector:
 
     def __init__(self):
         self.stats = {}
+        # (src_ip, dst_ip) -> {"ports": {src_port, ...}, "last_update": t}.
+        # Tracks how many distinct source ports one host has used toward
+        # another — a single-source Slowloris-style attack opens many real
+        # connections (each its own src_port) to the same destination, all
+        # of which collapse into ONE L3 forwarding rule (LearningSwitch
+        # matches on ipv4_src/ipv4_dst only), so OpenFlow flow stats can
+        # never show them as separate flows. This is the only place that
+        # ever sees each connection's own src_port — packet-in, on
+        # whichever packets still reach it.
+        self._connection_ports = {}
 
     def process_packet(self, msg):
 
@@ -75,6 +87,15 @@ class DDoSCollector:
 
         now = time()
 
+        if tcp_pkt or udp_pkt:
+            src_port = tcp_pkt.src_port if tcp_pkt else udp_pkt.src_port
+            conn_key = (ip_pkt.src, ip_pkt.dst)
+            conn_entry = self._connection_ports.setdefault(
+                conn_key, {"ports": set(), "last_update": now}
+            )
+            conn_entry["ports"].add(src_port)
+            conn_entry["last_update"] = now
+
         entry = self.stats.get(key)
 
         if entry is None:
@@ -113,3 +134,27 @@ class DDoSCollector:
         entry["timestamp"] = now
 
         return result
+
+    def get_connection_port_counts(self):
+        """
+        (src_ip, dst_ip) -> number of distinct source ports seen toward
+        that destination recently. Ports accumulate for as long as that
+        pair keeps appearing in packet-in (which it will, periodically,
+        even once cached — see VALIDATED_FLOW_HARD_TIMEOUT forcing
+        re-classification); an entry is forgotten once that pair hasn't
+        been seen at all for LOW_SLOW_PORT_IDLE_TTL seconds, so a stale
+        attack from a while ago doesn't linger forever.
+        """
+        now = time()
+        counts = {}
+
+        for conn_key in list(self._connection_ports):
+            entry = self._connection_ports[conn_key]
+
+            if now - entry["last_update"] > settings.LOW_SLOW_PORT_IDLE_TTL:
+                del self._connection_ports[conn_key]
+                continue
+
+            counts[conn_key] = len(entry["ports"])
+
+        return counts
