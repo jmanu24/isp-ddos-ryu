@@ -268,13 +268,24 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Stage 3 — detect attack types. Low-and-slow is checked
         # independently of `correlated`/pps-based detection — it's a flow
         # *count* signature (many stalled connections), not a volumetric
-        # one, so it can fire even on a cycle with no other traffic.
-        detections = self.detector.analyze(correlated) if correlated else []
+        # one, so it can fire even on a cycle with no other traffic. A
+        # destination/pair already flagged by a volumetric flood this
+        # cycle is excluded from the low-and-slow checks — a fast flood
+        # whose tool randomizes its source port per packet (hping3
+        # --flood does) looks just like "many distinct connections"
+        # otherwise, and shouldn't get double-reported as LOW_SLOW too.
+        flood_detections = self.detector.analyze(correlated) if correlated else []
+        flagged_dsts = {d.dst_ip for d in flood_detections}
+        flagged_pairs = {(d.src_ip, d.dst_ip) for d in flood_detections}
+
+        detections = list(flood_detections)
         detections += self.detector.analyze_low_slow(
-            self.of_adapter.collect_low_volume_flow_counts()
+            self.of_adapter.collect_low_volume_flow_counts(),
+            exclude_dsts=flagged_dsts,
         )
         detections += self.detector.analyze_low_slow_single_source(
-            self.of_adapter.get_connection_port_counts()
+            self.of_adapter.get_connection_port_counts(),
+            exclude_pairs=flagged_pairs,
         )
 
         # Surface every NEW detection in the event log, classified — this

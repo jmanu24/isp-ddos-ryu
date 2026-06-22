@@ -48,7 +48,9 @@ class DDoSDetectionEngine:
 
         return results
 
-    def analyze_low_slow(self, flow_counts: Dict[str, int]) -> List[DetectionResult]:
+    def analyze_low_slow(
+        self, flow_counts: Dict[str, int], exclude_dsts=frozenset()
+    ) -> List[DetectionResult]:
         """
         flow_counts: dst_ip -> number of currently-stalled, low-byte flows
         toward it this cycle (FlowCollector.count_low_volume_flows, via
@@ -57,10 +59,19 @@ class DDoSDetectionEngine:
         point at here (could be one source opening many connections, or
         many sources each opening a few), so src_ip is "*", same as a
         distributed flood.
+
+        exclude_dsts: destinations already flagged by a volumetric flood
+        this same cycle (analyze()) — skipped here so a genuine high-pps
+        flood whose tool happens to randomize its source port (hping3
+        --flood does, by default) doesn't *also* get reported as LOW_SLOW
+        just because that incidentally looks like "many distinct ports".
         """
         results = []
 
         for dst_ip, count in flow_counts.items():
+            if dst_ip in exclude_dsts:
+                continue
+
             if count < settings.LOW_SLOW_NEW_FLOWS:
                 continue
 
@@ -82,7 +93,7 @@ class DDoSDetectionEngine:
         return results
 
     def analyze_low_slow_single_source(
-        self, port_counts: Dict[Tuple[str, str], dict]
+        self, port_counts: Dict[Tuple[str, str], dict], exclude_pairs=frozenset()
     ) -> List[DetectionResult]:
         """
         port_counts: (src_ip, dst_ip) -> {"count", "dst_port", "protocol"}
@@ -95,10 +106,20 @@ class DDoSDetectionEngine:
         never represents them as separate flows. Unlike analyze_low_slow,
         there IS a single attacker — and a known target port/protocol — to
         scope a block to here.
+
+        exclude_pairs: (src_ip, dst_ip) pairs already flagged by a
+        volumetric flood this same cycle (analyze()) — a fast SYN/UDP
+        flood from a tool that randomizes its source port per packet
+        (hping3 --flood does, by default) looks identical to "many
+        distinct connections" otherwise, and would get double-reported
+        as LOW_SLOW for the exact same traffic SYN_FLOOD already covers.
         """
         results = []
 
         for (src_ip, dst_ip), info in port_counts.items():
+            if (src_ip, dst_ip) in exclude_pairs:
+                continue
+
             distinct_ports = info["count"]
 
             if distinct_ports < settings.LOW_SLOW_NEW_FLOWS:
