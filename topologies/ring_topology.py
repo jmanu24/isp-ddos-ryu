@@ -14,6 +14,17 @@ and the ring stormed billions of packets in testing), so don't rely on it.
 RSTP converges in a couple of seconds via its proposal/agreement handshake
 instead of classic STP's fixed ~30-50s listening/learning timers, so the
 CLI unblocks much sooner.
+
+CPU isolation: on a multi-core testbed, launch the controller via
+deploy/start_controller_pinned.sh (not ryu-manager directly) and run
+deploy/pin_ovs_affinity.sh once this topology is up, so OVS and the
+controller never compete for CPU with each other or with attack traffic
+under heavy flood load — that contention is what causes switches to drop
+their controller connection and reconnect mid-attack. Once both are
+pinned, run attack tools from this CLI prefixed with taskset on the
+cores deploy/start_controller_pinned.sh left for Mininet (10-15 on a
+16-core box), e.g.:
+    mininet> h1 taskset -c 10-15 hping3 -S --flood h4
 """
 
 import time
