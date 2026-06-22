@@ -3,85 +3,85 @@
   "uid": "isp-ddos-controller",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "time": { "from": "now-15m", "to": "now" },
   "panels": [
     {
       "id": 1,
-      "title": "Switch packet rate (pkt/s)",
+      "title": "1. Byte rate por puerto en cada switch",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "sdn_switch_packet_rate",
-          "legendFormat": "switch {{dpid}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "title": "Switch byte rate (B/s)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        {
-          "expr": "sdn_switch_byte_rate",
-          "legendFormat": "switch {{dpid}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "title": "Port RX/TX packets (cumulative)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        {
-          "expr": "sdn_port_rx_packets_total",
+          "expr": "rate(sdn_port_rx_bytes_total[1m])",
           "legendFormat": "rx sw{{dpid}} port{{port}}",
           "refId": "A"
         },
         {
-          "expr": "sdn_port_tx_packets_total",
+          "expr": "rate(sdn_port_tx_bytes_total[1m])",
           "legendFormat": "tx sw{{dpid}} port{{port}}",
           "refId": "B"
         }
       ]
     },
     {
-      "id": 4,
-      "title": "Port drops (cumulative)",
+      "id": 2,
+      "title": "2. Packet rate por puerto en cada switch",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "sdn_port_rx_dropped_total",
-          "legendFormat": "rx-drop sw{{dpid}} port{{port}}",
+          "expr": "rate(sdn_port_rx_packets_total[1m])",
+          "legendFormat": "rx sw{{dpid}} port{{port}}",
           "refId": "A"
         },
         {
-          "expr": "sdn_port_tx_dropped_total",
-          "legendFormat": "tx-drop sw{{dpid}} port{{port}}",
+          "expr": "rate(sdn_port_tx_packets_total[1m])",
+          "legendFormat": "tx sw{{dpid}} port{{port}}",
           "refId": "B"
         }
       ]
     },
     {
+      "id": 3,
+      "title": "3. Byte rate por switch, por protocolo (TCP/UDP/ICMP)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sdn_switch_protocol_byte_rate",
+          "legendFormat": "sw{{dpid}} {{protocol}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "4. Packet rate por switch, por protocolo (TCP/UDP/ICMP)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sdn_switch_protocol_packet_rate",
+          "legendFormat": "sw{{dpid}} {{protocol}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "id": 5,
-      "title": "Attacks detected (rate, by type)",
+      "title": "5. Ataques detectados (byte rate por tipo)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "rate(ddos_attacks_detected_total[1m])",
+          "expr": "ddos_attack_byte_rate",
           "legendFormat": "{{attack_type}} ({{domain}})",
           "refId": "A"
         }
@@ -89,28 +89,94 @@
     },
     {
       "id": 6,
-      "title": "Mitigations applied (rate, by type)",
+      "title": "6. Mitigaciones activadas (byte rate por tipo)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "rate(ddos_mitigations_applied_total[1m])",
-          "legendFormat": "{{action}}: {{attack_type}} ({{domain}})",
+          "expr": "ddos_mitigation_byte_rate",
+          "legendFormat": "{{action}}: {{attack_type}}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 7,
-      "title": "Active blocks",
+      "title": "7. Ataques detectados (packet rate por tipo)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "ddos_attack_packet_rate",
+          "legendFormat": "{{attack_type}} ({{domain}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "8. Mitigaciones activadas (packet rate por tipo)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "ddos_mitigation_packet_rate",
+          "legendFormat": "{{action}}: {{attack_type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "9. Numero de bloqueos activos",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 24 },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
           "expr": "ddos_active_blocks",
           "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "11. Top 10 origenes de ataques (por cantidad de bloqueos)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient"
+      },
+      "targets": [
+        {
+          "expr": "topk(10, ddos_blocks_by_source_total)",
+          "legendFormat": "{{src_ip}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "12. Top 10 destinos de ataques (por cantidad de bloqueos)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient"
+      },
+      "targets": [
+        {
+          "expr": "topk(10, ddos_blocks_by_destination_total)",
+          "legendFormat": "{{dst_ip}}",
+          "refId": "A",
+          "instant": true
         }
       ]
     }
