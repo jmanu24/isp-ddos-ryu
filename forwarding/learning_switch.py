@@ -56,6 +56,18 @@ class LearningSwitch:
         self._ip_to_mac = {}
         self._host_location = {}
 
+        # (dpid, port) pairs where the router's interface lives, learned
+        # from ARP replies/requests whose src_ip ends in ".1" (this
+        # codebase's gateway-IP convention — see ryu_controller_2.py's
+        # topology builder, which excludes the same IPs from the host
+        # list shown on the dashboard). Needed to tell a genuine HOST
+        # port apart from a router-facing one: both pass the "not an
+        # inter-switch link" test that _host_location uses, but a block
+        # must never be scoped to the router's port — that's not where
+        # an attacker is, it's where ALL cross-subnet traffic legitimately
+        # enters a victim's switch.
+        self._router_ports = set()
+
     def get_host_location(self, ip):
         """(dpid, port) this IP's mac was last confirmed attached to via a
         non switch-switch port, or None if not known yet."""
@@ -63,6 +75,22 @@ class LearningSwitch:
         if mac is None:
             return None
         return self._host_location.get(mac)
+
+    def is_host_port(self, dpid, port_no):
+        """
+        True only for a port a real host is directly attached to — False
+        for an inter-switch link AND for the router's own interface.
+        Mitigation scoping for a distributed/spoofed attack (which has no
+        ARP-learnable identity to fall back on, unlike a single real
+        attacker) must use this instead of just "not inter-switch", or it
+        would happily scope a block to whichever switch+port a spoofed
+        packet happened to arrive on last — which, for any cross-subnet
+        attack, is the VICTIM's own router-facing port, not the
+        attacker's.
+        """
+        if self._is_interswitch_port and self._is_interswitch_port(dpid, port_no):
+            return False
+        return (dpid, port_no) not in self._router_ports
 
     def get_known_hosts(self):
         """
@@ -205,6 +233,13 @@ class LearningSwitch:
             # of the same mac later. Tracked for every mac seen (hosts AND
             # routers), independent of ip_to_mac above.
             self._host_location[src] = (dpid, in_port)
+
+            # Gateway-IP convention (x.x.x.1) used elsewhere in this
+            # codebase to identify the router — its ARP traffic on this
+            # port marks (dpid, in_port) as the router's own interface,
+            # never a real host's.
+            if arp_pkt and arp_pkt.src_ip.endswith(".1"):
+                self._router_ports.add((dpid, in_port))
 
         # ---------------------------------
         # DESTINO BAJO BLOQUEO DISTRIBUIDO

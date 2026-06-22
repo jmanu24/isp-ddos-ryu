@@ -92,7 +92,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         )
 
         # ── Stage 1: Telemetry Collection ────────────────────────────
-        self.of_adapter = OpenFlowAdapter()
+        self.of_adapter = OpenFlowAdapter(is_host_port=self.forwarding.is_host_port)
 
         all_adapters = [
             self.of_adapter,

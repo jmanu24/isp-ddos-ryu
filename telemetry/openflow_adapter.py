@@ -50,13 +50,25 @@ class OpenFlowAdapter(DomainAdapter):
 
     domain_name = "openflow"
 
-    def __init__(self):
+    def __init__(self, is_host_port=None):
         self._flow_collector = FlowCollector()
         self._ddos_collector = DDoSCollector()
         self._pending: List[TelemetryEvent] = []
-        # (src_ip, dst_ip) -> {"protocol": str, "dst_port": int}, learned
-        # from the first packet-in of each flow.
+        # (src_ip, dst_ip) -> {"protocol": str, "dst_port": int, "dpid",
+        # "in_port"}, learned from packet-in. protocol/dst_port/timestamp
+        # refresh on every sighting regardless of where it came from;
+        # dpid/in_port only ever get set from a confirmed genuine HOST
+        # port (see is_host_port below) and then stay sticky — a later
+        # sighting of the same pair via an inter-switch link or the
+        # router's own interface (which happens for every cross-subnet
+        # attack, at the victim's switch) never overwrites a good
+        # location with the wrong end of the path.
         self._flow_meta: Dict[Tuple[str, str], dict] = {}
+        # Optional Callable[[dpid, in_port], bool] — True only for a port
+        # a real host is directly attached to (LearningSwitch.is_host_port).
+        # None means "trust every sighting" (used in tests / when this
+        # filtering isn't wired up).
+        self._is_host_port = is_host_port
         # dst_ip -> count of currently-stalled (old, low-byte) flows
         # toward it, accumulated across all switches this cycle — see
         # FlowCollector.count_low_volume_flows.
@@ -157,11 +169,21 @@ class OpenFlowAdapter(DomainAdapter):
 
     def _remember_flow_meta(self, msg) -> None:
         """
-        Record the L4 protocol/port and ingress (dpid, in_port) for this
-        (src_ip, dst_ip) pair so that later, L4-blind flow-stats volume
-        events can be tagged correctly, and mitigation can scope a block
-        to the switch+port closest to this source instead of the whole
-        network.
+        Record the L4 protocol/port for this (src_ip, dst_ip) pair so
+        that later, L4-blind flow-stats volume events can be tagged
+        correctly — refreshed on every sighting, regardless of which
+        switch/port it came from.
+
+        Also records its ingress (dpid, in_port), but ONLY from a
+        confirmed genuine host port, and only ever once: a packet
+        between two hosts on different subnets triggers packet-in at
+        BOTH the attacker's switch (real host port) and the victim's
+        switch (the router's port there, since the packet arrives via
+        the router) — recording indiscriminately would let whichever of
+        those gets processed last win, which for a cross-subnet attack
+        could easily be the victim's own router-facing port. Once a good
+        location is set it's never downgraded by a later non-host-port
+        sighting of the same pair.
         """
         pkt = packet.Packet(msg.data)
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
@@ -194,13 +216,20 @@ class OpenFlowAdapter(DomainAdapter):
         else:
             proto, dst_port = "IP", 0
 
-        self._flow_meta[(ip_pkt.src, ip_pkt.dst)] = {
-            "protocol": proto,
-            "dst_port": dst_port,
-            "dpid": msg.datapath.id,
-            "in_port": msg.match["in_port"],
-            "timestamp": time.time(),
-        }
+        key = (ip_pkt.src, ip_pkt.dst)
+        meta = self._flow_meta.setdefault(key, {
+            "protocol": proto, "dst_port": dst_port,
+            "dpid": None, "in_port": None, "timestamp": 0.0,
+        })
+        meta["protocol"] = proto
+        meta["dst_port"] = dst_port
+        meta["timestamp"] = time.time()
+
+        dpid, in_port = msg.datapath.id, msg.match["in_port"]
+
+        if self._is_host_port is None or self._is_host_port(dpid, in_port):
+            meta["dpid"] = dpid
+            meta["in_port"] = in_port
 
     def _fresh_meta(self, src_ip: str, dst_ip: str):
         """_flow_meta entry for (src_ip, dst_ip) if it's younger than
@@ -219,18 +248,20 @@ class OpenFlowAdapter(DomainAdapter):
 
     def get_source_ingress(self, src_ip: str, dst_ip: str) -> Tuple[Optional[int], Optional[int]]:
         """
-        (dpid, in_port) this (src_ip, dst_ip) pair was last observed
-        entering on, from packet-in — works even when src_ip is spoofed/
-        fabricated, since it reflects where the packet physically
-        arrived, not an ARP-learned host location (a spoofed IP never
-        ARPs, so LearningSwitch.get_host_location would never resolve
-        it). Used to scope a distributed attack's per-source block to
-        the exact switch+port that source's traffic is actually coming
-        through. None, None if this pair hasn't been seen recently
-        enough (see _FLOW_META_TTL) or at all.
+        (dpid, in_port) of the genuine HOST port this (src_ip, dst_ip)
+        pair was confirmed entering on, from packet-in — works even when
+        src_ip is spoofed/fabricated, since it reflects where the packet
+        physically arrived, not an ARP-learned host location (a spoofed
+        IP never ARPs, so LearningSwitch.get_host_location would never
+        resolve it). Used to scope a distributed attack's block to the
+        exact switch+port that source's traffic is actually coming
+        through — NEVER network-wide, so this returns None, None (no
+        fallback) whenever no confirmed host-port sighting exists yet,
+        even if this pair has been seen via an inter-switch or router
+        port (see _remember_flow_meta).
         """
         meta = self._fresh_meta(src_ip, dst_ip)
-        if meta:
+        if meta and meta["dpid"] is not None:
             return meta["dpid"], meta["in_port"]
         return None, None
 

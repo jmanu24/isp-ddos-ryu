@@ -235,20 +235,25 @@ class OrchestrationController:
         DDOS_DISTRIBUTED on the openflow domain is the one exception:
         instead of one destination-wide action with no location at all,
         every source IP the detection saw is first resolved to the
-        physical switch+port its packets actually entered on (see
-        _scoped_ingress_for_source — packet-in-derived, works even for a
-        spoofed src_ip, since it reflects where the packet arrived, not
-        an ARP-learned identity a fake IP could never produce), then
-        grouped by that location. One action per *distinct location* is
-        built — not per source — matching only (in_port, dst_ip,
-        dst_port, protocol), no src_ip: a real spoofed flood is
-        virtually always many fake IPs funneled through ONE real
-        attacker port, so this normally collapses to a single precise
-        block instead of one rule per fake IP. Sources whose ingress was
-        never captured fall back to one network-wide entry. LOW_SLOW's
+        physical HOST port its packets were actually confirmed entering
+        on (see _scoped_ingress_for_source — packet-in-derived and
+        host-port-filtered, works even for a spoofed src_ip, since it
+        reflects where the packet arrived, not an ARP-learned identity a
+        fake IP could never produce), then grouped by that location. One
+        action per *distinct location* is built — not per source —
+        matching only (in_port, dst_ip, dst_port, protocol), no src_ip:
+        a real spoofed flood is virtually always many fake IPs funneled
+        through ONE real attacker port, so this normally collapses to a
+        single precise block instead of one rule per fake IP.
+
+        Sources with no confirmed host-port location yet are skipped
+        entirely — NEVER blocked network-wide; they'll get caught once a
+        host-port sighting for them arrives in a later cycle. LOW_SLOW's
         distributed variant also uses src_ip="*" but carries no
         per-source IP list at all (it's a flow-count signature), so it's
-        left as a single network-wide action via the normal path below.
+        left as a single network-wide action via the normal path below —
+        that one has no per-source location to scope to in the first
+        place, unlike DDOS_DISTRIBUTED.
         """
         actions: List[MitigationAction] = []
         seen_domains = set()
@@ -265,8 +270,13 @@ class OrchestrationController:
             if d.domain == "openflow" and decision.attack_type == "DDOS_DISTRIBUTED" and d.sources:
                 by_location: Dict[Tuple[str, int], List[str]] = defaultdict(list)
                 for source in d.sources:
-                    location = self._scoped_ingress_for_source(source, d.dst_ip)
-                    by_location[location].append(source)
+                    device_id, in_port = self._scoped_ingress_for_source(source, d.dst_ip)
+                    if not device_id:
+                        # No confirmed host-port sighting for this source
+                        # yet — skip it rather than fall back to a
+                        # network-wide block.
+                        continue
+                    by_location[(device_id, in_port)].append(source)
 
                 for (device_id, in_port), sources_at_location in by_location.items():
                     actions.append(MitigationAction(
