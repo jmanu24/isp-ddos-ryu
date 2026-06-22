@@ -280,13 +280,25 @@ class FlowStatsIDS(app_manager.RyuApp):
         flagged_dsts = {d.dst_ip for d in flood_detections}
         flagged_pairs = {(d.src_ip, d.dst_ip) for d in flood_detections}
 
+        # Fetched once, reused for both detection input and Grafana metrics
+        # below — so the "concurrent/new connections" panels show the real
+        # value every cycle, not just when LOW_SLOW actually fires.
+        low_volume_flow_counts = self.of_adapter.collect_low_volume_flow_counts()
+        connection_port_counts = self.of_adapter.get_connection_port_counts()
+
+        for dst_ip, count in low_volume_flow_counts.items():
+            metrics.update_stalled_flows(dst_ip, count)
+
+        for (src_ip, dst_ip), info in connection_port_counts.items():
+            metrics.update_connection_counts(src_ip, dst_ip, info["count"], info["new_connections"])
+
         detections = list(flood_detections)
         detections += self.detector.analyze_low_slow(
-            self.of_adapter.collect_low_volume_flow_counts(),
+            low_volume_flow_counts,
             exclude_dsts=flagged_dsts,
         )
         detections += self.detector.analyze_low_slow_single_source(
-            self.of_adapter.get_connection_port_counts(),
+            connection_port_counts,
             exclude_pairs=flagged_pairs,
         )
 

@@ -99,6 +99,30 @@ BLOCKS_BY_DESTINATION = Counter(
     "ddos_blocks_by_destination_total", "Blocks enforced, by victim destination IP", ["dst_ip"]
 )
 
+# Low-and-slow visibility — updated every cycle regardless of whether
+# LOW_SLOW actually fires, so the trend is visible even below threshold.
+CONCURRENT_CONNECTIONS = Gauge(
+    "ddos_concurrent_connections",
+    "Distinct source ports seen recently from one source toward a "
+    "destination (single-source low-and-slow signal)",
+    ["src_ip", "dst_ip"],
+)
+NEW_CONNECTIONS = Gauge(
+    "ddos_new_connections_total",
+    "Cumulative count of distinct source ports ever seen for a "
+    "(src_ip, dst_ip) pair — apply rate() for new connections/sec. "
+    "This doubles as the only available 'connections per second' "
+    "signal: an established connection's ongoing packets are invisible "
+    "once cached, until the next periodic forced re-classification.",
+    ["src_ip", "dst_ip"],
+)
+STALLED_FLOWS = Gauge(
+    "ddos_low_slow_stalled_flows",
+    "Currently active flows toward a destination that are old and "
+    "still under the low-byte threshold (distributed low-and-slow signal)",
+    ["dst_ip"],
+)
+
 
 def update_switch_stats(dpid, byte_rate, packet_rate):
     SWITCH_BYTE_RATE.labels(dpid=str(dpid)).set(byte_rate)
@@ -146,3 +170,13 @@ def record_block_endpoints(src_ip, dst_ip):
 
 def set_active_blocks(count):
     ACTIVE_BLOCKS.set(count)
+
+
+def update_connection_counts(src_ip, dst_ip, concurrent, new_connections_total):
+    labels = {"src_ip": src_ip, "dst_ip": dst_ip}
+    CONCURRENT_CONNECTIONS.labels(**labels).set(concurrent)
+    NEW_CONNECTIONS.labels(**labels).set(new_connections_total)
+
+
+def update_stalled_flows(dst_ip, count):
+    STALLED_FLOWS.labels(dst_ip=dst_ip).set(count)

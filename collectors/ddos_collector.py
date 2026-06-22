@@ -91,8 +91,21 @@ class DDoSCollector:
             src_port = tcp_pkt.src_port if tcp_pkt else udp_pkt.src_port
             conn_key = (ip_pkt.src, ip_pkt.dst)
             conn_entry = self._connection_ports.setdefault(
-                conn_key, {"ports": set(), "last_update": now, "dst_port": 0, "protocol": "IP"}
+                conn_key,
+                {"ports": set(), "last_update": now, "dst_port": 0, "protocol": "IP", "new_connections": 0},
             )
+
+            if src_port not in conn_entry["ports"]:
+                # A genuinely new connection (never-seen source port) —
+                # cumulative count, for a "new connections/sec" Grafana
+                # panel via rate(). This is also the closest thing this
+                # L3-only architecture has to "connections per second":
+                # an already-open connection's ongoing packets are
+                # invisible once cached, until the next periodic
+                # VALIDATED_FLOW_HARD_TIMEOUT-forced refresh, so there's
+                # no separate "total connection activity" signal to track.
+                conn_entry["new_connections"] += 1
+
             conn_entry["ports"].add(src_port)
             conn_entry["last_update"] = now
             # Remember the targeted port/protocol too, so a mitigation
@@ -146,13 +159,17 @@ class DDoSCollector:
     def get_connection_port_counts(self):
         """
         (src_ip, dst_ip) -> {"count": distinct source ports seen toward
-        that destination recently, "dst_port": last-seen targeted port,
-        "protocol": "TCP"|"UDP"}. Ports accumulate for as long as that
-        pair keeps appearing in packet-in (which it will, periodically,
-        even once cached — see VALIDATED_FLOW_HARD_TIMEOUT forcing
-        re-classification); an entry is forgotten once that pair hasn't
-        been seen at all for LOW_SLOW_PORT_IDLE_TTL seconds, so a stale
-        attack from a while ago doesn't linger forever.
+        that destination recently (concurrent connections), "dst_port":
+        last-seen targeted port, "protocol": "TCP"|"UDP", "new_connections":
+        cumulative count of distinct ports ever seen for this pair (for a
+        rate()-based "new connections/sec" panel — this value only grows,
+        never resets, for as long as the pair stays alive). Ports
+        accumulate for as long as that pair keeps appearing in packet-in
+        (which it will, periodically, even once cached — see
+        VALIDATED_FLOW_HARD_TIMEOUT forcing re-classification); an entry
+        is forgotten once that pair hasn't been seen at all for
+        LOW_SLOW_PORT_IDLE_TTL seconds, so a stale attack from a while
+        ago doesn't linger forever.
         """
         now = time()
         counts = {}
@@ -168,6 +185,7 @@ class DDoSCollector:
                 "count": len(entry["ports"]),
                 "dst_port": entry["dst_port"],
                 "protocol": entry["protocol"],
+                "new_connections": entry["new_connections"],
             }
 
         return counts
