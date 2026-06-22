@@ -25,10 +25,11 @@ class LearningSwitch:
 
         self.mac_to_port = {}
 
-        # Optional Callable[[dst_ip, dst_port, protocol], bool], queried
-        # before installing a new IP forwarding rule. Lets the Orchestration
-        # layer veto caching traffic toward a destination that's already
-        # under an active distributed-attack block.
+        # Optional Callable[[src_ip, dst_ip, dst_port, protocol], bool],
+        # queried before installing a new IP forwarding rule. Lets the
+        # Orchestration layer veto caching traffic for a flow that's
+        # already individually blocked, or whose destination is under an
+        # active destination-wide block.
         self._is_blocked = is_blocked
 
         # Optional Callable[[dst_ip], bool], queried before installing an IP
@@ -223,11 +224,12 @@ class LearningSwitch:
             else:
                 proto, dst_port = "IP", 0
 
-            if self._is_blocked(ip_pkt.dst, dst_port, proto):
-                # Drop silently — no forwarding rule, no packet-out. The
-                # destination already has an active distributed-attack
-                # block; caching another per-source rule here would just
-                # be a flow table entry that can never deliver traffic.
+            if self._is_blocked(ip_pkt.src, ip_pkt.dst, dst_port, proto):
+                # Drop silently — no forwarding rule, no packet-out. This
+                # exact flow (or its whole destination, for a network-
+                # wide block) is already blocked; caching a forwarding
+                # rule here would just be a flow table entry that can
+                # never deliver traffic.
                 return
 
         # ---------------------------------

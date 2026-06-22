@@ -1,5 +1,5 @@
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ryu.lib.packet import packet, ipv4, tcp, udp
 
@@ -216,6 +216,23 @@ class OpenFlowAdapter(DomainAdapter):
         counts = self._low_volume_flow_counts
         self._low_volume_flow_counts = {}
         return counts
+
+    def get_source_ingress(self, src_ip: str, dst_ip: str) -> Tuple[Optional[int], Optional[int]]:
+        """
+        (dpid, in_port) this (src_ip, dst_ip) pair was last observed
+        entering on, from packet-in — works even when src_ip is spoofed/
+        fabricated, since it reflects where the packet physically
+        arrived, not an ARP-learned host location (a spoofed IP never
+        ARPs, so LearningSwitch.get_host_location would never resolve
+        it). Used to scope a distributed attack's per-source block to
+        the exact switch+port that source's traffic is actually coming
+        through. None, None if this pair hasn't been seen recently
+        enough (see _FLOW_META_TTL) or at all.
+        """
+        meta = self._fresh_meta(src_ip, dst_ip)
+        if meta:
+            return meta["dpid"], meta["in_port"]
+        return None, None
 
     def get_connection_port_counts(self) -> Dict[Tuple[str, str], dict]:
         """

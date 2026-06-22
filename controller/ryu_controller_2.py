@@ -84,8 +84,8 @@ class FlowStatsIDS(app_manager.RyuApp):
         # (self.orchestrator doesn't exist yet at this point in __init__)
         # so they must stay lambdas, not bound method references.
         self.forwarding = LearningSwitch(
-            is_blocked=lambda dst_ip, dst_port, proto: self.orchestrator.is_blocked_destination(
-                dst_ip, dst_port, proto
+            is_blocked=lambda src_ip, dst_ip, dst_port, proto: self.orchestrator.is_blocked(
+                src_ip, dst_ip, dst_port, proto
             ),
             is_validated=lambda dst_ip: self.orchestrator.is_validated_destination(dst_ip),
             is_interswitch_port=lambda dpid, port: self.orchestrator.is_interswitch_port(dpid, port),
@@ -108,6 +108,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.orchestrator = OrchestrationController(
             all_adapters,
             locate_host=self.forwarding.get_host_location,
+            locate_source_ingress=self.of_adapter.get_source_ingress,
             yield_fn=lambda: hub.sleep(0),
         )
 
