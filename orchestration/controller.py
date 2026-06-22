@@ -286,14 +286,20 @@ class OrchestrationController:
                     # above and the docstring.
                     metrics.record_block_endpoints(action.src_ip, action.dst_ip)
 
-                if action.src_ip == "*" and action.sources:
-                    # The destination-wide block already outranks (higher
-                    # priority) any per-source forwarding rule, but clear
-                    # them anyway so the flow table doesn't keep filling up
-                    # with one-shot entries for spoofed sources.
-                    self.of_mitigator.clear_forwarding_rules(action.dst_ip, action.sources)
-
+            # Install the actual protective rule FIRST — a distributed
+            # attack can have hundreds/thousands of spoofed sources, and
+            # clear_forwarding_rules() below sends one OFPFlowMod per
+            # source per switch synchronously; with enough sources that
+            # can take long enough to noticeably delay the real
+            # mitigation if it ran first. The drop rule already outranks
+            # any per-source forwarding rule by priority regardless of
+            # whether those get cleaned up, so nothing depends on cleanup
+            # happening before the block is live.
             self.of_mitigator.apply(action)
+
+            if action.action == "block" and action.src_ip == "*" and action.sources:
+                self.of_mitigator.clear_forwarding_rules(action.dst_ip, action.sources)
+
             return is_new
 
         adapter = self._adapters.get(action.domain)
