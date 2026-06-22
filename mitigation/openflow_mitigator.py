@@ -56,8 +56,14 @@ class OpenFlowMitigator(MitigationAdapter):
     YIELD_EVERY = 200
 
     def __init__(self, yield_fn: Optional[Callable[[], None]] = None):
-        # (src_ip, dst_ip, dst_port, protocol) tuples currently blocked
-        self._blocked: Set[Tuple[str, str, int, str]] = set()
+        # (src_ip, dst_ip, dst_port, protocol, dpid) tuples currently
+        # blocked. dpid is part of the key (None for an unscoped/network-
+        # wide block) so that two DIFFERENT physical ingress locations for
+        # the same destination — e.g. a distributed attack entering
+        # through two different real attacker switches at once — are
+        # tracked as two distinct entries instead of the second one being
+        # silently skipped as "already blocked" once the first is in.
+        self._blocked: Set[Tuple[str, str, int, str, Optional[int]]] = set()
         self._datapaths: Dict[int, object] = {}   # dpid -> Ryu datapath
         # Cooperative-yield hook (e.g. ryu.lib.hub.sleep(0)) — optional so
         # this stays testable without a Ryu/eventlet runtime.
@@ -104,22 +110,24 @@ class OpenFlowMitigator(MitigationAdapter):
     ) -> None:
         """
         Install an L4 drop rule (src_ip, dst_ip, protocol, dst_port).
-        Idempotent — calling block() again on an already-blocked 4-tuple
-        is a no-op.
+        Idempotent — calling block() again for the same (src_ip, dst_ip,
+        dst_port, protocol, dpid) is a no-op.
 
-        When dpid is known and this isn't a distributed ("*" src) attack,
-        the rule is installed on that ONE switch only — the one closest
-        to the attacker — and matches in_port too when known, instead of
-        dropping the traffic network-wide.
+        When dpid is known, the rule is installed on that ONE switch
+        only — the one closest to the attacker, or, for a distributed
+        attack's per-location block (src_ip="*" but dpid/in_port known
+        from where its packets were actually observed entering), the
+        one closest to that physical entry point — and matches in_port
+        too when known, instead of dropping the traffic network-wide.
         """
-        key = (src_ip, dst_ip, dst_port, protocol)
+        key = (src_ip, dst_ip, dst_port, protocol, dpid)
 
         if key in self._blocked:
             return
 
         self._blocked.add(key)
 
-        targets = self._scoped_targets(src_ip, dpid)
+        targets = self._scoped_targets(dpid)
 
         for datapath in targets:
             self._install_drop_rule(
@@ -141,26 +149,32 @@ class OpenFlowMitigator(MitigationAdapter):
         """
         Remove the drop rule for this L4 flow from every switch it could
         have been installed on (scoped or network-wide — unblock doesn't
-        need to know which, it just deletes wherever it matches).
+        need to know which, it just deletes wherever it matches), and
+        forgets every _blocked entry for it regardless of which dpid
+        each one was scoped to (the caller doesn't track per-location
+        dpids on its side either — unblocking means this flow is no
+        longer under attack anywhere).
         """
-        key = (src_ip, dst_ip, dst_port, protocol)
+        matching = [k for k in self._blocked if k[:4] == (src_ip, dst_ip, dst_port, protocol)]
 
-        if key not in self._blocked:
+        if not matching:
             return
 
-        self._blocked.discard(key)
+        for key in matching:
+            self._blocked.discard(key)
 
         for datapath in self._datapaths.values():
             self._delete_drop_rule(datapath, src_ip, dst_ip, dst_port, protocol)
 
         _log(f"[OF_MITIGATOR] Unblocked {src_ip} -> {dst_ip}:{dst_port}/{protocol}")
 
-    def _scoped_targets(self, src_ip: str, dpid: Optional[int]) -> List[object]:
+    def _scoped_targets(self, dpid: Optional[int]) -> List[object]:
         """
-        The datapath(s) a block should be installed on: just the attacker's
-        nearest switch when known and meaningful, otherwise every switch.
+        The datapath(s) a block should be installed on: just the known
+        ingress switch when one is known and still connected, otherwise
+        every switch.
         """
-        if src_ip != "*" and dpid is not None and dpid in self._datapaths:
+        if dpid is not None and dpid in self._datapaths:
             return [self._datapaths[dpid]]
         return list(self._datapaths.values())
 

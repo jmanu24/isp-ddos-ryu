@@ -204,17 +204,18 @@ class OrchestrationController:
                 newly_enforced
                 and decision.attack_type == "DDOS_DISTRIBUTED"
                 and newly_enforced[0].domain == "openflow"
-                and newly_enforced[0].sources
             ):
-                # One cleanup pass per group, after every per-source block
-                # in it is already live — not per action, since _build_actions
-                # explodes a distributed detection into one action per
-                # source, all sharing the same dst_ip/sources list; calling
-                # this per action would redundantly re-scan the same flow
-                # table N times for the same cleanup.
-                self.of_mitigator.clear_forwarding_rules(
-                    newly_enforced[0].dst_ip, newly_enforced[0].sources
-                )
+                # One cleanup pass per group, after every location's block
+                # in it is already live — not per action, since
+                # _build_actions can split one distributed detection into
+                # several actions (one per distinct ingress location),
+                # each carrying only the sources seen at ITS location; the
+                # union covers every source in the whole detection.
+                all_sources = {s for action in newly_enforced for s in action.sources}
+                if all_sources:
+                    self.of_mitigator.clear_forwarding_rules(
+                        newly_enforced[0].dst_ip, list(all_sources)
+                    )
 
         return all_actions
 
@@ -232,14 +233,22 @@ class OrchestrationController:
         Chooses the mitigation action type based on attack type and domain.
 
         DDOS_DISTRIBUTED on the openflow domain is the one exception:
-        instead of a single destination-wide ("*" src) action, it's
-        exploded into one action PER source IP the detection saw, each
-        scoped to that source's own real ingress switch+port (see
-        _scoped_ingress_for_source) — every spoofed source gets its own
-        precise block instead of dropping the whole destination network-
-        wide. LOW_SLOW's distributed variant also uses src_ip="*" but
-        carries no per-source IP list (it's a flow-count signature, not
-        a per-source one), so it's left as a single network-wide action.
+        instead of one destination-wide action with no location at all,
+        every source IP the detection saw is first resolved to the
+        physical switch+port its packets actually entered on (see
+        _scoped_ingress_for_source — packet-in-derived, works even for a
+        spoofed src_ip, since it reflects where the packet arrived, not
+        an ARP-learned identity a fake IP could never produce), then
+        grouped by that location. One action per *distinct location* is
+        built — not per source — matching only (in_port, dst_ip,
+        dst_port, protocol), no src_ip: a real spoofed flood is
+        virtually always many fake IPs funneled through ONE real
+        attacker port, so this normally collapses to a single precise
+        block instead of one rule per fake IP. Sources whose ingress was
+        never captured fall back to one network-wide entry. LOW_SLOW's
+        distributed variant also uses src_ip="*" but carries no
+        per-source IP list at all (it's a flow-count signature), so it's
+        left as a single network-wide action via the normal path below.
         """
         actions: List[MitigationAction] = []
         seen_domains = set()
@@ -254,17 +263,21 @@ class OrchestrationController:
             action_type = self._action_for(decision.attack_type, d.domain)
 
             if d.domain == "openflow" and decision.attack_type == "DDOS_DISTRIBUTED" and d.sources:
+                by_location: Dict[Tuple[str, int], List[str]] = defaultdict(list)
                 for source in d.sources:
-                    device_id, in_port = self._scoped_ingress_for_source(source, d.dst_ip)
+                    location = self._scoped_ingress_for_source(source, d.dst_ip)
+                    by_location[location].append(source)
+
+                for (device_id, in_port), sources_at_location in by_location.items():
                     actions.append(MitigationAction(
                         domain=d.domain,
                         device_id=device_id,
-                        src_ip=source,
+                        src_ip="*",
                         dst_ip=d.dst_ip,
                         dst_port=d.dst_port,
                         protocol=d.protocol,
                         action=action_type,
-                        sources=d.sources,
+                        sources=sources_at_location,
                         attack_type=decision.attack_type,
                         in_port=in_port,
                         pps=d.pps,
@@ -403,17 +416,17 @@ class OrchestrationController:
     def is_blocked(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> bool:
         """
         True if this exact (src_ip, dst_ip, dst_port, protocol) is
-        blocked, or a destination-wide ("*" src) block covers
-        (dst_ip, dst_port, protocol) regardless of src_ip — the latter
-        only ever happens for LOW_SLOW's flow-count variant now (no
-        per-source IP list to scope to); DDOS_DISTRIBUTED blocks each
-        source individually instead of network-wide. LearningSwitch
-        checks this before installing a new per-source forwarding rule,
-        so a source already under its own block (or caught by a
-        network-wide one) doesn't get a pointless one-shot permit entry
-        — the drop rule would win on priority anyway, but there's no
-        reason to let the flow table fill up with entries that can
-        never deliver traffic.
+        blocked, or a "*" (destination/location-wide) block covers
+        (dst_ip, dst_port, protocol) — DDOS_DISTRIBUTED blocks are
+        always keyed by src_ip="*" (scoped by physical ingress
+        switch+port instead, not by which fake IP a packet claims to be
+        from) and LOW_SLOW's flow-count variant has no source at all, so
+        both rely on this fallback. LearningSwitch checks this before
+        installing a new per-source forwarding rule, so a flow already
+        covered by an active block doesn't get a pointless one-shot
+        permit entry — the drop rule would win on priority anyway, but
+        there's no reason to let the flow table fill up with entries
+        that can never deliver traffic.
         """
         if (src_ip, dst_ip, dst_port, protocol) in self._active_blocks:
             return True
@@ -422,19 +435,13 @@ class OrchestrationController:
     def is_active_block(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> bool:
         """
         True if this exact (src_ip, dst_ip, dst_port, protocol) already
-        has an active block — or, when src_ip is "*" (a DetectionResult
-        for a distributed attack, which is never the literal key stored
-        anymore now that each source is blocked individually), True if
-        ANY block is active for (dst_ip, dst_port, protocol) under any
-        source. Used to skip re-logging "ATAQUE DETECTADO" every cycle
-        for an attack that's already known and being handled.
+        has an active block. Used to skip re-logging "ATAQUE DETECTADO"
+        every cycle for an attack that's already known and being
+        handled — DDOS_DISTRIBUTED detections always carry src_ip="*",
+        which directly matches the literal key stored for it (one entry
+        per distinct physical ingress location; see _build_actions).
         """
-        key = (src_ip, dst_ip, dst_port, protocol)
-        if key in self._active_blocks:
-            return True
-        if src_ip == "*":
-            return any(k[1:] == (dst_ip, dst_port, protocol) for k in self._active_blocks)
-        return False
+        return (src_ip, dst_ip, dst_port, protocol) in self._active_blocks
 
     def is_validated_destination(self, dst_ip: str) -> bool:
         """
