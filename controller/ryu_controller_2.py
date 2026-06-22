@@ -106,7 +106,9 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.correlator  = MultidomainCorrelator()
         self.detector    = DDoSDetectionEngine()
         self.orchestrator = OrchestrationController(
-            all_adapters, locate_host=self.forwarding.get_host_location
+            all_adapters,
+            locate_host=self.forwarding.get_host_location,
+            yield_fn=lambda: hub.sleep(0),
         )
 
         # ── Monitoring loop ───────────────────────────────────────────

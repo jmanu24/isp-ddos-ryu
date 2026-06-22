@@ -50,13 +50,18 @@ class OrchestrationController:
     # only for the next burst to need re-detection from scratch.
     UNBLOCK_CONFIRM_CYCLES = 3
 
-    def __init__(self, adapters: List[DomainAdapter], locate_host=None):
+    def __init__(self, adapters: List[DomainAdapter], locate_host=None, yield_fn=None):
         # Index adapters by domain name for O(1) dispatch
         self._adapters: Dict[str, DomainAdapter] = {
             a.domain_name: a for a in adapters
         }
         self._decision_engine = DecisionEngine()
-        self.of_mitigator = OpenFlowMitigator()
+        # yield_fn (e.g. ryu.lib.hub.sleep(0)) is threaded through to
+        # OpenFlowMitigator so its forwarding-rule cleanup loop — which can
+        # run into thousands of iterations under a distributed attack —
+        # cooperatively yields instead of starving every other greenthread
+        # (including each switch's own echo-reply loop) for the duration.
+        self.of_mitigator = OpenFlowMitigator(yield_fn=yield_fn)
 
         # Optional Callable[[ip], Optional[Tuple[int,int]]] — (dpid, port)
         # an IP's mac was last confirmed attached to via a genuine edge

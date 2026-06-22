@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import config.settings as settings
 from core.models import MitigationAction
@@ -44,10 +44,24 @@ class OpenFlowMitigator(MitigationAdapter):
     # rules — needed to delete exactly those entries, not the drop rules.
     FORWARDING_PRIORITY = 10
 
-    def __init__(self):
+    # How many send_msg calls clear_forwarding_rules() makes between
+    # cooperative yields. A distributed attack's source list can run into
+    # the thousands; without yielding periodically, that loop runs as one
+    # uninterrupted burst on Ryu's single eventlet thread, starving every
+    # other greenthread — including each datapath's own echo-reply loop —
+    # for as long as it takes. Observed taking 36s for ~6000 send_msg
+    # calls under real attack load, during which a switch missed its
+    # keepalives and reconnected. Yielding every N calls lets the hub
+    # service those in between instead.
+    YIELD_EVERY = 200
+
+    def __init__(self, yield_fn: Optional[Callable[[], None]] = None):
         # (src_ip, dst_ip, dst_port, protocol) tuples currently blocked
         self._blocked: Set[Tuple[str, str, int, str]] = set()
         self._datapaths: Dict[int, object] = {}   # dpid -> Ryu datapath
+        # Cooperative-yield hook (e.g. ryu.lib.hub.sleep(0)) — optional so
+        # this stays testable without a Ryu/eventlet runtime.
+        self._yield_fn = yield_fn or (lambda: None)
 
     # ------------------------------------------------------------------
     # Datapath lifecycle — called from the Ryu controller
@@ -163,9 +177,14 @@ class OpenFlowMitigator(MitigationAdapter):
         scoped per known source, so the drop rule for this same dst_ip
         (priority=100, a different match/priority) is never touched.
         """
+        calls = 0
+
         for datapath in self._datapaths.values():
             for src_ip in sources:
                 self._delete_forwarding_rule(datapath, src_ip, dst_ip)
+                calls += 1
+                if calls % self.YIELD_EVERY == 0:
+                    self._yield_fn()
 
         _log(
             f"[OF_MITIGATOR] Cleared {len(sources)} forwarding rule(s) "
