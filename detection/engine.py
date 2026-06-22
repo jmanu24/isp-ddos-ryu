@@ -212,6 +212,7 @@ class DDoSDetectionEngine:
         )
 
         score = total_pps / threshold
+        total_bps = sum(e.bps for e in proto_events)
         multidomain = len(event.domains) > 1
 
         if is_distributed:
@@ -231,6 +232,8 @@ class DDoSDetectionEngine:
                 score=score,
                 confidence=confidence,
                 sources=list(pps_by_src.keys()),
+                pps=total_pps,
+                bps=total_bps,
             )
 
         # Single attacker — narrow down to its own events first, then among
@@ -255,6 +258,8 @@ class DDoSDetectionEngine:
             score=score,
             confidence=confidence,
             in_port=representative.in_port,
+            pps=total_pps,
+            bps=total_bps,
         )
 
     @staticmethod
@@ -312,6 +317,7 @@ class DDoSDetectionEngine:
             return None
 
         score = total_pps / pps_threshold
+        total_bps = sum(e.bps for e in candidate_events)
 
         multidomain = len(event.domains) > 1
         confidence = min(
@@ -334,6 +340,8 @@ class DDoSDetectionEngine:
             score=score,
             confidence=confidence,
             sources=list(pps_by_src.keys()),
+            pps=total_pps,
+            bps=total_bps,
         )
 
     @staticmethod

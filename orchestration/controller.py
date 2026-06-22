@@ -146,6 +146,7 @@ class OrchestrationController:
 
         for d in detections:
             metrics.record_detection(d.attack_type, d.domain)
+            metrics.record_attack_rate(d.attack_type, d.domain, d.pps, d.bps)
 
         groups: Dict[Tuple[str, str, int, str], List[DetectionResult]] = defaultdict(list)
         for d in detections:
@@ -218,6 +219,8 @@ class OrchestrationController:
                 sources=d.sources,
                 attack_type=decision.attack_type,
                 in_port=in_port,
+                pps=d.pps,
+                bps=d.bps,
             ))
 
         return actions
@@ -265,6 +268,7 @@ class OrchestrationController:
         attack stays active.
         """
         metrics.record_mitigation(action.attack_type, action.action, action.domain)
+        metrics.record_mitigation_rate(action.attack_type, action.action, action.pps, action.bps)
 
         if action.domain == "openflow":
             is_new = True
@@ -275,6 +279,12 @@ class OrchestrationController:
                 self._active_blocks[key] = action
                 self._below_threshold_streak[key] = 0
                 metrics.set_active_blocks(len(self._active_blocks))
+
+                if is_new:
+                    # Counted per distinct block event, not per cycle an
+                    # already-active one gets re-evaluated — see is_new
+                    # above and the docstring.
+                    metrics.record_block_endpoints(action.src_ip, action.dst_ip)
 
                 if action.src_ip == "*" and action.sources:
                     # The destination-wide block already outranks (higher

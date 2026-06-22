@@ -1,4 +1,6 @@
 import logging
+from collections import defaultdict
+from typing import Dict
 
 from ryu.base import app_manager
 from ryu.controller import ofp_event
@@ -360,6 +362,21 @@ class FlowStatsIDS(app_manager.RyuApp):
         total_pps = sum(e.pps for e in events)
         metrics.update_switch_stats(dpid, total_bps, total_pps)
         dashboard_state.update_stats(dpid, total_bps, total_pps)
+
+        # Same totals, broken down by protocol (TCP/UDP/ICMP/IP) — not by
+        # physical port, since these are flow-derived events and don't
+        # reliably carry in_port (LearningSwitch's L3-only match doesn't
+        # either, for flow-stats-sourced ones).
+        bps_by_proto: Dict[str, float] = defaultdict(float)
+        pps_by_proto: Dict[str, float] = defaultdict(float)
+        for e in events:
+            proto = "TCP" if e.protocol == "TCP_SYN" else e.protocol
+            bps_by_proto[proto] += e.bps
+            pps_by_proto[proto] += e.pps
+        for proto in bps_by_proto:
+            metrics.update_switch_protocol_stats(
+                dpid, proto, bps_by_proto[proto], pps_by_proto[proto]
+            )
 
     # ------------------------------------------------------------------
     # PORT STATS

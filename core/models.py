@@ -96,6 +96,9 @@ class DetectionResult:
                   known — lets mitigation scope a block to the exact
                   switch+port closest to the attacker instead of the
                   whole network
+    pps/bps     : the representative event's measured rate at detection
+                  time — carried through purely for observability
+                  (Grafana "attack byte/packet rate by type" panels)
     """
     domain: str
     device_id: str
@@ -108,6 +111,8 @@ class DetectionResult:
     confidence: float
     sources: List[str] = field(default_factory=list)
     in_port: int = 0
+    pps: float = 0.0
+    bps: float = 0.0
     timestamp: float = field(
         default_factory=lambda: datetime.now().timestamp()
     )
@@ -137,6 +142,9 @@ class MitigationAction:
                   only visibility) — lets OpenFlowMitigator scope the
                   drop rule to a single switch+port instead of the whole
                   network
+    pps/bps     : the triggering detection's measured rate — carried
+                  through purely for observability (Grafana "mitigation
+                  byte/packet rate by type" panels)
     """
     domain: str
     device_id: str
@@ -149,3 +157,5 @@ class MitigationAction:
     sources: List[str] = field(default_factory=list)
     attack_type: str = ""
     in_port: int = 0
+    pps: float = 0.0
+    bps: float = 0.0
