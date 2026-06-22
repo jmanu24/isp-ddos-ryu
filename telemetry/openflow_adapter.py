@@ -217,13 +217,13 @@ class OpenFlowAdapter(DomainAdapter):
         self._low_volume_flow_counts = {}
         return counts
 
-    def get_connection_port_counts(self) -> Dict[Tuple[str, str], int]:
+    def get_connection_port_counts(self) -> Dict[Tuple[str, str], dict]:
         """
-        (src_ip, dst_ip) -> distinct source ports seen toward it recently —
-        for single-source low-and-slow detection (many real connections
-        from one attacker, all collapsed into one L3 forwarding rule, so
+        (src_ip, dst_ip) -> {"count", "dst_port", "protocol"} — for
+        single-source low-and-slow detection (many real connections from
+        one attacker, all collapsed into one L3 forwarding rule, so
         OpenFlow flow stats alone can't tell them apart; packet-in is the
-        only place each connection's own src_port is ever visible).
+        only place each connection's own src_port/dst_port is visible).
         """
         return self._ddos_collector.get_connection_port_counts()
 
