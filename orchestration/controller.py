@@ -171,9 +171,12 @@ class OrchestrationController:
             actions = self._build_actions(decision, group)
 
             for action in actions:
-                self._dispatch(action)
-
-            all_actions.extend(actions)
+                if self._dispatch(action):
+                    # Only newly-enforced actions are reported back — an
+                    # already-active block re-dispatching every cycle
+                    # (because the attack is still ongoing) is a no-op at
+                    # the mitigator level, so it shouldn't re-log either.
+                    all_actions.append(action)
 
         return all_actions
 
@@ -253,15 +256,22 @@ class OrchestrationController:
             return "block"
         return "rate_limit"
 
-    def _dispatch(self, action: MitigationAction) -> None:
-        """Send action to the correct backend."""
+    def _dispatch(self, action: MitigationAction) -> bool:
+        """
+        Send action to the correct backend. Returns True if this is a
+        newly-enforced action worth reporting (logging) — False if it's
+        just process() re-evaluating an attack that's already blocked,
+        which would otherwise re-log every cycle for as long as the
+        attack stays active.
+        """
         metrics.record_mitigation(action.attack_type, action.action, action.domain)
 
         if action.domain == "openflow":
-            self.of_mitigator.apply(action)
+            is_new = True
 
             if action.action == "block":
                 key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
+                is_new = key not in self._active_blocks
                 self._active_blocks[key] = action
                 self._below_threshold_streak[key] = 0
                 metrics.set_active_blocks(len(self._active_blocks))
@@ -273,7 +283,8 @@ class OrchestrationController:
                     # with one-shot entries for spoofed sources.
                     self.of_mitigator.clear_forwarding_rules(action.dst_ip, action.sources)
 
-            return
+            self.of_mitigator.apply(action)
+            return is_new
 
         adapter = self._adapters.get(action.domain)
 
@@ -285,6 +296,8 @@ class OrchestrationController:
                 f"[ORCHESTRATION] No adapter registered "
                 f"for domain '{action.domain}'"
             )
+
+        return True
 
     # ------------------------------------------------------------------
     # Queried by the forwarding layer before caching a new flow
@@ -301,6 +314,14 @@ class OrchestrationController:
         flow table fill up with entries that can never deliver traffic.
         """
         return ("*", dst_ip, dst_port, protocol) in self._active_blocks
+
+    def is_active_block(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> bool:
+        """
+        True if this exact (src_ip, dst_ip, dst_port, protocol) already
+        has an active block. Used to skip re-logging "ATAQUE DETECTADO"
+        every cycle for an attack that's already known and being handled.
+        """
+        return (src_ip, dst_ip, dst_port, protocol) in self._active_blocks
 
     def is_validated_destination(self, dst_ip: str) -> bool:
         """

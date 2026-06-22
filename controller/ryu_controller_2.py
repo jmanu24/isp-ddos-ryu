@@ -277,10 +277,16 @@ class FlowStatsIDS(app_manager.RyuApp):
             self.of_adapter.get_connection_port_counts()
         )
 
-        # Surface every detection in the event log, classified — this is
-        # the descriptive "what's happening" signal; raw traffic numbers
-        # live in Grafana via /metrics instead.
+        # Surface every NEW detection in the event log, classified — this
+        # is the descriptive "what's happening" signal; raw traffic
+        # numbers live in Grafana via /metrics instead. An attack already
+        # under an active block gets re-detected every cycle for as long
+        # as it's ongoing (the underlying traffic is still there), but
+        # that's already being handled — skip the repeat announcement.
         for d in detections:
+            if self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol):
+                continue
+
             msg = (
                 f"ATAQUE DETECTADO: {d.attack_type} "
                 f"origen={d.src_ip} destino={d.dst_ip}:{d.dst_port}/{d.protocol} "
