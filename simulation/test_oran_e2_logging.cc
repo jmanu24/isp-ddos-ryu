@@ -127,6 +127,17 @@ private:
 int
 main(int argc, char *argv[])
 {
+  // A live SCTP session to FlexRIC needs to stay up long enough, in
+  // REAL wall-clock time, for an xApp started by hand in another
+  // terminal to connect and subscribe. ns-3's default simulator
+  // implementation advances simulated time as fast as the CPU allows
+  // (the whole simTime window can complete in well under a real
+  // second) -- RealtimeSimulatorImpl paces simulated time 1:1 against
+  // the wall clock instead, the standard ns-3 mechanism for any
+  // scenario that talks to a real external process mid-run.
+  GlobalValue::Bind("SimulatorImplementationType",
+                     StringValue("ns3::RealtimeSimulatorImpl"));
+
   double simTime = 10.0;
   uint32_t nUe = 2;
   std::string ricAddr = "127.0.0.1";
@@ -229,48 +240,29 @@ main(int argc, char *argv[])
   mmwaveHelper->AddX2Interface(lteEnbNodes, mmWaveEnbNodes);
   mmwaveHelper->AttachToClosestEnb(mcUeDevs, mmWaveEnbDevs, lteEnbDevs);
 
-  // MmWaveHelper::InstallSingleEnbDevice constructs and attaches an
-  // E2Termination (+ E2PdcpCalculator/E2RlcCalculator/E2DuCalculator)
-  // automatically when E2ModeNr=true, but NEVER calls Start() on it --
-  // confirmed by enabling NS_LOG="E2Termination=info" against a real
-  // build and seeing nothing. Pull the object back out via its
-  // gettable PointerValue attribute and start it ourselves.
-  //
   // Also confirmed missing: EnableE2PdcpTraces()/EnableE2RlcTraces()
   // get called internally, but the DU/PHY side (E2DuCalculator reuses
   // m_phyStats, an MmWavePhyTrace) is never wired to real trace
   // sources unless EnableDlPhyTrace()/EnableEnbSchedTrace() are called
-  // explicitly -- the likely cause of every DU stat reading 0 in the
-  // first test run.
+  // explicitly.
   mmwaveHelper->EnableDlPhyTrace();
   mmwaveHelper->EnableEnbSchedTrace();
 
+  // Do NOT call e2term->Start() ourselves: confirmed
+  // MmWaveEnbNetDevice::UpdateConfig() (called from DoInitialize())
+  // already does `if (!m_forceE2FileLogging) Simulator::Schedule
+  // (MicroSeconds(0), &E2Termination::Start, m_e2term)`. Calling it a
+  // second time here caused a duplicate SCTP bind on the same source
+  // port ("Cannot assign requested address") and crashed ns-3 with
+  // SIGSEGV in the previous run. Just confirm the attribute exists,
+  // for visibility.
   for (uint32_t i = 0; i < mmWaveEnbDevs.GetN(); ++i)
     {
       PointerValue ptr;
       mmWaveEnbDevs.Get(i)->GetAttribute("E2Termination", ptr);
       Ptr<E2Termination> e2term = ptr.Get<E2Termination>();
-      if (e2term)
-        {
-          std::cout << "[test_oran_e2_logging] starting E2Termination for gNB device "
-                    << i << std::endl;
-          // Scheduled, not called immediately: FlexRIC's nearRT-RIC
-          // crashed on the first attempt (assert "E2 Node with no RAN
-          // functions??") because the E2 SETUP-REQUEST went out with
-          // zero RAN functions registered. SetE2Termination() (the
-          // real setter behind the "E2Termination" attribute) likely
-          // registers the KPM function description on its own
-          // schedule, possibly inside DoInitialize() at simulation
-          // time 0 -- calling Start() synchronously here, BEFORE
-          // Simulator::Run() even begins, may be racing ahead of that.
-          Simulator::Schedule(MilliSeconds(200), &E2Termination::Start, e2term);
-        }
-      else
-        {
-          std::cout << "[test_oran_e2_logging] WARNING: no E2Termination attribute on "
-                    << "gNB device " << i << " -- E2ModeNr probably isn't taking effect"
-                    << std::endl;
-        }
+      std::cout << "[test_oran_e2_logging] gNB device " << i << " E2Termination attribute "
+                << (e2term ? "present (device will auto-start it)" : "MISSING") << std::endl;
     }
 
   // --- Our own UL tracker ---
