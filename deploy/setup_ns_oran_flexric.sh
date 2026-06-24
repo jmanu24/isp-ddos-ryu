@@ -151,6 +151,43 @@ else
   fi
 fi
 
+echo "== 1d. asn1c (fork mouse07410 @ 940dd5f, instalado en /opt/asn1c) =="
+
+# examples/xApp/c/monitor/RRC_MESSAGES/CMakeLists.txt hace
+# find_program(ASN1C_EXEC_PATH asn1c HINTS /opt/asn1c/bin) -- el apt
+# "asn1c" (donde existe) es una versión distinta/incompatible. El fork +
+# commit + prefix exactos vienen de FlexRIC's propio
+# docker/Dockerfile.flexric.ubuntu, no son una elección nuestra.
+ASN1C_PREFIX="/opt/asn1c"
+ASN1C_REPO_URL="https://github.com/mouse07410/asn1c"
+ASN1C_COMMIT="940dd5fa9f3917913fd487b13dfddfacd0ded06e"
+ASN1C_BUILD_DIR="/tmp/asn1c-build"
+
+if [ -x "${ASN1C_PREFIX}/bin/asn1c" ]; then
+  ok "asn1c ya está instalado en ${ASN1C_PREFIX}/bin/asn1c"
+else
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    fail "asn1c no está instalado en ${ASN1C_PREFIX} -- corre sin --check-only"
+  else
+    echo "  -> clonando ${ASN1C_REPO_URL} @ ${ASN1C_COMMIT}..."
+    rm -rf "$ASN1C_BUILD_DIR"
+    git clone "$ASN1C_REPO_URL" "$ASN1C_BUILD_DIR"
+    git -C "$ASN1C_BUILD_DIR" checkout "$ASN1C_COMMIT"
+    (
+      cd "$ASN1C_BUILD_DIR"
+      autoreconf -iv
+      ./configure --prefix "$ASN1C_PREFIX"
+      make -j "$JOBS"
+      sudo make install
+    )
+    if [ -x "${ASN1C_PREFIX}/bin/asn1c" ]; then
+      ok "asn1c instalado en ${ASN1C_PREFIX}/bin/asn1c"
+    else
+      fail "el build de asn1c corrió pero ${ASN1C_PREFIX}/bin/asn1c no existe"
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 2. FlexRIC (Near-RT RIC)
 # ---------------------------------------------------------------------------
@@ -191,6 +228,15 @@ if is_valid_flexric_tree; then
     fi
   else
     mkdir -p "${FLEXRIC_DIR}/build"
+    # A build/ left over from before asn1c was installed has
+    # ASN1C_EXEC_PATH cached as NOTFOUND -- CMake won't re-run
+    # find_program for an already-cached variable, so that stale value
+    # would otherwise survive a plain re-configure.
+    if [ -f "${FLEXRIC_DIR}/build/CMakeCache.txt" ] \
+       && grep -q "ASN1C_EXEC_PATH.*NOTFOUND" "${FLEXRIC_DIR}/build/CMakeCache.txt" 2>/dev/null; then
+      echo "  -> limpiando caché stale de ASN1C_EXEC_PATH (de antes de instalar asn1c)..."
+      sed -i '/ASN1C_EXEC_PATH/d' "${FLEXRIC_DIR}/build/CMakeCache.txt"
+    fi
     (
       cd "${FLEXRIC_DIR}/build"
       CC=gcc-13 CXX=g++-13 "$CMAKE_BIN" .. -DE2AP_VERSION=E2AP_V1 -DKPM_VERSION=KPM_V3_00
