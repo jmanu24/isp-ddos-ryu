@@ -413,6 +413,70 @@ if [ -f "$MMWAVE_ENB_DEVICE_CC" ] && ! grep -q "PATCHED-DIAG2" "$MMWAVE_ENB_DEVI
   fi
 fi
 
+# Root cause, confirmed via NS_LOG="MmWaveEnbNetDevice=error": every
+# single CheckReportingFlag tick throws "bad any_cast" (silently
+# swallowed by the surrounding catch, since NS_LOG_ERROR output needs
+# NS_LOG explicitly enabled to print at all -- that's why nothing
+# showed up earlier just grepping the log for ERROR with no env var
+# set). Confirmed in contrib/oran-interface/model/oran-interface.cc
+# (StoreSubscriptionDetail's call sites around line 269-293): "Test
+# Condition Value" can be stored as int, bool, double (valueReal), or
+# a string buffer depending on which ASN.1 IE choice the real
+# subscription used -- CheckReportingFlag's plain
+# std::any_cast<int>(value) only ever worked for one of those. This
+# adds a small helper using any_cast's pointer overload (returns
+# nullptr instead of throwing) to try int/double/bool in order, and
+# points CheckReportingFlag's "Test Condition Value" extraction at it.
+if [ -f "$MMWAVE_ENB_DEVICE_CC" ] && ! grep -q "AnyCastToInt_oran_ddos_patch" "$MMWAVE_ENB_DEVICE_CC"; then
+  if [ "$CHECK_ONLY" -eq 0 ]; then
+    echo "  -> agregando AnyCastToInt_oran_ddos_patch (bad_any_cast en Test Condition Value)..."
+    # Plain Python string ops instead of sed's a\ multi-line + & escaping
+    # -- that combination is fragile/ambiguous enough across sed
+    # versions that it's not worth risking on a patch this important.
+    python3 - "$MMWAVE_ENB_DEVICE_CC" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+
+anchor = 'NS_LOG_COMPONENT_DEFINE ("MmWaveEnbNetDevice");\n'
+helper = (
+    anchor
+    + "\n"
+    + "static int AnyCastToInt_oran_ddos_patch(const std::any& a, int def = 0)\n"
+    + "{\n"
+    + "  if (auto p = std::any_cast<int>(&a)) { return *p; }\n"
+    + "  if (auto p = std::any_cast<double>(&a)) { return static_cast<int>(*p); }\n"
+    + "  if (auto p = std::any_cast<bool>(&a)) { return *p ? 1 : 0; }\n"
+    + "  return def;\n"
+    + "}\n"
+)
+assert text.count(anchor) == 1, f"expected exactly one anchor match, found {text.count(anchor)}"
+text = text.replace(anchor, helper, 1)
+
+old_line = "        int threshold = std::any_cast<int>(value);\n"
+new_line = (
+    "        int threshold = AnyCastToInt_oran_ddos_patch(value);"
+    " // PATCHED (oran-multidomain-ddos-anycast): the real type behind value"
+    " varies (int, double, bool, or string) depending on which IE choice was"
+    " used when building the subscription; a plain any_cast<int> threw"
+    " bad_any_cast on every tick\n"
+)
+assert text.count(old_line) == 1, f"expected exactly one threshold-line match, found {text.count(old_line)}"
+text = text.replace(old_line, new_line, 1)
+
+with open(path, "w") as f:
+    f.write(text)
+PYEOF
+    if [ $? -eq 0 ] && grep -q "AnyCastToInt_oran_ddos_patch(value)" "$MMWAVE_ENB_DEVICE_CC"; then
+      ok "AnyCastToInt_oran_ddos_patch agregado y aplicado al threshold"
+    else
+      fail "el patch de any_cast no se aplicó completo -- revisa los textos ancla (NS_LOG_COMPONENT_DEFINE / la línea exacta de threshold) contra el archivo real"
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 5. mmwave-LENA-oran (ns-3 NR/5G-LENA fork)
 # ---------------------------------------------------------------------------
