@@ -359,6 +359,34 @@ else
   fail "no se encontró ${MMWAVE_ENB_DEVICE_CC} -- ¿está clonado ns-O-RAN-flexric? (ver paso 3)"
 fi
 
+# The shouldReport bypass above made zero observable difference on a
+# real run -- same immediate subscribe-then-unsubscribe, zero
+# indications sent. That whole block (bypass included) sits inside
+# `if (!sub_map.empty())`, itself inside `if (!m_stopSendingMessages &&
+# m_hasValidSubscription)`. KpmSubscriptionCallback reads the same
+# sub_map successfully moments earlier (the printed Action Definition
+# Format/Test Condition fields come from it) -- so either sub_map goes
+# empty by the time this LATER, separately-scheduled call runs, or
+# m_hasValidSubscription/m_stopSendingMessages aren't what we assume.
+# Diagnostic print to find out which, independent of the bypass patch
+# above (separate idempotency marker).
+if [ -f "$MMWAVE_ENB_DEVICE_CC" ] && ! grep -q "PATCHED-DIAG" "$MMWAVE_ENB_DEVICE_CC"; then
+  if [ "$CHECK_ONLY" -eq 0 ]; then
+    echo "  -> agregando print de diagnóstico en CheckReportingFlag..."
+    # Tolerates either "SubscriptionMapRef();" or "SubscriptionMapRef ();"
+    # -- not certain which spacing the real file uses. Matches inside
+    # both KpmSubscriptionCallback and CheckReportingFlag (same line
+    # appears in both); printing from both is harmless extra signal,
+    # not a bug, since we want to compare sub_map.size() across both.
+    sed -i '/const auto &sub_map = m_e2term->SubscriptionMapRef *();/a\      std::cout << "[PATCHED-DIAG] sub_map.size()=" << sub_map.size() << " m_hasValidSubscription=" << m_hasValidSubscription << " m_stopSendingMessages=" << m_stopSendingMessages << std::endl;' "$MMWAVE_ENB_DEVICE_CC"
+    if grep -q "PATCHED-DIAG" "$MMWAVE_ENB_DEVICE_CC"; then
+      ok "print de diagnóstico agregado"
+    else
+      fail "el print de diagnóstico no se insertó -- el texto ancla ('const auto &sub_map = m_e2term->SubscriptionMapRef ();') puede no coincidir exactamente (revisa espacios/paréntesis en el archivo real)"
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 5. mmwave-LENA-oran (ns-3 NR/5G-LENA fork)
 # ---------------------------------------------------------------------------
