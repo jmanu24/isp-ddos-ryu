@@ -387,6 +387,32 @@ if [ -f "$MMWAVE_ENB_DEVICE_CC" ] && ! grep -q "PATCHED-DIAG" "$MMWAVE_ENB_DEVIC
   fi
 fi
 
+# Confirmed from the real file (pasted by the user): no exception ever
+# gets thrown/caught inside CheckReportingFlag's try block (zero
+# "Error checking PRB usage" lines across a full run with ~45
+# sub_map.size()=10 ticks), and BuildAndSendReportMessage is only ever
+# called ONCE per subscription anyway -- the very first time
+# currentPrbAvg becomes >= 0 (the "else" branch's call is commented
+# out, despite its comment saying "keep sending reports"; that's
+# upstream's existing code, not something we touched). With
+# MAX_PRB_HISTORY=10 and ~45 ticks observed in a 20-25s run,
+# currentPrbAvg should go >= 0 well before the run ends -- yet zero
+# indications ever reached the xApp. These two prints narrow down
+# whether currentPrbAvg ever actually goes non-negative, and whether
+# BuildAndSendReportMessage is reached at all.
+if [ -f "$MMWAVE_ENB_DEVICE_CC" ] && ! grep -q "PATCHED-DIAG2" "$MMWAVE_ENB_DEVICE_CC"; then
+  if [ "$CHECK_ONLY" -eq 0 ]; then
+    echo "  -> agregando prints de diagnóstico para currentPrbAvg / BuildAndSendReportMessage..."
+    sed -i '/double currentPrbAvg = CalculatePrbAverage();/a\          std::cout << "[PATCHED-DIAG2] currentPrbAvg=" << currentPrbAvg << std::endl;' "$MMWAVE_ENB_DEVICE_CC"
+    sed -i '/^[[:space:]]*BuildAndSendReportMessage(m_lastSubscriptionParams);[[:space:]]*$/i\              std::cout << "[PATCHED-DIAG2] calling BuildAndSendReportMessage" << std::endl;' "$MMWAVE_ENB_DEVICE_CC"
+    if grep -q "PATCHED-DIAG2" "$MMWAVE_ENB_DEVICE_CC"; then
+      ok "prints de diagnóstico (currentPrbAvg / BuildAndSendReportMessage) agregados"
+    else
+      fail "los prints de diagnóstico no se insertaron -- revisa los textos ancla contra el archivo real"
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 5. mmwave-LENA-oran (ns-3 NR/5G-LENA fork)
 # ---------------------------------------------------------------------------
