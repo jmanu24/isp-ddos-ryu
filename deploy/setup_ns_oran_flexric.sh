@@ -320,12 +320,50 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 4b. Patch: MmWaveEnbNetDevice::CheckReportingFlag siempre reporta
+# ---------------------------------------------------------------------------
+
+echo "== 4b. Patch: bypass del umbral de PRB en CheckReportingFlag =="
+
+MMWAVE_DIR="${ORAN_FLEXRIC_DIR}/mmwave-LENA-oran"
+MMWAVE_ENB_DEVICE_CC="${MMWAVE_DIR}/src/mmwave/model/mmwave-enb-net-device.cc"
+
+# Confirmed empirically: ns-3's KpmFunctionDescription only advertises
+# RIC Report Style 4 (condition-based) -- there is no Style 5
+# (periodic) to subscribe to instead. Style 4's CheckReportingFlag()
+# only calls BuildAndSendReportMessage() once a PRB-average threshold
+# (chosen by whichever xApp subscribes, e.g. xapp_kpm_moni's default)
+# is crossed -- with our scenario's modest test traffic, that threshold
+# never crossed, so FlexRIC never received a single E2 INDICATION even
+# though the E2 SETUP/RIC SUBSCRIPTION handshake succeeded for real.
+# This proposal needs continuous monitoring, not a condition-triggered
+# alert, so the threshold check is bypassed here -- a deliberate local
+# patch to our own checkout, not upstream's intended behavior.
+if [ -f "$MMWAVE_ENB_DEVICE_CC" ]; then
+  if grep -q "PATCHED (oran-multidomain-ddos)" "$MMWAVE_ENB_DEVICE_CC"; then
+    ok "CheckReportingFlag ya está parcheado"
+  else
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      fail "CheckReportingFlag sin parchear -- corre sin --check-only"
+    else
+      echo "  -> parcheando CheckReportingFlag para reportar sin esperar el umbral de PRB..."
+      sed -i 's#if (shouldReport)#if (1) // PATCHED (oran-multidomain-ddos): always report once subscribed; bypasses the PRB threshold since this proposal needs continuous monitoring, not condition-triggered alerts#' "$MMWAVE_ENB_DEVICE_CC"
+      if grep -q "PATCHED (oran-multidomain-ddos)" "$MMWAVE_ENB_DEVICE_CC"; then
+        ok "CheckReportingFlag parcheado"
+      else
+        fail "el patch no se aplicó -- revisa si mmwave-enb-net-device.cc cambió de forma upstream"
+      fi
+    fi
+  fi
+else
+  fail "no se encontró ${MMWAVE_ENB_DEVICE_CC} -- ¿está clonado ns-O-RAN-flexric? (ver paso 3)"
+fi
+
+# ---------------------------------------------------------------------------
 # 5. mmwave-LENA-oran (ns-3 NR/5G-LENA fork)
 # ---------------------------------------------------------------------------
 
 echo "== 5. mmwave-LENA-oran (módulo NR, NO el lte clásico) =="
-
-MMWAVE_DIR="${ORAN_FLEXRIC_DIR}/mmwave-LENA-oran"
 
 if [ ! -x "${MMWAVE_DIR}/ns3" ]; then
   fail "se omite la configuración/build -- ${MMWAVE_DIR}/ns3 no existe o no es ejecutable (ver paso 3)"
