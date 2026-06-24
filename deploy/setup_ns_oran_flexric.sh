@@ -227,16 +227,20 @@ if is_valid_flexric_tree; then
       fail "FlexRIC no está compilado todavía -- corre sin --check-only"
     fi
   else
-    mkdir -p "${FLEXRIC_DIR}/build"
     # A build/ left over from before asn1c was installed has
     # ASN1C_EXEC_PATH cached as NOTFOUND -- CMake won't re-run
     # find_program for an already-cached variable, so that stale value
-    # would otherwise survive a plain re-configure.
+    # would otherwise survive a plain re-configure. Surgically deleting
+    # just that cache line is fragile (CMakeCache.txt from a configure
+    # that itself errored out partway can already be malformed, and
+    # sed-ing it further only compounds that) -- wiping build/ and
+    # reconfiguring clean is slower but actually reliable.
     if [ -f "${FLEXRIC_DIR}/build/CMakeCache.txt" ] \
        && grep -q "ASN1C_EXEC_PATH.*NOTFOUND" "${FLEXRIC_DIR}/build/CMakeCache.txt" 2>/dev/null; then
-      echo "  -> limpiando caché stale de ASN1C_EXEC_PATH (de antes de instalar asn1c)..."
-      sed -i '/ASN1C_EXEC_PATH/d' "${FLEXRIC_DIR}/build/CMakeCache.txt"
+      echo "  -> build/ tiene ASN1C_EXEC_PATH cacheado como NOTFOUND (de antes de instalar asn1c) -- reconfigurando limpio..."
+      rm -rf "${FLEXRIC_DIR}/build"
     fi
+    mkdir -p "${FLEXRIC_DIR}/build"
     (
       cd "${FLEXRIC_DIR}/build"
       CC=gcc-13 CXX=g++-13 "$CMAKE_BIN" .. -DE2AP_VERSION=E2AP_V1 -DKPM_VERSION=KPM_V3_00
