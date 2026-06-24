@@ -246,7 +246,16 @@ main(int argc, char *argv[])
         {
           std::cout << "[test_oran_e2_logging] starting E2Termination for gNB device "
                     << i << std::endl;
-          e2term->Start();
+          // Scheduled, not called immediately: FlexRIC's nearRT-RIC
+          // crashed on the first attempt (assert "E2 Node with no RAN
+          // functions??") because the E2 SETUP-REQUEST went out with
+          // zero RAN functions registered. SetE2Termination() (the
+          // real setter behind the "E2Termination" attribute) likely
+          // registers the KPM function description on its own
+          // schedule, possibly inside DoInitialize() at simulation
+          // time 0 -- calling Start() synchronously here, BEFORE
+          // Simulator::Run() even begins, may be racing ahead of that.
+          Simulator::Schedule(MilliSeconds(200), &E2Termination::Start, e2term);
         }
       else
         {
