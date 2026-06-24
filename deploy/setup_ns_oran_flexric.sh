@@ -68,7 +68,7 @@ fail() { echo "  [FAIL] $1" >&2; PROBLEMS=$((PROBLEMS + 1)); }
 
 echo "== 1. Dependencias de build (FlexRIC + e2sim-kpmv3) =="
 
-FLEXRIC_APT_PKGS="build-essential git cmake libsctp-dev autoconf automake libtool bison flex libboost-all-dev python3.8"
+FLEXRIC_APT_PKGS="build-essential git cmake python3-pip libsctp-dev autoconf automake libtool bison flex libboost-all-dev python3.8"
 MISSING_PKGS=""
 for pkg in $FLEXRIC_APT_PKGS; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
@@ -109,6 +109,44 @@ else
       ok "g++-13 instalado"
     else
       fail "g++-13 sigue sin estar disponible tras instalar el PPA"
+    fi
+  fi
+fi
+
+echo "== 1c. cmake reciente (oie-ric-taap-xapps necesita >=3.19, apt en 20.04 trae 3.16) =="
+
+# examples/xApp/c/monitor/RRC_MESSAGES/CMakeLists.txt does
+# add_library(asn1_nr_rrc_hdrs INTERFACE \${nr_rrc_headers}) -- passing
+# header sources to an INTERFACE library, which CMake only allows since
+# 3.19. The branch's own cmake_minimum_required(VERSION 3.16) is wrong/
+# stale for this — not a mistake on our side. Installed via pip3 --user
+# instead of touching the system cmake package, since e2sim-kpmv3 and
+# mmwave-LENA-oran's own builds are fine with whatever's already there.
+CMAKE_BIN="cmake"
+CMAKE_MIN_VERSION="3.19"
+
+version_ge() { [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -n1)" = "$2" ]; }
+
+if command -v cmake >/dev/null 2>&1; then
+  SYSTEM_CMAKE_VERSION="$(cmake --version | head -1 | awk '{print $3}')"
+else
+  SYSTEM_CMAKE_VERSION=""
+fi
+
+if [ -n "$SYSTEM_CMAKE_VERSION" ] && version_ge "$SYSTEM_CMAKE_VERSION" "$CMAKE_MIN_VERSION"; then
+  ok "cmake del sistema (${SYSTEM_CMAKE_VERSION}) ya alcanza"
+else
+  warn "cmake del sistema (${SYSTEM_CMAKE_VERSION:-no encontrado}) es menor a ${CMAKE_MIN_VERSION}"
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    fail "instala un cmake >= ${CMAKE_MIN_VERSION} -- corre sin --check-only (se instala vía pip3 --user, sin tocar el del sistema)"
+  else
+    echo "  -> instalando cmake reciente vía pip3 --user..."
+    pip3 install --user --upgrade "cmake>=3.22" --quiet
+    CMAKE_BIN="$HOME/.local/bin/cmake"
+    if [ -x "$CMAKE_BIN" ]; then
+      ok "cmake $("$CMAKE_BIN" --version | head -1 | awk '{print $3}') instalado en ${CMAKE_BIN}"
+    else
+      fail "no se pudo instalar un cmake reciente vía pip3 --user"
     fi
   fi
 fi
@@ -155,7 +193,7 @@ if is_valid_flexric_tree; then
     mkdir -p "${FLEXRIC_DIR}/build"
     (
       cd "${FLEXRIC_DIR}/build"
-      CC=gcc-13 CXX=g++-13 cmake .. -DE2AP_VERSION=E2AP_V1 -DKPM_VERSION=KPM_V3_00
+      CC=gcc-13 CXX=g++-13 "$CMAKE_BIN" .. -DE2AP_VERSION=E2AP_V1 -DKPM_VERSION=KPM_V3_00
       make -j "$JOBS"
       sudo make install
     )
