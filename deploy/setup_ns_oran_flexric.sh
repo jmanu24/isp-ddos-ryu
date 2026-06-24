@@ -335,6 +335,18 @@ else
       fail "mmwave-LENA-oran no está configurado/compilado todavía -- corre sin --check-only"
     fi
   else
+    # scratch/orange-rf-channel-reconfiguration.cc (one of the repo's
+    # own bundled examples, not anything we need) is missing two
+    # standard includes -- ./ns3 build builds every scratch example
+    # unconditionally, so this one upstream bug otherwise fails the
+    # whole build even though every actual library (oran-interface,
+    # mmwave, nr, sionna, ...) compiles fine on its own.
+    BROKEN_SCRATCH="${MMWAVE_DIR}/scratch/orange-rf-channel-reconfiguration.cc"
+    if [ -f "$BROKEN_SCRATCH" ] && ! grep -q "#include <iomanip>" "$BROKEN_SCRATCH"; then
+      echo "  -> parcheando includes faltantes en $(basename "$BROKEN_SCRATCH")..."
+      sed -i '1i #include <iomanip>\n#include <sys/time.h>' "$BROKEN_SCRATCH"
+    fi
+
     ( cd "$MMWAVE_DIR" && ./ns3 configure && ./ns3 build -j "$JOBS" )
     ok "mmwave-LENA-oran configurado y compilado"
   fi
