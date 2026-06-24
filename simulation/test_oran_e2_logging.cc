@@ -221,6 +221,41 @@ main(int argc, char *argv[])
   mmwaveHelper->AddX2Interface(lteEnbNodes, mmWaveEnbNodes);
   mmwaveHelper->AttachToClosestEnb(mcUeDevs, mmWaveEnbDevs, lteEnbDevs);
 
+  // MmWaveHelper::InstallSingleEnbDevice constructs and attaches an
+  // E2Termination (+ E2PdcpCalculator/E2RlcCalculator/E2DuCalculator)
+  // automatically when E2ModeNr=true, but NEVER calls Start() on it --
+  // confirmed by enabling NS_LOG="E2Termination=info" against a real
+  // build and seeing nothing. Pull the object back out via its
+  // gettable PointerValue attribute and start it ourselves.
+  //
+  // Also confirmed missing: EnableE2PdcpTraces()/EnableE2RlcTraces()
+  // get called internally, but the DU/PHY side (E2DuCalculator reuses
+  // m_phyStats, an MmWavePhyTrace) is never wired to real trace
+  // sources unless EnableDlPhyTrace()/EnableEnbSchedTrace() are called
+  // explicitly -- the likely cause of every DU stat reading 0 in the
+  // first test run.
+  mmwaveHelper->EnableDlPhyTrace();
+  mmwaveHelper->EnableEnbSchedTrace();
+
+  for (uint32_t i = 0; i < mmWaveEnbDevs.GetN(); ++i)
+    {
+      PointerValue ptr;
+      mmWaveEnbDevs.Get(i)->GetAttribute("E2Termination", ptr);
+      Ptr<E2Termination> e2term = ptr.Get<E2Termination>();
+      if (e2term)
+        {
+          std::cout << "[test_oran_e2_logging] starting E2Termination for gNB device "
+                    << i << std::endl;
+          e2term->Start();
+        }
+      else
+        {
+          std::cout << "[test_oran_e2_logging] WARNING: no E2Termination attribute on "
+                    << "gNB device " << i << " -- E2ModeNr probably isn't taking effect"
+                    << std::endl;
+        }
+    }
+
   // --- Our own UL tracker ---
   UplinkTracker ulTracker("ue_ul_traffic.csv", MilliSeconds(500));
   for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
