@@ -149,7 +149,15 @@ main(int argc, char *argv[])
   Config::SetDefault("ns3::MmWaveEnbNetDevice::E2Periodicity", DoubleValue(0.1));
   Config::SetDefault("ns3::MmWaveEnbNetDevice::KPM_E2functionID", DoubleValue(2));
   Config::SetDefault("ns3::MmWaveEnbNetDevice::RC_E2functionID", DoubleValue(3));
-  Config::SetDefault("ns3::MmWaveEnbNetDevice::EnableE2FileLogging", BooleanValue(true));
+  // false, not true: confirmed SetE2Termination() only calls
+  // RegisterKpmCallbackToE2Sm/RegisterSmCallbackToE2Sm/
+  // RegisterCallbackFunctionToE2Sm when m_forceE2FileLogging is
+  // false -- the two modes are mutually exclusive in this codebase.
+  // With it true (the first two test runs), the E2 SETUP-REQUEST went
+  // out with zero registered RAN functions, crashing FlexRIC's
+  // nearRT-RIC. This run trades the CSV output for a real, subscribable
+  // KPM function -- verify against a real xApp (xapp_kpm_moni) instead.
+  Config::SetDefault("ns3::MmWaveEnbNetDevice::EnableE2FileLogging", BooleanValue(false));
 
   // --- Topology — mirrors scratch/scenario-zero.cc's verified calls ---
   Ptr<MmWaveHelper> mmwaveHelper = CreateObject<MmWaveHelper>();
