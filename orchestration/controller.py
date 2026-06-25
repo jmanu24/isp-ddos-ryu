@@ -1,6 +1,6 @@
+import logging
 import time
 from collections import defaultdict
-from datetime import datetime
 from typing import Dict, List, Tuple
 
 import config.settings as settings
@@ -53,19 +53,24 @@ class OrchestrationController:
 
     def __init__(
         self, adapters: List[DomainAdapter], locate_host=None,
-        locate_source_ingress=None, yield_fn=None,
+        locate_source_ingress=None, yield_fn=None, logger=None,
     ):
         # Index adapters by domain name for O(1) dispatch
         self._adapters: Dict[str, DomainAdapter] = {
             a.domain_name: a for a in adapters
         }
         self._decision_engine = DecisionEngine()
+        # Passed down from the Ryu app (its own self.logger) so every log
+        # line across domains shares the same name/format -- defaults to
+        # a plain logging.Logger so this stays usable standalone (tests,
+        # no Ryu runtime).
+        self._logger = logger or logging.getLogger(__name__)
         # yield_fn (e.g. ryu.lib.hub.sleep(0)) is threaded through to
         # OpenFlowMitigator so its forwarding-rule cleanup loop — which can
         # run into thousands of iterations under a distributed attack —
         # cooperatively yields instead of starving every other greenthread
         # (including each switch's own echo-reply loop) for the duration.
-        self.of_mitigator = OpenFlowMitigator(yield_fn=yield_fn)
+        self.of_mitigator = OpenFlowMitigator(yield_fn=yield_fn, logger=self._logger)
 
         # Optional Callable[[ip], Optional[Tuple[int,int]]] — (dpid, port)
         # an IP's mac was last confirmed attached to via a genuine edge
@@ -417,7 +422,7 @@ class OrchestrationController:
         if action.domain == "mobile" and action.action == "block":
             # Mirrors the openflow branch above: dedupe so an attack
             # that's still ongoing doesn't re-queue a fresh RC command
-            # (and re-log "MITIGACION") every single pipeline cycle —
+            # (and re-log "MITIGATION") every single pipeline cycle —
             # check_mobile_unblocks() is what eventually clears this once
             # the UE's reported throughput actually drops.
             key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
@@ -438,11 +443,7 @@ class OrchestrationController:
         if adapter:
             adapter.apply_mitigation(action)
         else:
-            print(
-                f"{datetime.now():%Y-%m-%d %H:%M:%S} "
-                f"[ORCHESTRATION] No adapter registered "
-                f"for domain '{action.domain}'"
-            )
+            self._logger.error("No adapter registered for domain '%s'", action.domain)
 
         return True
 
@@ -472,7 +473,7 @@ class OrchestrationController:
     def is_active_block(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> bool:
         """
         True if this exact (src_ip, dst_ip, dst_port, protocol) already
-        has an active block. Used to skip re-logging "ATAQUE DETECTADO"
+        has an active block. Used to skip re-logging "ATTACK DETECTED"
         every cycle for an attack that's already known and being
         handled — DDOS_DISTRIBUTED detections always carry src_ip="*",
         which directly matches the literal key stored for it (one entry
@@ -658,7 +659,7 @@ class OrchestrationController:
     # Unblocking — driven by the current volume of each blocked flow
     # ------------------------------------------------------------------
 
-    def check_unblocks(self) -> None:
+    def check_unblocks(self) -> List[MitigationAction]:
         """
         Re-evaluate every active openflow block. A block is released once
         its drop rule's own pps (see record_block_traffic — telemetry from
@@ -668,9 +669,17 @@ class OrchestrationController:
         triggering threshold for UNBLOCK_CONFIRM_CYCLES consecutive
         cycles — i.e. once the controller no longer "feels" the attack,
         confirmed rather than on a single quiet sample.
+
+        Returns the unblock MitigationActions issued this cycle (empty if
+        none) instead of logging them itself — the caller (ryu_controller_2.
+        py's _run_pipeline) folds them into the same MITIGATION dashboard/
+        logger line every other domain's actions go through, the same
+        pattern check_mobile_unblocks() uses.
         """
         if not self._active_blocks:
-            return
+            return []
+
+        unblock_actions: List[MitigationAction] = []
 
         for key in list(self._active_blocks):
             src_ip, dst_ip, dst_port, protocol = key
@@ -689,7 +698,20 @@ class OrchestrationController:
             self._below_threshold_streak[key] += 1
 
             if self._below_threshold_streak[key] >= self.UNBLOCK_CONFIRM_CYCLES:
+                attack_type = self._active_blocks[key].attack_type
+
                 self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
+                unblock_actions.append(MitigationAction(
+                    domain="openflow",
+                    device_id="",
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    protocol=protocol,
+                    action="unblock",
+                    attack_type=attack_type,
+                ))
+
                 del self._active_blocks[key]
                 del self._below_threshold_streak[key]
                 self._forget_block_traffic(key)
@@ -698,6 +720,8 @@ class OrchestrationController:
                 # attack shouldn't get its forwarding rules trusted again
                 # without going through at least one more clean cycle.
                 self._validated_destinations.discard(dst_ip)
+
+        return unblock_actions
 
     def check_mobile_unblocks(self, correlated: List[CorrelatedEvent]) -> List[MitigationAction]:
         """
@@ -724,7 +748,7 @@ class OrchestrationController:
 
         Returns the unblock MitigationActions issued this cycle (empty if
         none) instead of logging them itself — the caller (ryu_controller_2.
-        py's _run_pipeline) folds them into the same MITIGACION dashboard/
+        py's _run_pipeline) folds them into the same MITIGATION dashboard/
         logger line every other domain's actions go through, so mobile
         unblocks read exactly like an openflow one instead of a separate,
         differently-formatted message.

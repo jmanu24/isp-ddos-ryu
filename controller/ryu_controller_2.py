@@ -89,6 +89,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             ),
             is_validated=lambda dst_ip: self.orchestrator.is_validated_destination(dst_ip),
             is_interswitch_port=lambda dpid, port: self.orchestrator.is_interswitch_port(dpid, port),
+            logger=self.logger,
         )
 
         # ── Stage 1: Telemetry Collection ────────────────────────────
@@ -100,7 +101,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         # other three remain stubs.
         self.all_adapters = [
             self.of_adapter,
-            MobileNetworkAdapter(),
+            MobileNetworkAdapter(logger=self.logger),
             BroadbandAdapter(),          # stub — wire up bng_host later
             EnterpriseAdapter(),         # stub — wire up pe_host later
             BGPPeeringAdapter(),         # stub — wire up router_host later
@@ -114,6 +115,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             locate_host=self.forwarding.get_host_location,
             locate_source_ingress=self.of_adapter.get_source_ingress,
             yield_fn=lambda: hub.sleep(0),
+            logger=self.logger,
         )
 
         # ── Monitoring loop ───────────────────────────────────────────
@@ -122,7 +124,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         # ── Web dashboard ─────────────────────────────────────────────
         threading.Thread(target=start_server, daemon=True).start()
 
-        self.logger.info("FlowStats IDS iniciado")
+        self.logger.info("FlowStats IDS started")
 
     # ------------------------------------------------------------------
     # TOPOLOGY
@@ -174,22 +176,22 @@ class FlowStatsIDS(app_manager.RyuApp):
 
     @set_ev_cls(event.EventSwitchEnter)
     def switch_enter_handler(self, ev):
-        dashboard_state.add_event("Switch agregado a topologia")
+        dashboard_state.add_event("Switch added to topology")
         self._update_topology()
 
     @set_ev_cls(event.EventSwitchLeave)
     def switch_leave_handler(self, ev):
-        dashboard_state.add_event("Switch removido de topologia")
+        dashboard_state.add_event("Switch removed from topology")
         self._update_topology()
 
     @set_ev_cls(event.EventLinkAdd)
     def link_add_handler(self, ev):
-        dashboard_state.add_event("Nuevo enlace detectado")
+        dashboard_state.add_event("New link detected")
         self._update_topology()
 
     @set_ev_cls(event.EventLinkDelete)
     def link_delete_handler(self, ev):
-        dashboard_state.add_event("Enlace eliminado")
+        dashboard_state.add_event("Link removed")
         self._update_topology()
 
     # ------------------------------------------------------------------
@@ -209,10 +211,10 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.orchestrator.register_datapath(datapath)
 
         dashboard_state.add_switch(datapath.id)
-        dashboard_state.add_event(f"Switch conectado: {datapath.id}")
+        dashboard_state.add_event(f"Switch connected: {datapath.id}")
         emit_update()
 
-        self.logger.info("Switch conectado: %s", datapath.id)
+        self.logger.info("Switch connected: %s", datapath.id)
 
     # ------------------------------------------------------------------
     # PACKET IN
@@ -280,16 +282,16 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Release blocks whose flow volume has died down — driven by the
         # drop rules' own counters (sampled in flow_stats_reply_handler),
         # not by `correlated`, since a blocked flow's packets never reach
-        # this pipeline's telemetry again.
-        self.orchestrator.check_unblocks()
+        # this pipeline's telemetry again. Returned (not logged internally)
+        # so it goes through the same MITIGATION dashboard/logger line as
+        # every other domain's actions below.
+        openflow_unblock_actions = self.orchestrator.check_unblocks()
 
         # Mobile-domain blocks unblock off this cycle's own telemetry
         # instead (see check_mobile_unblocks's docstring) -- a RAN-side
         # throttle doesn't make the UE's traffic vanish from `correlated`
-        # the way an openflow drop rule does. Returned (not logged
-        # internally) so it goes through the same MITIGACION dashboard/
-        # logger line as every other domain's actions below, instead of
-        # its own separately-formatted message.
+        # the way an openflow drop rule does. Same return-don't-log
+        # convention as openflow_unblock_actions above.
         mobile_unblock_actions = self.orchestrator.check_mobile_unblocks(correlated)
 
         # Stage 3 — detect attack types. Low-and-slow is checked
@@ -338,8 +340,8 @@ class FlowStatsIDS(app_manager.RyuApp):
                 continue
 
             msg = (
-                f"ATAQUE DETECTADO: {d.attack_type} "
-                f"origen={d.src_ip} destino={d.dst_ip}:{d.dst_port}/{d.protocol} "
+                f"ATTACK DETECTED: {d.attack_type} "
+                f"source={d.src_ip} destination={d.dst_ip}:{d.dst_port}/{d.protocol} "
                 f"[{d.domain}]"
             )
             dashboard_state.add_event(msg)
@@ -351,21 +353,23 @@ class FlowStatsIDS(app_manager.RyuApp):
         # gets validated.
         self.orchestrator.validate(correlated, detections)
 
+        unblock_actions = openflow_unblock_actions + mobile_unblock_actions
+
         # Stages 4 + 5 — decide and orchestrate. A cycle can have no new
         # detections (the attack that triggered a block already stopped)
-        # and still have a mobile unblock to report, so the early return
-        # only applies when there's neither.
-        if not detections and not mobile_unblock_actions:
+        # and still have unblocks to report, so the early return only
+        # applies when there's neither.
+        if not detections and not unblock_actions:
             return
 
         actions = self.orchestrator.process(detections) if detections else []
-        actions += mobile_unblock_actions
+        actions += unblock_actions
 
         # Reflect mitigations in the dashboard
         for action in actions:
             msg = (
-                f"MITIGACION: {action.action.upper()} ({action.attack_type}) "
-                f"origen={action.src_ip} destino={action.dst_ip}:{action.dst_port}/{action.protocol} "
+                f"MITIGATION: {action.action.upper()} ({action.attack_type}) "
+                f"source={action.src_ip} destination={action.dst_ip}:{action.dst_port}/{action.protocol} "
                 f"[{action.domain}]"
             )
             dashboard_state.add_event(msg)

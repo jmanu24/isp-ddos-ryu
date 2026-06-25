@@ -1,5 +1,6 @@
 import csv
 import json
+import logging
 import os
 from typing import Dict, List, Optional
 
@@ -71,9 +72,15 @@ class MobileNetworkAdapter(DomainAdapter):
         kpm_csv_path: str = DEFAULT_KPM_CSV_PATH,
         rc_command_queue_path: str = DEFAULT_RC_COMMAND_QUEUE_PATH,
         ue_ip_map: Optional[Dict[int, str]] = None,
+        logger: Optional[logging.Logger] = None,
     ):
         self.kpm_csv_path = kpm_csv_path
         self.rc_command_queue_path = rc_command_queue_path
+        # Passed down from the Ryu app (its own self.logger) so every log
+        # line across domains shares the same name/format -- defaults to
+        # a plain logging.Logger so this stays usable standalone (tests,
+        # no Ryu runtime).
+        self._logger = logger or logging.getLogger(__name__)
         # An explicitly-passed map (tests, callers with their own source
         # of truth) is used as-is, never reloaded. Otherwise this
         # adapter watches config/ue_ip_map.csv's mtime and reloads it on
@@ -187,9 +194,10 @@ class MobileNetworkAdapter(DomainAdapter):
         # flooding) -- see _row_to_event's src_ip/dst_ip comment.
         imsi = self._imsi_for_ip(action.src_ip)
         if imsi is None:
-            print(
-                f"[MOBILE] cannot resolve src_ip {action.src_ip} back to an "
-                f"IMSI -- ue_ip_map.csv may be out of date for this run"
+            self._logger.warning(
+                "Cannot resolve src_ip %s back to an IMSI -- "
+                "ue_ip_map.csv may be out of date for this run",
+                action.src_ip,
             )
             return False
 
@@ -204,7 +212,7 @@ class MobileNetworkAdapter(DomainAdapter):
             f.write(json.dumps(command) + "\n")
 
         # No print here -- OrchestrationController already reports this
-        # action through the same MITIGACION dashboard/logger line every
+        # action through the same MITIGATION dashboard/logger line every
         # other domain's actions go through (ryu_controller_2.py's
         # _run_pipeline), so a second, differently-formatted message here
         # would just be noise. Real E2SM-RC delivery to the Near-RT RIC
