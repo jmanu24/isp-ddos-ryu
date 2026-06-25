@@ -29,12 +29,13 @@ from typing import Dict
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "config" / "ue_ip_map.csv"
 
 
-def load_ue_ip_map(path: Path = DEFAULT_PATH) -> Dict[int, str]:
+def load_ue_ip_map(path=DEFAULT_PATH) -> Dict[int, str]:
     """
     Returns {imsi: ip}. Missing file is not an error -- MobileNetworkAdapter
     just won't be able to resolve any UE's events to a dst_ip until one is
     provided, same as any other not-yet-wired-up domain.
     """
+    path = Path(path)
     if not path.exists():
         return {}
 

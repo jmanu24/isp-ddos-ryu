@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
-from oran_bridge.ue_ip_map import load_ue_ip_map
+from oran_bridge.ue_ip_map import DEFAULT_PATH as DEFAULT_UE_IP_MAP_PATH, load_ue_ip_map
 
 DEFAULT_KPM_CSV_PATH = "/tmp/ddos_xapp_events.csv"
 DEFAULT_RC_COMMAND_QUEUE_PATH = "/tmp/oran_rc_commands.jsonl"
@@ -63,16 +63,42 @@ class MobileNetworkAdapter(DomainAdapter):
     ):
         self.kpm_csv_path = kpm_csv_path
         self.rc_command_queue_path = rc_command_queue_path
-        self._ue_ip_map = ue_ip_map if ue_ip_map is not None else load_ue_ip_map()
+        # An explicitly-passed map (tests, callers with their own source
+        # of truth) is used as-is, never reloaded. Otherwise this
+        # adapter watches config/ue_ip_map.csv's mtime and reloads it on
+        # change -- a long-running ryu-manager process previously cached
+        # whatever was on disk at __init__ time forever, silently
+        # ignoring a fresher mapping written by a telemetry source
+        # started later (confirmed: a live run kept resolving IMSIs
+        # against a stale map from hours earlier, dropping every event
+        # for an IMSI the old map didn't even have).
+        self._ue_ip_map_path = None if ue_ip_map is not None else DEFAULT_UE_IP_MAP_PATH
+        self._ue_ip_map_mtime: Optional[float] = None
+        self._ue_ip_map = ue_ip_map if ue_ip_map is not None else {}
+        if self._ue_ip_map_path is not None:
+            self._refresh_ue_ip_map()
         # Byte offset up to which kpm_csv_path has already been read --
         # collect() tails new rows only, same pattern as
         # parse_xapp_kpm_log.py's own follow().
         self._csv_read_offset = 0
 
+    def _refresh_ue_ip_map(self) -> None:
+        if self._ue_ip_map_path is None:
+            return
+        try:
+            mtime = os.path.getmtime(self._ue_ip_map_path)
+        except OSError:
+            return
+        if mtime != self._ue_ip_map_mtime:
+            self._ue_ip_map = load_ue_ip_map(self._ue_ip_map_path)
+            self._ue_ip_map_mtime = mtime
+
     def is_connected(self) -> bool:
         return os.path.exists(self.kpm_csv_path)
 
     def collect(self) -> List[TelemetryEvent]:
+        self._refresh_ue_ip_map()
+
         if not os.path.exists(self.kpm_csv_path):
             return []
 
@@ -140,6 +166,7 @@ class MobileNetworkAdapter(DomainAdapter):
         )
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
+        self._refresh_ue_ip_map()
         imsi = self._imsi_for_ip(action.dst_ip)
         if imsi is None:
             print(
