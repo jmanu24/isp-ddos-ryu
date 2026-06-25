@@ -76,7 +76,18 @@ class MobileNetworkAdapter(DomainAdapter):
         if not os.path.exists(self.kpm_csv_path):
             return []
 
-        events: List[TelemetryEvent] = []
+        # One event per IMSI per collect() call, not per CSV row: each
+        # row is a RATE sample (ul_thr_mbps), not a byte count to sum,
+        # and the source can write faster than this gets polled (e.g.
+        # ul_traffic_simulator.py's --tick vs. config/settings.py's
+        # COLLECT_INTERVAL). MultidomainCorrelator sums every event in
+        # a dst_ip bucket assuming they're concurrent flows -- handing
+        # it N accumulated rate samples for one UE would inflate that
+        # UE's apparent pps by ~N regardless of real traffic, including
+        # for perfectly benign UEs. Keeping only the most recent sample
+        # per IMSI is the correct fix at the source, not a downstream
+        # threshold tweak.
+        latest_by_imsi: dict = {}
 
         with open(self.kpm_csv_path, "r", newline="") as f:
             f.seek(self._csv_read_offset)
@@ -85,11 +96,16 @@ class MobileNetworkAdapter(DomainAdapter):
                 if len(row) != len(_CSV_COLUMNS):
                     continue
                 fields = dict(zip(_CSV_COLUMNS, row))
-                event = self._row_to_event(fields)
-                if event is not None:
-                    events.append(event)
+                imsi_raw = fields.get("imsi")
+                if imsi_raw is not None:
+                    latest_by_imsi[imsi_raw] = fields
             self._csv_read_offset = f.tell()
 
+        events: List[TelemetryEvent] = []
+        for fields in latest_by_imsi.values():
+            event = self._row_to_event(fields)
+            if event is not None:
+                events.append(event)
         return events
 
     def _row_to_event(self, fields: dict) -> Optional[TelemetryEvent]:
