@@ -506,6 +506,42 @@ PYEOF
   fi
 fi
 
+# Root cause of ALL 23 per-UE measurements still printing "Measurement
+# Name not yet supported" even after patching xapp_kpm_moni for the
+# .UEID suffix (confirmed: 0 matches, not just the unpatched 2):
+# MeasurementItem's constructor (contrib/oran-interface/model/
+# asn1c-types.cc, ~line 812) allocates the measurement name's OCTET
+# STRING buffer as `calloc(1, sizeof(OCTET_STRING))` -- the size of the
+# OCTET_STRING *struct* itself (a pointer + a size_t, ~16 bytes), NOT
+# `name.length()` bytes -- then memcpy's the full name (up to 28 bytes
+# for "CARR.PDSCHMCSDist.Bin1.UEID") into that too-small buffer. Every
+# measurement name longer than ~16 bytes overflows into adjacent heap
+# memory, corrupting whatever name FlexRIC actually receives -- which
+# is why no exact-string comparison on the receiving end could ever
+# match, regardless of which names that comparison knows about. The
+# exact same bug pattern exists a second time in kpm-indication.cc's
+# (unused on this path, but worth fixing for consistency) dead
+# "DRB.RlcSduDelayDl_Fake" code path.
+declare -a NAME_BUFFER_OVERFLOW_FILES=(
+  "${MMWAVE_DIR}/contrib/oran-interface/model/asn1c-types.cc"
+  "${MMWAVE_DIR}/contrib/oran-interface/model/kpm-indication.cc"
+)
+for f in "${NAME_BUFFER_OVERFLOW_FILES[@]}"; do
+  if [ -f "$f" ] && ! grep -q "PATCHED (oran-multidomain-ddos-namebuf)" "$f"; then
+    if [ "$CHECK_ONLY" -eq 0 ]; then
+      echo "  -> corrigiendo el tamano del buffer del nombre de medicion en $(basename "$f")..."
+      sed -i 's#m_measName->buf = (uint8_t \*) calloc (1, sizeof (OCTET_STRING));#m_measName->buf = (uint8_t *) calloc (name.length (), sizeof (uint8_t)); // PATCHED (oran-multidomain-ddos-namebuf): was calloc(1, sizeof(OCTET_STRING)), the size of that struct rather than the name length -- overflowing for any measurement name longer than about 16 bytes#' "$f"
+      if grep -q "PATCHED (oran-multidomain-ddos-namebuf)" "$f"; then
+        ok "buffer del nombre de medicion corregido en $(basename "$f")"
+      else
+        fail "el patch del buffer de nombre no se aplico en $(basename "$f") -- revisa el texto ancla contra el archivo real"
+      fi
+    fi
+  elif [ -f "$f" ]; then
+    ok "$(basename "$f") ya tiene el buffer del nombre de medicion corregido"
+  fi
+done
+
 # ---------------------------------------------------------------------------
 # 5. mmwave-LENA-oran (ns-3 NR/5G-LENA fork)
 # ---------------------------------------------------------------------------
