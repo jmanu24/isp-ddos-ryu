@@ -39,9 +39,13 @@ Caveats carried over from the rest of this proposal's investigation:
     data, not real ns-3 stats) happened to show non-zero UL PRB counts
     in this session's earlier smoke test. Verify against a real run
     before trusting RRU.PrbTotUl here.
-  - amf_ue_ngap_id is used as the "rnti" field below for lack of a
-    cleaner identifier in this text dump — it is NOT actually the RNTI,
-    just a stable per-UE id repeated across this UE's indications.
+  - amf_ue_ngap_id is decoded back into the real ns-3 IMSI via
+    oran_bridge/amf_ue_ngap_id.py (confirmed against real source: this
+    fork's FillUeID encodes the zero-padded 5-digit IMSI string's raw
+    ASCII bytes as a little-endian uint64, not a real 3GPP AMF-UE-NGAP-ID
+    — see that module's docstring for the full derivation, verified
+    against two real observed values from this session's own test run).
+    The CSV's "rnti" column holds that decoded IMSI, not an actual RNTI.
   - PRB counts are converted to a percentage using --max-prb (default
     273, a common NR 100MHz numerology max) since this log format
     doesn't carry the available-PRB denominator the way
@@ -52,9 +56,14 @@ Caveats carried over from the rest of this proposal's investigation:
 import argparse
 import csv
 import re
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Optional, TextIO
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from oran_bridge.amf_ue_ngap_id import amf_ue_ngap_id_to_imsi
 
 IND_HEADER_RE = re.compile(r"^\s*\d+\s+KPM ind_msg latency = \d+ \[\D+\]\s*$")
 UE_ID_RE = re.compile(r"^UE ID type = \w+, amf_ue_ngap_id = (\d+)\s*$")
@@ -109,7 +118,16 @@ class XappKpmLogParser:
             self._current_measurements = {}
             return None
 
-        record = {"rnti": self._current_rnti, **self._current_measurements}
+        try:
+            imsi = amf_ue_ngap_id_to_imsi(int(self._current_rnti))
+        except ValueError:
+            # Not our ns-3 fork's real encoding (e.g. running against
+            # FlexRIC's own emulator, which assigns amf_ue_ngap_id its
+            # own way) -- keep the raw value rather than fail the whole
+            # parse, but it isn't a real IMSI in that case.
+            imsi = self._current_rnti
+
+        record = {"rnti": imsi, **self._current_measurements}
         self._current_rnti = None
         self._current_measurements = {}
         return record
@@ -117,9 +135,10 @@ class XappKpmLogParser:
 
 def record_to_csv_row(record: dict, max_prb: int) -> str:
     """
-    Maps a parsed UE record onto oran_bridge/kpm_consumer.py's
-    DomainEvent CSV columns: timestamp,rnti,gnb_id,ul_thr_mbps,
-    prb_usage_pct,sinr_db,state.
+    Maps a parsed UE record onto telemetry/mobile_adapter.py's expected
+    CSV columns: timestamp,rnti,gnb_id,ul_thr_mbps,prb_usage_pct,sinr_db,
+    state. "rnti" here is the real IMSI (see _flush above) -- kept under
+    that column name for now since MobileNetworkAdapter reads it that way.
     """
     ul_thr_kbps = record.get("DRB.UEThpUl", 0.0)
     ul_thr_mbps = ul_thr_kbps / 1000.0

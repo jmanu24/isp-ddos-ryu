@@ -94,9 +94,13 @@ class FlowStatsIDS(app_manager.RyuApp):
         # ── Stage 1: Telemetry Collection ────────────────────────────
         self.of_adapter = OpenFlowAdapter(is_host_port=self.forwarding.is_host_port)
 
-        all_adapters = [
+        # MobileNetworkAdapter is real now (real E2/KPM pipeline via
+        # simulation/parse_xapp_kpm_log.py's output CSV — see that
+        # module and telemetry/mobile_adapter.py's docstring). The
+        # other three remain stubs.
+        self.all_adapters = [
             self.of_adapter,
-            MobileNetworkAdapter(),      # stub — wire up ric_endpoint later
+            MobileNetworkAdapter(),
             BroadbandAdapter(),          # stub — wire up bng_host later
             EnterpriseAdapter(),         # stub — wire up pe_host later
             BGPPeeringAdapter(),         # stub — wire up router_host later
@@ -106,7 +110,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.correlator  = MultidomainCorrelator()
         self.detector    = DDoSDetectionEngine()
         self.orchestrator = OrchestrationController(
-            all_adapters,
+            self.all_adapters,
             locate_host=self.forwarding.get_host_location,
             locate_source_ingress=self.of_adapter.get_source_ingress,
             yield_fn=lambda: hub.sleep(0),
@@ -257,8 +261,17 @@ class FlowStatsIDS(app_manager.RyuApp):
         Stage 4  Decision Engine          — threshold + weighting
         Stage 5  Orchestration & Control  — dispatch mitigation actions
         """
-        # Stage 1 — collect from OpenFlow adapter (others return [] for now)
-        all_events = self.of_adapter.collect()
+        # Stage 1 — collect from every registered domain adapter (stubs
+        # return [] until wired up; MobileNetworkAdapter is real now).
+        # Isolated per-adapter so one domain failing (e.g. its CSV not
+        # existing yet, or a stub's TODO path) doesn't take down the
+        # whole pipeline cycle for every other domain.
+        all_events = []
+        for adapter in self.all_adapters:
+            try:
+                all_events.extend(adapter.collect())
+            except Exception as e:
+                self.logger.error("Telemetry collect error (%s): %s", adapter.domain_name, e)
 
         # Stage 2 — correlate across domains
         self.correlator.ingest(all_events)
