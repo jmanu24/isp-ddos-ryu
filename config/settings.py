@@ -1,5 +1,15 @@
 FLOW_WINDOW = 20
-COLLECT_INTERVAL = 5
+
+# Pipeline cadence (controller/ryu_controller_2.py's _monitor loop): how
+# often the full collect -> correlate -> detect -> decide -> mitigate
+# pipeline runs. Lowered from 5s to get sub-second detection latency for
+# the mobile-domain UE-throttle tests -- run ul_traffic_simulator.py with
+# --tick at or below this value too, otherwise the controller can poll
+# faster than fresh attack-magnitude samples actually land in the CSV.
+# NOTE: still >= MIN_FLOW_RATE_DT (below) so openflow's own flow-stats
+# rate sampling keeps trusting its samples if/when that domain is
+# exercised with real switches again.
+COLLECT_INTERVAL = 0.5
 
 SYN_THRESHOLD = 10
 UDP_THRESHOLD = 200
