@@ -164,6 +164,31 @@ kill "$PARSER_PID" 2>/dev/null
 sleep 1
 
 # ---------------------------------------------------------------------------
+# 4b. IMSI->IP map + canonical CSV path -- so a live ryu-manager process
+# (telemetry/mobile_adapter.py's MobileNetworkAdapter, polled once per
+# COLLECT_INTERVAL) actually picks up this run's results. Skipped
+# entirely if SKIP_CONTROLLER_WIRING=1 (e.g. running this standalone,
+# without caring about the Python controller side).
+# ---------------------------------------------------------------------------
+
+if [ "${SKIP_CONTROLLER_WIRING:-0}" -eq 0 ]; then
+  UE_IP_MAP_CSV="${REPO_DIR}/config/ue_ip_map.csv"
+  echo "imsi,ip" > "$UE_IP_MAP_CSV"
+  grep "^\[UE_IP_MAP\] " "${OUT_DIR}/ns3.log" | sed 's/^\[UE_IP_MAP\] //' >> "$UE_IP_MAP_CSV"
+  UE_COUNT="$(($(wc -l < "$UE_IP_MAP_CSV") - 1))"
+  echo "[run_oran_e2_test] wrote ${UE_COUNT} IMSI->IP row(s) to ${UE_IP_MAP_CSV}"
+
+  CANONICAL_CSV="/tmp/ddos_xapp_events.csv"
+  if [ -f "${OUT_DIR}/ddos_xapp_events.csv" ]; then
+    cp "${OUT_DIR}/ddos_xapp_events.csv" "$CANONICAL_CSV"
+    echo "[run_oran_e2_test] copied this run's events to ${CANONICAL_CSV} (MobileNetworkAdapter's default path)"
+  else
+    : > "$CANONICAL_CSV"
+    echo "[run_oran_e2_test] no events were produced this run -- cleared ${CANONICAL_CSV} so a live controller doesn't see stale data from a previous run"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 5. Summary
 # ---------------------------------------------------------------------------
 

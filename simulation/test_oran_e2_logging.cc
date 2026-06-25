@@ -240,6 +240,22 @@ main(int argc, char *argv[])
   mmwaveHelper->AddX2Interface(lteEnbNodes, mmWaveEnbNodes);
   mmwaveHelper->AttachToClosestEnb(mcUeDevs, mmWaveEnbDevs, lteEnbDevs);
 
+  // Dumps the IMSI->IP mapping the EPC just assigned, so the controller
+  // side (oran_bridge/ue_ip_map.py, via config/ue_ip_map.csv) can resolve
+  // a KPM measurement's IMSI (decoded from amf_ue_ngap_id -- see
+  // oran_bridge/amf_ue_ngap_id.py) back into the dst_ip
+  // MultidomainCorrelator groups on. Each UE's IP is only known here, at
+  // assignment time -- there's no E2 signaling in this fork that reports
+  // it back over KPM. simulation/run_oran_e2_test.sh greps this exact
+  // "[UE_IP_MAP]" prefix out of ns3.log and writes it to
+  // config/ue_ip_map.csv.
+  for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+    {
+      Ptr<McUeNetDevice> ueDev = DynamicCast<McUeNetDevice>(mcUeDevs.Get(i));
+      std::cout << "[UE_IP_MAP] " << ueDev->GetImsi() << ","
+                << ueIpIface.GetAddress(i) << std::endl;
+    }
+
   // Also confirmed missing: EnableE2PdcpTraces()/EnableE2RlcTraces()
   // get called internally, but the DU/PHY side (E2DuCalculator reuses
   // m_phyStats, an MmWavePhyTrace) is never wired to real trace
