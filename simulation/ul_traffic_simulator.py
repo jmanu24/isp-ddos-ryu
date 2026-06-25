@@ -37,6 +37,7 @@ import math
 import random
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent.parent
@@ -188,7 +189,12 @@ def main():
                                       ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps",
                                        "prb_usage_pct", "sinr_db", "state"]])
                     flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
-                    print(f"  tick={tick} imsi={ue.imsi} ul_thr_mbps={row['ul_thr_mbps']} "
+                    # Same "%Y-%m-%d %H:%M:%S" format ryu_controller_2.py's
+                    # logging.basicConfig uses, so a line here and the
+                    # controller's own log line for the same event can be
+                    # matched up directly without converting formats by hand.
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"{now_str} tick={tick} imsi={ue.imsi} ul_thr_mbps={row['ul_thr_mbps']} "
                           f"prb={row['prb_usage_pct']}%{flag}")
                 f.flush()
                 tick += 1
