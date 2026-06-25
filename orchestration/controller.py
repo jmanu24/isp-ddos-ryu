@@ -47,8 +47,9 @@ class OrchestrationController:
 
     # Require this many consecutive below-threshold cycles before actually
     # unblocking, so a brief lull in a bursty attack doesn't lift the block
-    # only for the next burst to need re-detection from scratch.
-    UNBLOCK_CONFIRM_CYCLES = 3
+    # only for the next burst to need re-detection from scratch. Shared by
+    # both check_unblocks() (openflow) and check_mobile_unblocks() (mobile).
+    UNBLOCK_CONFIRM_CYCLES = 10
 
     def __init__(
         self, adapters: List[DomainAdapter], locate_host=None,
