@@ -701,17 +701,25 @@ class OrchestrationController:
     def check_mobile_unblocks(self, correlated: List[CorrelatedEvent]) -> List[MitigationAction]:
         """
         Re-evaluate every active mobile-domain block. Unlike openflow's
-        check_unblocks(), a blocked UE's traffic doesn't vanish from the
-        telemetry pipeline (there's no drop rule downstream of a RAN-side
-        throttle) — it keeps reporting, just at a much lower rate once
-        quarantined. So the "is this still being attacked" signal here is
-        this cycle's own correlated telemetry for that exact
-        (src_ip, dst_ip, protocol), not a separate counter sample.
+        check_unblocks(), a successfully-quarantined UE's reported pps
+        drops near zero *as soon as the throttle takes effect* — that's
+        the mitigation working, not proof the attacker stopped. Using a
+        pps-vs-threshold comparison here (the way check_unblocks() does
+        for openflow, where a blocked flow's packets genuinely vanish
+        from telemetry) would unblock almost immediately every time,
+        let 1-2 cycles of full-rate traffic back through while the
+        attacker is still active, get re-detected, and re-block — an
+        observed block/unblock/reattack oscillation.
 
-        Same confirm-cycle debounce as check_unblocks() (UNBLOCK_RATIO /
-        UNBLOCK_CONFIRM_CYCLES) — a flow with literally no telemetry this
-        cycle (dst_ip absent from `correlated` entirely, e.g. the UE went
-        idle) counts as 0 pps, same as a present-but-quiet one.
+        The signal used instead is presence, not rate: a UE still inside
+        its attack window keeps reporting telemetry toward the same
+        dst_ip even while throttled to near-zero (see ul_traffic_
+        simulator.py's UE.sample() -- dst_ip only reverts to the UE's
+        normal destination once the attack genuinely stops). So a block
+        is only released once this exact (src_ip, dst_ip, protocol) has
+        produced *zero* matching telemetry events for UNBLOCK_CONFIRM_
+        CYCLES consecutive cycles -- i.e. the UE stopped reporting
+        toward that destination entirely, not just reporting less.
 
         Returns the unblock MitigationActions issued this cycle (empty if
         none) instead of logging them itself — the caller (ryu_controller_2.
@@ -731,16 +739,11 @@ class OrchestrationController:
             src_ip, dst_ip, dst_port, protocol = key
 
             c = by_dst.get(dst_ip)
-            pps = 0.0
-            if c is not None:
-                pps = sum(
-                    e.pps for e in c.events
-                    if e.src_ip == src_ip and e.protocol == protocol
-                )
+            still_present = c is not None and any(
+                e.src_ip == src_ip and e.protocol == protocol for e in c.events
+            )
 
-            threshold = _THRESHOLD_BY_PROTOCOL.get(protocol, settings.UDP_THRESHOLD)
-
-            if pps >= threshold * self.UNBLOCK_RATIO:
+            if still_present:
                 self._mobile_below_threshold_streak[key] = 0
                 continue
 
