@@ -251,6 +251,53 @@ if is_valid_flexric_tree; then
     ok "xapp_kpm_moni ya esta parcheado para .UEID"
   fi
 
+  # Patched both the .UEID-suffix mismatch above and a real heap buffer
+  # overflow in ns-3's MeasurementItem name encoding (see the
+  # asn1c-types.cc/kpm-indication.cc patch step below), yet every
+  # measurement name STILL fails to match anything -- there is at least
+  # one more bug in this chain we have not found yet. Dumps the real
+  # length + raw hex bytes of every measurement name FlexRIC actually
+  # decodes, right before the name comparison, so the next debugging
+  # step is reading real bytes instead of guessing another string to
+  # try.
+  if [ -f "$XAPP_KPM_MONI_C" ] && ! grep -q "PATCHED-DIAG3" "$XAPP_KPM_MONI_C"; then
+    if [ "$CHECK_ONLY" -eq 0 ]; then
+      echo "  -> agregando dump de bytes crudos del nombre de medicion en xapp_kpm_moni..."
+      python3 - "$XAPP_KPM_MONI_C" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+
+anchor = "  get_meas_value[meas_record.value](meas_type.name, meas_record);\n"
+dump = (
+    "  printf(\"[PATCHED-DIAG3] name.len=%zu bytes=\", meas_type.name.len);\n"
+    "  for (size_t i = 0; i < meas_type.name.len; i++) {\n"
+    "    printf(\"%02x \", meas_type.name.buf[i]);\n"
+    "  }\n"
+    "  printf(\" ascii=\");\n"
+    "  for (size_t i = 0; i < meas_type.name.len; i++) {\n"
+    "    unsigned char c = meas_type.name.buf[i];\n"
+    "    printf(\"%c\", (c >= 32 && c < 127) ? c : '.');\n"
+    "  }\n"
+    "  printf(\"\\n\");\n"
+    + anchor
+)
+assert text.count(anchor) == 1, f"expected exactly one anchor match, found {text.count(anchor)}"
+text = text.replace(anchor, dump, 1)
+
+with open(path, "w") as f:
+    f.write(text)
+PYEOF
+      if [ $? -eq 0 ] && grep -q "PATCHED-DIAG3" "$XAPP_KPM_MONI_C"; then
+        ok "dump de bytes crudos agregado a xapp_kpm_moni"
+      else
+        fail "el dump de diagnostico no se agrego -- revisa el texto ancla contra el archivo real"
+      fi
+    fi
+  fi
+
   if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -f "${FLEXRIC_DIR}/build/CMakeCache.txt" ]; then
       fail "FlexRIC no está compilado todavía -- corre sin --check-only"
