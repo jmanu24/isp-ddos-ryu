@@ -86,6 +86,13 @@ class OrchestrationController:
         self._locate_source_ingress = locate_source_ingress
 
         # (src_ip, dst_ip, dst_port, protocol) -> MitigationAction currently
+        # enforced for the mobile domain (separate from _active_blocks
+        # below because its unblock signal is telemetry-pps-based, not
+        # openflow drop-rule-counter-based -- see check_mobile_unblocks).
+        self._active_mobile_blocks: Dict[Tuple[str, str, int, str], MitigationAction] = {}
+        self._mobile_below_threshold_streak: Dict[Tuple[str, str, int, str], int] = {}
+
+        # (src_ip, dst_ip, dst_port, protocol) -> MitigationAction currently
         # enforced, only for the openflow domain (the only one with a real
         # drop-rule backend so far).
         self._active_blocks: Dict[Tuple[str, str, int, str], MitigationAction] = {}
@@ -406,6 +413,25 @@ class OrchestrationController:
 
             return is_new
 
+        if action.domain == "mobile" and action.action == "block":
+            # Mirrors the openflow branch above: dedupe so an attack
+            # that's still ongoing doesn't re-queue a fresh RC command
+            # (and re-log "MITIGACION") every single pipeline cycle —
+            # check_mobile_unblocks() is what eventually clears this once
+            # the UE's reported throughput actually drops.
+            key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
+            is_new = key not in self._active_mobile_blocks
+            self._active_mobile_blocks[key] = action
+            self._mobile_below_threshold_streak[key] = 0
+
+            if not is_new:
+                return False
+
+            adapter = self._adapters.get(action.domain)
+            if adapter:
+                adapter.apply_mitigation(action)
+            return True
+
         adapter = self._adapters.get(action.domain)
 
         if adapter:
@@ -450,8 +476,12 @@ class OrchestrationController:
         handled — DDOS_DISTRIBUTED detections always carry src_ip="*",
         which directly matches the literal key stored for it (one entry
         per distinct physical ingress location; see _build_actions).
+        Also true for an active mobile-domain block (_active_mobile_blocks)
+        — same dedup purpose, separate dict because its unblock signal is
+        telemetry-pps-based rather than openflow drop-rule-counter-based.
         """
-        return (src_ip, dst_ip, dst_port, protocol) in self._active_blocks
+        key = (src_ip, dst_ip, dst_port, protocol)
+        return key in self._active_blocks or key in self._active_mobile_blocks
 
     def is_validated_destination(self, dst_ip: str) -> bool:
         """
@@ -667,3 +697,71 @@ class OrchestrationController:
                 # attack shouldn't get its forwarding rules trusted again
                 # without going through at least one more clean cycle.
                 self._validated_destinations.discard(dst_ip)
+
+    def check_mobile_unblocks(self, correlated: List[CorrelatedEvent]) -> None:
+        """
+        Re-evaluate every active mobile-domain block. Unlike openflow's
+        check_unblocks(), a blocked UE's traffic doesn't vanish from the
+        telemetry pipeline (there's no drop rule downstream of a RAN-side
+        throttle) — it keeps reporting, just at a much lower rate once
+        quarantined. So the "is this still being attacked" signal here is
+        this cycle's own correlated telemetry for that exact
+        (src_ip, dst_ip, protocol), not a separate counter sample.
+
+        Same confirm-cycle debounce as check_unblocks() (UNBLOCK_RATIO /
+        UNBLOCK_CONFIRM_CYCLES) — a flow with literally no telemetry this
+        cycle (dst_ip absent from `correlated` entirely, e.g. the UE went
+        idle) counts as 0 pps, same as a present-but-quiet one.
+        """
+        if not self._active_mobile_blocks:
+            return
+
+        by_dst = {c.dst_ip: c for c in correlated}
+
+        for key in list(self._active_mobile_blocks):
+            src_ip, dst_ip, dst_port, protocol = key
+
+            c = by_dst.get(dst_ip)
+            pps = 0.0
+            if c is not None:
+                pps = sum(
+                    e.pps for e in c.events
+                    if e.src_ip == src_ip and e.protocol == protocol
+                )
+
+            threshold = _THRESHOLD_BY_PROTOCOL.get(protocol, settings.UDP_THRESHOLD)
+
+            if pps >= threshold * self.UNBLOCK_RATIO:
+                self._mobile_below_threshold_streak[key] = 0
+                continue
+
+            self._mobile_below_threshold_streak[key] = (
+                self._mobile_below_threshold_streak.get(key, 0) + 1
+            )
+
+            if self._mobile_below_threshold_streak[key] >= self.UNBLOCK_CONFIRM_CYCLES:
+                self._send_mobile_unblock(key)
+                del self._active_mobile_blocks[key]
+                del self._mobile_below_threshold_streak[key]
+                self._validated_destinations.discard(dst_ip)
+
+    def _send_mobile_unblock(self, key: Tuple[str, str, int, str]) -> None:
+        src_ip, dst_ip, dst_port, protocol = key
+        adapter = self._adapters.get("mobile")
+        if not adapter:
+            return
+
+        unblock_action = MitigationAction(
+            domain="mobile",
+            device_id="",
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            protocol=protocol,
+            action="unblock",
+        )
+        adapter.apply_mitigation(unblock_action)
+        print(
+            f"{datetime.now():%Y-%m-%d %H:%M:%S} [ORCHESTRATION] "
+            f"Mobile domain unblock: {src_ip} -> {dst_ip}/{protocol}"
+        )

@@ -283,6 +283,12 @@ class FlowStatsIDS(app_manager.RyuApp):
         # this pipeline's telemetry again.
         self.orchestrator.check_unblocks()
 
+        # Mobile-domain blocks unblock off this cycle's own telemetry
+        # instead (see check_mobile_unblocks's docstring) -- a RAN-side
+        # throttle doesn't make the UE's traffic vanish from `correlated`
+        # the way an openflow drop rule does.
+        self.orchestrator.check_mobile_unblocks(correlated)
+
         # Stage 3 — detect attack types. Low-and-slow is checked
         # independently of `correlated`/pps-based detection — it's a flow
         # *count* signature (many stalled connections), not a volumetric

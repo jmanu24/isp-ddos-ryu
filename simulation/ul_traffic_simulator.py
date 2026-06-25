@@ -33,6 +33,7 @@ Usage:
 
 import argparse
 import csv
+import json
 import math
 import random
 import sys
@@ -43,6 +44,11 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CSV_PATH = "/tmp/ddos_xapp_events.csv"
 DEFAULT_UE_IP_MAP_PATH = REPO_DIR / "config" / "ue_ip_map.csv"
+# Must match telemetry/mobile_adapter.py's DEFAULT_RC_COMMAND_QUEUE_PATH --
+# not imported from there to avoid pulling in telemetry/__init__.py's
+# OpenFlowAdapter import (and its ryu dependency) into this standalone
+# simulator process.
+DEFAULT_RC_COMMAND_QUEUE_PATH = "/tmp/oran_rc_commands.jsonl"
 
 
 class UE:
@@ -96,11 +102,38 @@ class UE:
         self.attack_mbps = attack_mbps
         self.attack_target_ip = attack_target_ip
 
+        # Wall-clock timestamp until which this UE is quarantined (None ==
+        # not throttled). Set by apply_throttle() when a "block"/
+        # "rate_limit" MitigationAction for this IMSI comes off the RC
+        # command queue, cleared automatically once time.time() passes it
+        # -- mirrors a real E2SM-RC slicing control (see Option 1 in the
+        # O-RAN/FlexRIC investigation: moving the UE into a near-zero-PRB
+        # quarantine slice) without actually requiring a live FlexRIC/E2
+        # connection, consistent with this simulator's whole reason for
+        # existing (see module docstring).
+        self.throttled_until = None
+
     def is_attacking(self, tick: int) -> bool:
         return self.attack_window is not None and self.attack_window[0] <= tick < self.attack_window[1]
 
+    def is_throttled(self) -> bool:
+        return self.throttled_until is not None and time.time() < self.throttled_until
+
+    def apply_throttle(self, duration: float) -> None:
+        self.throttled_until = time.time() + duration
+
     def sample(self, tick: int) -> dict:
-        if self.is_attacking(tick):
+        if self.is_throttled():
+            # Quarantine-slice effect: scheduler starves the UE down to
+            # near-zero PRBs regardless of whether it's mid-attack -- this
+            # is what actually stops the flood, not a channel-quality
+            # change, so SINR stays in its normal range.
+            ul_thr_mbps = random.uniform(0.0, 0.01)
+            prb_usage_pct = random.uniform(0.0, 1.0)
+            sinr_db = random.uniform(15.0, 25.0)
+            state = "ACTIVE"
+            dst_ip = self.attack_target_ip if self.is_attacking(tick) else self.normal_dst_ip
+        elif self.is_attacking(tick):
             ul_thr_mbps = self.attack_mbps * random.uniform(0.9, 1.1)
             prb_usage_pct = min(100.0, random.uniform(85.0, 100.0))
             sinr_db = random.uniform(2.0, 6.0)  # degraded -- channel saturated
@@ -126,7 +159,7 @@ class UE:
         }
 
 
-def default_ues():
+def default_ues(attack_end_tick: int = 25):
     # config/settings.py's UDP_THRESHOLD=200 pps corresponds to
     # ~0.82 Mbps through MobileNetworkAdapter's pps approximation
     # (bps / ASSUMED_AVG_PACKET_SIZE_BYTES=512) -- baseline+jitter below
@@ -141,9 +174,39 @@ def default_ues():
         # being simulated here.
         UE(imsi=1, ip="10.60.0.2", baseline_mbps=0.3, jitter_mbps=0.15, normal_dst_ip="203.0.113.10"),
         UE(imsi=2, ip="10.60.0.3", baseline_mbps=0.4, jitter_mbps=0.15, normal_dst_ip="203.0.113.20"),
+        # Stops on its own at attack_end_tick -- lets check_mobile_unblocks
+        # (orchestration/controller.py) observe a real drop in this UE's
+        # reported throughput and react with an explicit "unblock" RC
+        # command, the same way a real attacker going quiet would.
         UE(imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
-           attack_window=(10, 9999), attack_mbps=45.0),
+           attack_window=(10, attack_end_tick), attack_mbps=45.0),
     ]
+
+
+def read_new_commands(path: str, offset: int) -> tuple:
+    """
+    Tails MobileNetworkAdapter.apply_mitigation()'s JSONL command queue,
+    same offset-tracking pattern MobileNetworkAdapter.collect() uses on
+    the KPM CSV -- returns (commands, new_offset). Missing file (queue
+    not created yet) is not an error, same convention as
+    oran_bridge/ue_ip_map.py.
+    """
+    if not Path(path).exists():
+        return [], offset
+
+    commands = []
+    with open(path, "r") as f:
+        f.seek(offset)
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                commands.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        new_offset = f.tell()
+    return commands, new_offset
 
 
 def write_ue_ip_map(ues, path: Path):
@@ -161,15 +224,34 @@ def main():
     parser.add_argument("--out-csv", default=DEFAULT_CSV_PATH)
     parser.add_argument("--ue-ip-map", default=str(DEFAULT_UE_IP_MAP_PATH))
     parser.add_argument("--no-attack", action="store_true", help="disable the injected UE 3 flood")
+    parser.add_argument("--attack-end-tick", type=int, default=25,
+                         help="tick at which UE 3's flood stops on its own")
+    parser.add_argument("--rc-command-queue", default=str(DEFAULT_RC_COMMAND_QUEUE_PATH),
+                         help="JSONL queue MobileNetworkAdapter.apply_mitigation() writes to")
     args = parser.parse_args()
 
-    ues = default_ues()
+    ues = default_ues(attack_end_tick=args.attack_end_tick)
+    ues_by_imsi = {ue.imsi: ue for ue in ues}
     if args.no_attack:
         for ue in ues:
             ue.attack_window = None
 
     write_ue_ip_map(ues, Path(args.ue_ip_map))
     print(f"[ul_traffic_simulator] wrote {len(ues)} UE(s) to {args.ue_ip_map}")
+
+    # Truncate leftover state from a previous run -- MobileNetworkAdapter
+    # always starts tailing out-csv from byte 0 when ryu-manager (re)starts,
+    # so stale attack-magnitude rows from an earlier session would otherwise
+    # be read as live telemetry on the very first collect() cycle, before
+    # this run has written anything itself (observed: a UDP_FLOOD detection
+    # and BLOCK firing seconds after ryu-manager started, well before this
+    # run's own attack_window even began). Same reasoning applies to
+    # rc-command-queue: a stale "block" line left over from a previous
+    # session's throttle would otherwise get replayed against this run's
+    # (possibly different) IMSIs.
+    Path(args.out_csv).write_text("")
+    Path(args.rc_command_queue).write_text("")
+
     for ue in ues:
         attack_desc = f"flood from tick {ue.attack_window[0]}" if ue.attack_window else "benign only"
         print(f"  IMSI {ue.imsi} -> {ue.ip} ({attack_desc})")
@@ -179,10 +261,35 @@ def main():
 
     tick = 0
     start = time.time()
+    rc_command_offset = 0
     try:
         with open(args.out_csv, "a", newline="") as f:
             writer = csv.writer(f)
             while args.duration <= 0 or (time.time() - start) < args.duration:
+                commands, rc_command_offset = read_new_commands(
+                    args.rc_command_queue, rc_command_offset
+                )
+                for command in commands:
+                    imsi = command.get("imsi")
+                    ue = ues_by_imsi.get(imsi)
+                    if ue is None:
+                        continue
+                    action = command.get("action")
+                    if action == "unblock":
+                        # Lifts the quarantine immediately rather than
+                        # extending it -- an "unblock" with a leftover
+                        # duration field would otherwise be treated like
+                        # another throttle command below.
+                        ue.throttled_until = None
+                        print(f"[ul_traffic_simulator] UNBLOCK applied to IMSI {imsi} "
+                              f"(attack_type={command.get('attack_type')})")
+                        continue
+                    duration = command.get("duration", 60)
+                    ue.apply_throttle(duration)
+                    print(f"[ul_traffic_simulator] THROTTLE applied to IMSI {imsi}: "
+                          f"action={action} duration={duration}s "
+                          f"(attack_type={command.get('attack_type')})")
+
                 for ue in ues:
                     row = ue.sample(tick)
                     writer.writerow([row[c] for c in
