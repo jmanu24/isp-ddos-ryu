@@ -47,10 +47,23 @@ Caveats carried over from the rest of this proposal's investigation:
     against two real observed values from this session's own test run).
     The CSV's "rnti" column holds that decoded IMSI, not an actual RNTI.
   - PRB counts are converted to a percentage using --max-prb (default
-    273, a common NR 100MHz numerology max) since this log format
-    doesn't carry the available-PRB denominator the way
-    config/oran_bridge.yaml-style DU CSVs do — treat as approximate
-    until calibrated against a real run.
+    139, matching MmWaveEnbNetDevice::CalculatePrbAverage's own
+    hardcoded dlAvailablePrbs assumption in mmwave-enb-net-device.cc).
+  - ns-3's DU-side KPM reporting (AddDuUePmItem in
+    contrib/oran-interface/helper/mmwave-indication-message-helper.cc)
+    only ever sends DOWNLINK metrics (RRU.PrbUsedDl.UEID,
+    DRB.UEThpDl.UEID) — there is no real UL throughput/PRB data in this
+    fork's E2/KPM path at all. record_to_csv_row maps that real DL data
+    onto telemetry/mobile_adapter.py's "ul_thr_mbps"/"prb_usage_pct"
+    column names purely for naming continuity with that module; the
+    values themselves are DL, not UL.
+  - xapp_kpm_moni only recognizes these ".UEID"-suffixed names once
+    patched (deploy/setup_ns_oran_flexric.sh) — unpatched, every single
+    measurement prints as "Measurement Name not yet supported" and this
+    parser has nothing to scrape, even though 34/34 real indications
+    arrived end to end (confirmed in this session: the E2/SCTP/
+    subscription pipeline was never the problem here, only this name
+    mismatch was).
 """
 
 import argparse
@@ -140,21 +153,30 @@ def record_to_csv_row(record: dict, max_prb: int) -> str:
     state. "rnti" here is the real IMSI (see _flush above) -- kept under
     that column name for now since MobileNetworkAdapter reads it that way.
     """
-    ul_thr_kbps = record.get("DRB.UEThpUl", 0.0)
-    ul_thr_mbps = ul_thr_kbps / 1000.0
+    # Renamed from the original UL-named fields/columns: confirmed (1)
+    # ns-3's DU-side reporting is DL-only -- "RRU.PrbUsedDl"/"DRB.UEThpDl"
+    # are the real per-UE fields it sends, no UL equivalent exists in this
+    # fork -- and (2) the xApp only recognizes them once patched for the
+    # ".UEID" suffix ns-3 appends (see deploy/setup_ns_oran_flexric.sh's
+    # xapp_kpm_moni patch step). Kept as "ul_thr_mbps"/"prb_usage_pct" in
+    # the CSV column names below since telemetry/mobile_adapter.py already
+    # reads them under those names; the value itself is real DL data.
+    dl_thr_kbps = record.get("DRB.UEThpDl.UEID", 0.0)
+    dl_thr_mbps = dl_thr_kbps / 1000.0
 
-    prb_ul = record.get("RRU.PrbTotUl", 0.0)
-    prb_usage_pct = min(100.0, (prb_ul / max_prb) * 100.0) if max_prb > 0 else 0.0
+    # 139 matches MmWaveEnbNetDevice::CalculatePrbAverage's own hardcoded
+    # dlAvailablePrbs assumption (mmwave-enb-net-device.cc) -- using the
+    # same denominator this fork itself assumes, rather than a generic
+    # NR numerology max.
+    prb_used_dl = record.get("RRU.PrbUsedDl.UEID", 0.0)
+    prb_usage_pct = min(100.0, (prb_used_dl / max_prb) * 100.0) if max_prb > 0 else 0.0
 
     sinr_db = record.get("DRB.RlcSduDelayDl", 0.0)  # no real SINR field in this log; placeholder
-    # Real observed DRB.UEThpUl values run ~5-10 kbps (0.005-0.01 Mbps)
-    # even for "active" UEs in this log format -- a 0.01 Mbps cutoff
-    # would call everything IDLE.
-    state = "ACTIVE" if ul_thr_mbps > 0 else "IDLE"
+    state = "ACTIVE" if dl_thr_mbps > 0 else "IDLE"
 
     return (
         f"{time.time():.6f},{record['rnti']},1,"
-        f"{ul_thr_mbps:.6f},{prb_usage_pct:.3f},{sinr_db:.3f},{state}\n"
+        f"{dl_thr_mbps:.6f},{prb_usage_pct:.3f},{sinr_db:.3f},{state}\n"
     )
 
 
@@ -174,7 +196,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log-path", required=True, help="xapp_kpm_moni stdout, captured to a file")
     parser.add_argument("--out-csv", required=True, help="output path -- point KPMConsumer's csv_path here")
-    parser.add_argument("--max-prb", type=int, default=273)
+    parser.add_argument("--max-prb", type=int, default=139)
     args = parser.parse_args()
 
     kpm_parser = XappKpmLogParser()

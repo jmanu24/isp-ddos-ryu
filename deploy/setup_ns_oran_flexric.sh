@@ -222,6 +222,35 @@ if is_valid_flexric_tree; then
     ok "FlexRIC ya parece configurado/compilado -- reconstruyendo de forma incremental"
   fi
 
+  # Root cause of "Measurement Name not yet supported" x23 per UE
+  # against real ns-3 data: confirmed in mmwave-LENA-oran's
+  # contrib/oran-interface/helper/mmwave-indication-message-helper.cc
+  # (MmWaveIndicationMessageHelper::AddDuUePmItem) that ns-3 genuinely
+  # sends 23 named measurements per UE per indication (22 long + 1
+  # double -- exactly matching the observed count), but every name has
+  # a ".UEID" suffix (e.g. "DRB.UEThpDl.UEID", "RRU.PrbUsedDl.UEID")
+  # that this xApp's log_int_value/log_real_value compare against
+  # exact, suffix-less names ("DRB.UEThpDl", "RRU.PrbUsedDl") --  so
+  # real data IS present in every indication, this printer just never
+  # recognized the name. Patches in the two real per-UE values useful
+  # for this proposal's detection pipeline: per-UE DL throughput and
+  # per-UE DL PRB usage.
+  XAPP_KPM_MONI_C="${FLEXRIC_DIR}/examples/xApp/c/monitor/xapp_kpm_moni.c"
+  if [ -f "$XAPP_KPM_MONI_C" ] && ! grep -q "PATCHED (oran-multidomain-ddos-ueid)" "$XAPP_KPM_MONI_C"; then
+    if [ "$CHECK_ONLY" -eq 0 ]; then
+      echo "  -> agregando soporte para nombres de medicion con sufijo .UEID en xapp_kpm_moni..."
+      sed -i 's#} else if (cmp_str_ba("DRB.PdcpSduVolumeUL", name) == 0) {#} else if (cmp_str_ba("RRU.PrbUsedDl.UEID", name) == 0) { // PATCHED (oran-multidomain-ddos-ueid): real ns-3 per-UE DL PRB usage, sent with a .UEID suffix this xApp did not originally recognize\n    printf("RRU.PrbUsedDl.UEID = %d [PRBs]\\n", meas_record.int_val);\n  } else if (cmp_str_ba("DRB.PdcpSduVolumeUL", name) == 0) {#' "$XAPP_KPM_MONI_C"
+      sed -i 's#} else if (cmp_str_ba("DRB.UEThpUl", name) == 0) {#} else if (cmp_str_ba("DRB.UEThpDl.UEID", name) == 0) { // PATCHED (oran-multidomain-ddos-ueid): real ns-3 per-UE DL throughput, sent with a .UEID suffix this xApp did not originally recognize\n    printf("DRB.UEThpDl.UEID = %.2f [kbps]\\n", meas_record.real_val);\n  } else if (cmp_str_ba("DRB.UEThpUl", name) == 0) {#' "$XAPP_KPM_MONI_C"
+      if grep -q "PATCHED (oran-multidomain-ddos-ueid)" "$XAPP_KPM_MONI_C"; then
+        ok "xapp_kpm_moni parcheado para reconocer RRU.PrbUsedDl.UEID / DRB.UEThpDl.UEID"
+      else
+        fail "el patch de xapp_kpm_moni no se aplico -- revisa los textos ancla contra el archivo real"
+      fi
+    fi
+  elif [ -f "$XAPP_KPM_MONI_C" ]; then
+    ok "xapp_kpm_moni ya esta parcheado para .UEID"
+  fi
+
   if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -f "${FLEXRIC_DIR}/build/CMakeCache.txt" ]; then
       fail "FlexRIC no está compilado todavía -- corre sin --check-only"
