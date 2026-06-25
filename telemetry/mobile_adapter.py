@@ -203,11 +203,12 @@ class MobileNetworkAdapter(DomainAdapter):
         with open(self.rc_command_queue_path, "a") as f:
             f.write(json.dumps(command) + "\n")
 
-        print(
-            f"[MOBILE] queued RC command for IMSI {imsi}: {action.action} "
-            f"({action.attack_type}) -- real E2SM-RC delivery to the "
-            f"Near-RT RIC not yet implemented, see this adapter's docstring"
-        )
+        # No print here -- OrchestrationController already reports this
+        # action through the same MITIGACION dashboard/logger line every
+        # other domain's actions go through (ryu_controller_2.py's
+        # _run_pipeline), so a second, differently-formatted message here
+        # would just be noise. Real E2SM-RC delivery to the Near-RT RIC
+        # is not yet implemented -- see this adapter's docstring.
         return True
 
     def _imsi_for_ip(self, ip: str) -> Optional[int]:

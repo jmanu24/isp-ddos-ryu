@@ -698,7 +698,7 @@ class OrchestrationController:
                 # without going through at least one more clean cycle.
                 self._validated_destinations.discard(dst_ip)
 
-    def check_mobile_unblocks(self, correlated: List[CorrelatedEvent]) -> None:
+    def check_mobile_unblocks(self, correlated: List[CorrelatedEvent]) -> List[MitigationAction]:
         """
         Re-evaluate every active mobile-domain block. Unlike openflow's
         check_unblocks(), a blocked UE's traffic doesn't vanish from the
@@ -712,11 +712,20 @@ class OrchestrationController:
         UNBLOCK_CONFIRM_CYCLES) — a flow with literally no telemetry this
         cycle (dst_ip absent from `correlated` entirely, e.g. the UE went
         idle) counts as 0 pps, same as a present-but-quiet one.
+
+        Returns the unblock MitigationActions issued this cycle (empty if
+        none) instead of logging them itself — the caller (ryu_controller_2.
+        py's _run_pipeline) folds them into the same MITIGACION dashboard/
+        logger line every other domain's actions go through, so mobile
+        unblocks read exactly like an openflow one instead of a separate,
+        differently-formatted message.
         """
         if not self._active_mobile_blocks:
-            return
+            return []
 
         by_dst = {c.dst_ip: c for c in correlated}
+        adapter = self._adapters.get("mobile")
+        unblock_actions: List[MitigationAction] = []
 
         for key in list(self._active_mobile_blocks):
             src_ip, dst_ip, dst_port, protocol = key
@@ -740,28 +749,27 @@ class OrchestrationController:
             )
 
             if self._mobile_below_threshold_streak[key] >= self.UNBLOCK_CONFIRM_CYCLES:
-                self._send_mobile_unblock(key)
+                # Carries the original block's attack_type through so the
+                # dashboard/logger line reads "UNBLOCK (UDP_FLOOD) ..."
+                # instead of a blank "()".
+                attack_type = self._active_mobile_blocks[key].attack_type
+
+                unblock_action = MitigationAction(
+                    domain="mobile",
+                    device_id="",
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    protocol=protocol,
+                    action="unblock",
+                    attack_type=attack_type,
+                )
+                if adapter:
+                    adapter.apply_mitigation(unblock_action)
+                unblock_actions.append(unblock_action)
+
                 del self._active_mobile_blocks[key]
                 del self._mobile_below_threshold_streak[key]
                 self._validated_destinations.discard(dst_ip)
 
-    def _send_mobile_unblock(self, key: Tuple[str, str, int, str]) -> None:
-        src_ip, dst_ip, dst_port, protocol = key
-        adapter = self._adapters.get("mobile")
-        if not adapter:
-            return
-
-        unblock_action = MitigationAction(
-            domain="mobile",
-            device_id="",
-            src_ip=src_ip,
-            dst_ip=dst_ip,
-            dst_port=dst_port,
-            protocol=protocol,
-            action="unblock",
-        )
-        adapter.apply_mitigation(unblock_action)
-        print(
-            f"{datetime.now():%Y-%m-%d %H:%M:%S} [ORCHESTRATION] "
-            f"Mobile domain unblock: {src_ip} -> {dst_ip}/{protocol}"
-        )
+        return unblock_actions

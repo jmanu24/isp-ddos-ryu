@@ -274,6 +274,12 @@ def main():
                     ue = ues_by_imsi.get(imsi)
                     if ue is None:
                         continue
+                    # Not printed -- the controller already reports both
+                    # block and unblock through its own MITIGACION
+                    # dashboard/logger line (ryu_controller_2.py's
+                    # _run_pipeline); this process only needs to apply the
+                    # effect to its synthetic UEs, the same way a real RAN
+                    # wouldn't echo a RIC CONTROL REQUEST back as a log.
                     action = command.get("action")
                     if action == "unblock":
                         # Lifts the quarantine immediately rather than
@@ -281,14 +287,9 @@ def main():
                         # duration field would otherwise be treated like
                         # another throttle command below.
                         ue.throttled_until = None
-                        print(f"[ul_traffic_simulator] UNBLOCK applied to IMSI {imsi} "
-                              f"(attack_type={command.get('attack_type')})")
                         continue
                     duration = command.get("duration", 60)
                     ue.apply_throttle(duration)
-                    print(f"[ul_traffic_simulator] THROTTLE applied to IMSI {imsi}: "
-                          f"action={action} duration={duration}s "
-                          f"(attack_type={command.get('attack_type')})")
 
                 for ue in ues:
                     row = ue.sample(tick)

@@ -286,8 +286,11 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Mobile-domain blocks unblock off this cycle's own telemetry
         # instead (see check_mobile_unblocks's docstring) -- a RAN-side
         # throttle doesn't make the UE's traffic vanish from `correlated`
-        # the way an openflow drop rule does.
-        self.orchestrator.check_mobile_unblocks(correlated)
+        # the way an openflow drop rule does. Returned (not logged
+        # internally) so it goes through the same MITIGACION dashboard/
+        # logger line as every other domain's actions below, instead of
+        # its own separately-formatted message.
+        mobile_unblock_actions = self.orchestrator.check_mobile_unblocks(correlated)
 
         # Stage 3 — detect attack types. Low-and-slow is checked
         # independently of `correlated`/pps-based detection — it's a flow
@@ -348,11 +351,15 @@ class FlowStatsIDS(app_manager.RyuApp):
         # gets validated.
         self.orchestrator.validate(correlated, detections)
 
-        if not detections:
+        # Stages 4 + 5 — decide and orchestrate. A cycle can have no new
+        # detections (the attack that triggered a block already stopped)
+        # and still have a mobile unblock to report, so the early return
+        # only applies when there's neither.
+        if not detections and not mobile_unblock_actions:
             return
 
-        # Stages 4 + 5 — decide and orchestrate
-        actions = self.orchestrator.process(detections)
+        actions = self.orchestrator.process(detections) if detections else []
+        actions += mobile_unblock_actions
 
         # Reflect mitigations in the dashboard
         for action in actions:
