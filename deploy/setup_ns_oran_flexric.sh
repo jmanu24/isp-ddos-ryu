@@ -589,6 +589,51 @@ for f in "${NAME_BUFFER_OVERFLOW_FILES[@]}"; do
   fi
 done
 
+# Confirmed via xapp_kpm_moni's raw byte dump: the SAME measurement name
+# ("TB.TotNbrDl.1.UEID", the first AddItem call in AddDuUePmItem) arrives
+# for all 23 measurements per UE, despite FlexRIC's own decoder
+# (dec_meas_info_frm_1.c) correctly reading list.array[i]->measType per
+# index, and despite getMesInfoItem/AddItem looking structurally correct
+# on a read-through. This print settles whether the name has already
+# collapsed to a single value on the ns-3 SIDE (inside getMesInfoItem,
+# before Encode() ever runs) or only during/after ASN.1 serialization --
+# narrowing the remaining search space in half either way.
+KPM_INDICATION_CC="${MMWAVE_DIR}/contrib/oran-interface/model/kpm-indication.cc"
+if [ -f "$KPM_INDICATION_CC" ] && ! grep -q "PATCHED-DIAG4" "$KPM_INDICATION_CC"; then
+  if [ "$CHECK_ONLY" -eq 0 ]; then
+    echo "  -> agregando print de diagnostico del nombre de medicion en getMesInfoItem..."
+    python3 - "$KPM_INDICATION_CC" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+
+anchor = "  MeasurementType_t *measurmentType = (MeasurementType_t *) calloc (1, sizeof (MeasurementType_t));\n  *measurmentType = item.pmType;\n"
+dump = (
+    anchor
+    + "  if (measurmentType->present == MeasurementType_PR_measName)\n"
+    + "    {\n"
+    + "      std::string _diag4Name(reinterpret_cast<const char *>(measurmentType->choice.measName.buf), measurmentType->choice.measName.size);\n"
+    + "      std::cout << \"[PATCHED-DIAG4] getMesInfoItem measName=\" << _diag4Name << \" size=\" << measurmentType->choice.measName.size << std::endl;\n"
+    + "    }\n"
+)
+assert text.count(anchor) == 1, f"expected exactly one anchor match, found {text.count(anchor)}"
+text = text.replace(anchor, dump, 1)
+
+with open(path, "w") as f:
+    f.write(text)
+PYEOF
+    if [ $? -eq 0 ] && grep -q "PATCHED-DIAG4" "$KPM_INDICATION_CC"; then
+      ok "print de diagnostico agregado en getMesInfoItem"
+    else
+      fail "el print de diagnostico no se agrego -- revisa el texto ancla contra el archivo real"
+    fi
+  fi
+elif [ -f "$KPM_INDICATION_CC" ]; then
+  ok "getMesInfoItem ya tiene el print de diagnostico"
+fi
+
 # ---------------------------------------------------------------------------
 # 5. mmwave-LENA-oran (ns-3 NR/5G-LENA fork)
 # ---------------------------------------------------------------------------
