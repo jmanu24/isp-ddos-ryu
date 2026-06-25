@@ -69,16 +69,31 @@ class UE:
         gnb_id: str = "1",
         baseline_mbps: float = 0.8,
         jitter_mbps: float = 0.3,
+        normal_dst_ip: str = "203.0.113.10",
         attack_window=None,
         attack_mbps: float = 45.0,
+        attack_target_ip: str = "10.0.2.10",
     ):
         self.imsi = imsi
         self.ip = ip
         self.gnb_id = gnb_id
         self.baseline_mbps = baseline_mbps
         self.jitter_mbps = jitter_mbps
+        # A UE's normal UL traffic goes to whatever it's actually
+        # talking to out on the internet -- not modeled per-flow here,
+        # just a placeholder external IP so benign samples still carry
+        # a real (if arbitrary) dst_ip rather than "*". The attack
+        # target, by contrast, is deliberately one of this repo's own
+        # Mininet ring topology hosts (topologies/ring_topology.py
+        # assigns 10.0.{1..4}.10) -- so a real demo could one day have
+        # OpenFlow's own telemetry see the same destination and let
+        # MultidomainCorrelator actually combine both domains' views of
+        # the same attack, instead of the mobile domain's report being
+        # an island.
+        self.normal_dst_ip = normal_dst_ip
         self.attack_window = attack_window
         self.attack_mbps = attack_mbps
+        self.attack_target_ip = attack_target_ip
 
     def is_attacking(self, tick: int) -> bool:
         return self.attack_window is not None and self.attack_window[0] <= tick < self.attack_window[1]
@@ -89,17 +104,20 @@ class UE:
             prb_usage_pct = min(100.0, random.uniform(85.0, 100.0))
             sinr_db = random.uniform(2.0, 6.0)  # degraded -- channel saturated
             state = "ACTIVE"
+            dst_ip = self.attack_target_ip
         else:
             wobble = math.sin(tick / 7.0) * self.jitter_mbps
             ul_thr_mbps = max(0.0, self.baseline_mbps + wobble + random.uniform(-0.05, 0.05))
             prb_usage_pct = min(100.0, max(0.0, 5.0 + ul_thr_mbps * 3.0))
             sinr_db = random.uniform(15.0, 25.0)
             state = "ACTIVE" if ul_thr_mbps > 0.05 else "IDLE"
+            dst_ip = self.normal_dst_ip
 
         return {
             "timestamp": f"{time.time():.6f}",
             "imsi": str(self.imsi),
             "gnb_id": self.gnb_id,
+            "dst_ip": dst_ip,
             "ul_thr_mbps": f"{ul_thr_mbps:.6f}",
             "prb_usage_pct": f"{prb_usage_pct:.3f}",
             "sinr_db": f"{sinr_db:.3f}",
@@ -114,9 +132,16 @@ def default_ues():
     # is kept comfortably under that so benign UEs never trip the
     # threshold on their own, only the injected attack does.
     return [
-        UE(imsi=1, ip="10.60.0.2", baseline_mbps=0.3, jitter_mbps=0.15),
-        UE(imsi=2, ip="10.60.0.3", baseline_mbps=0.4, jitter_mbps=0.15),
-        UE(imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, attack_window=(10, 9999), attack_mbps=45.0),
+        # Distinct normal_dst_ip per UE -- MultidomainCorrelator groups
+        # by dst_ip, so benign UEs sharing one placeholder destination
+        # would have their otherwise-individually-safe pps summed
+        # together and could cross the threshold as a false "multi-
+        # source flood toward the same target", which isn't what's
+        # being simulated here.
+        UE(imsi=1, ip="10.60.0.2", baseline_mbps=0.3, jitter_mbps=0.15, normal_dst_ip="203.0.113.10"),
+        UE(imsi=2, ip="10.60.0.3", baseline_mbps=0.4, jitter_mbps=0.15, normal_dst_ip="203.0.113.20"),
+        UE(imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
+           attack_window=(10, 9999), attack_mbps=45.0),
     ]
 
 
@@ -160,9 +185,9 @@ def main():
                 for ue in ues:
                     row = ue.sample(tick)
                     writer.writerow([row[c] for c in
-                                      ["timestamp", "imsi", "gnb_id", "ul_thr_mbps",
+                                      ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps",
                                        "prb_usage_pct", "sinr_db", "state"]])
-                    flag = " [ATTACK]" if ue.is_attacking(tick) else ""
+                    flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
                     print(f"  tick={tick} imsi={ue.imsi} ul_thr_mbps={row['ul_thr_mbps']} "
                           f"prb={row['prb_usage_pct']}%{flag}")
                 f.flush()

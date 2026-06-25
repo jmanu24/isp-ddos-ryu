@@ -13,7 +13,18 @@ DEFAULT_RC_COMMAND_QUEUE_PATH = "/tmp/oran_rc_commands.jsonl"
 # simulation/parse_xapp_kpm_log.py writes these exact columns (see that
 # file's record_to_csv_row) -- "rnti" there is actually the decoded IMSI,
 # not a real RNTI (see oran_bridge/amf_ue_ngap_id.py).
-_CSV_COLUMNS = ["timestamp", "imsi", "gnb_id", "ul_thr_mbps", "prb_usage_pct", "sinr_db", "state"]
+#
+# dst_ip: this is UPLINK telemetry, so the UE is the traffic's SOURCE,
+# not its destination -- a UE generating attack-volume UL traffic is
+# flooding some external target, not itself. RAN-level KPM has no
+# flow-level visibility to know that target's real IP (it's an
+# aggregate per-UE throughput/PRB measurement, not a 5-tuple), so a
+# real E2/KPM-fed producer can only ever leave this blank ("*", the
+# same "no single known destination" convention DetectionResult/
+# MitigationAction already use for DDOS_DISTRIBUTED). A synthetic
+# producer that already knows what it's simulating (e.g.
+# simulation/ul_traffic_simulator.py) can supply a real one instead.
+_CSV_COLUMNS = ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps", "prb_usage_pct", "sinr_db", "state"]
 
 # Average packet size assumed when converting a KPM throughput reading
 # (bytes/sec) into an approximate packets/sec figure -- DDoSDetectionEngine
@@ -142,8 +153,8 @@ class MobileNetworkAdapter(DomainAdapter):
         except (KeyError, ValueError):
             return None
 
-        dst_ip = self._ue_ip_map.get(imsi)
-        if dst_ip is None:
+        src_ip = self._ue_ip_map.get(imsi)
+        if src_ip is None:
             # No static mapping for this IMSI yet -- config/ue_ip_map.csv
             # needs a row for it (see oran_bridge/ue_ip_map.py). Silently
             # dropping rather than raising: a partially-populated map
@@ -151,13 +162,17 @@ class MobileNetworkAdapter(DomainAdapter):
             # whole adapter.
             return None
 
+        # "*" (no single known target) unless the producer supplied a
+        # real one -- see _CSV_COLUMNS' dst_ip comment above.
+        dst_ip = fields.get("dst_ip") or "*"
+
         bps = (ul_thr_mbps * 1e6) / 8.0
         pps = bps / ASSUMED_AVG_PACKET_SIZE_BYTES
 
         return TelemetryEvent(
             domain=self.domain_name,
             device_id=gnb_id,
-            src_ip="*",
+            src_ip=src_ip,
             dst_ip=dst_ip,
             dst_port=0,
             protocol="UDP",
@@ -167,10 +182,13 @@ class MobileNetworkAdapter(DomainAdapter):
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
         self._refresh_ue_ip_map()
-        imsi = self._imsi_for_ip(action.dst_ip)
+        # The attacking UE is action.src_ip now (UL traffic's real
+        # source), not action.dst_ip (the external target it was
+        # flooding) -- see _row_to_event's src_ip/dst_ip comment.
+        imsi = self._imsi_for_ip(action.src_ip)
         if imsi is None:
             print(
-                f"[MOBILE] cannot resolve dst_ip {action.dst_ip} back to an "
+                f"[MOBILE] cannot resolve src_ip {action.src_ip} back to an "
                 f"IMSI -- ue_ip_map.csv may be out of date for this run"
             )
             return False

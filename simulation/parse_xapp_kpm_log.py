@@ -174,8 +174,12 @@ def record_to_csv_row(record: dict, max_prb: int) -> str:
     sinr_db = record.get("DRB.RlcSduDelayDl", 0.0)  # no real SINR field in this log; placeholder
     state = "ACTIVE" if dl_thr_mbps > 0 else "IDLE"
 
+    # "*" -- KPM is an aggregate per-UE measurement, not a 5-tuple; this
+    # path has no flow-level visibility into which external IP a UE's
+    # traffic is actually headed to (see telemetry/mobile_adapter.py's
+    # _CSV_COLUMNS comment on dst_ip).
     return (
-        f"{time.time():.6f},{record['rnti']},1,"
+        f"{time.time():.6f},{record['rnti']},1,*,"
         f"{dl_thr_mbps:.6f},{prb_usage_pct:.3f},{sinr_db:.3f},{state}\n"
     )
 
