@@ -100,6 +100,13 @@ class MobileNetworkAdapter(DomainAdapter):
         # parse_xapp_kpm_log.py's own follow().
         self._csv_read_offset = 0
 
+        # Tracks the last-logged connection state so collect() logs a
+        # "telemetry source connected/lost" event only on the transition
+        # -- not once per cycle -- the same way ryu_controller_2.py logs
+        # "Switch connected" once per actual connection, not once per
+        # stats-poll cycle.
+        self._was_connected = False
+
     def _refresh_ue_ip_map(self) -> None:
         if self._ue_ip_map_path is None:
             return
@@ -110,6 +117,10 @@ class MobileNetworkAdapter(DomainAdapter):
         if mtime != self._ue_ip_map_mtime:
             self._ue_ip_map = load_ue_ip_map(self._ue_ip_map_path)
             self._ue_ip_map_mtime = mtime
+            self._logger.info(
+                "Reloaded UE IP map from %s (%d entries)",
+                self._ue_ip_map_path, len(self._ue_ip_map),
+            )
 
     def is_connected(self) -> bool:
         return os.path.exists(self.kpm_csv_path)
@@ -117,7 +128,14 @@ class MobileNetworkAdapter(DomainAdapter):
     def collect(self) -> List[TelemetryEvent]:
         self._refresh_ue_ip_map()
 
-        if not os.path.exists(self.kpm_csv_path):
+        connected = os.path.exists(self.kpm_csv_path)
+        if connected and not self._was_connected:
+            self._logger.info("Mobile domain telemetry source connected: %s", self.kpm_csv_path)
+        elif not connected and self._was_connected:
+            self._logger.warning("Mobile domain telemetry source lost: %s", self.kpm_csv_path)
+        self._was_connected = connected
+
+        if not connected:
             return []
 
         # One event per IMSI per collect() call, not per CSV row: each
