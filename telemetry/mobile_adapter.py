@@ -149,6 +149,25 @@ class MobileNetworkAdapter(DomainAdapter):
         # for perfectly benign UEs. Keeping only the most recent sample
         # per IMSI is the correct fix at the source, not a downstream
         # threshold tweak.
+        # Detect truncation/rotation -- e.g. ul_traffic_simulator.py
+        # truncates this same path on every (re)start. A long-running
+        # ryu-manager process's _csv_read_offset would otherwise still
+        # point past the freshly-truncated file's new (much smaller) size;
+        # seeking past EOF doesn't error, it just silently reads nothing
+        # until the file grows back past that stale offset -- meaning a
+        # fresh attack right after a simulator restart could go completely
+        # undetected for as long as that takes. Falling back to 0 picks
+        # the new file's contents back up from the start instead.
+        try:
+            if os.path.getsize(self.kpm_csv_path) < self._csv_read_offset:
+                self._logger.info(
+                    "Mobile domain telemetry source %s was truncated -- resuming from offset 0",
+                    self.kpm_csv_path,
+                )
+                self._csv_read_offset = 0
+        except OSError:
+            pass
+
         latest_by_imsi: dict = {}
 
         with open(self.kpm_csv_path, "r", newline="") as f:
