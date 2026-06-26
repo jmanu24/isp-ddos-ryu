@@ -35,6 +35,14 @@ class DDoSDetectionEngine:
     # Confidence multiplier when attack spans more than one domain
     MULTIDOMAIN_BOOST = 1.3
 
+    def __init__(self):
+        # dst_ip -> consecutive cycles with >= LOW_SLOW_MOBILE_MIN_SOURCES
+        # distinct low-rate mobile UEs seen toward it (analyze_low_slow_
+        # mobile). Persistent across calls -- this is what turns "a few
+        # quiet UEs this one cycle" into a real signal, since any single
+        # cycle's count alone is indistinguishable from coincidence.
+        self._mobile_low_rate_streak: Dict[str, int] = {}
+
     def analyze(self, correlated: List[CorrelatedEvent]) -> List[DetectionResult]:
         """
         Analyze a list of CorrelatedEvents and return detected attacks.
@@ -139,6 +147,94 @@ class DDoSDetectionEngine:
                 score=score,
                 confidence=confidence,
             ))
+
+        return results
+
+    def analyze_low_slow_mobile(
+        self, correlated: List[CorrelatedEvent], exclude_dsts=frozenset()
+    ) -> List[DetectionResult]:
+        """
+        Low-and-slow detection for the mobile domain.
+
+        OpenFlow's two LOW_SLOW variants above both key off connection/flow
+        *count* -- a signal the RAN's per-UE KPM telemetry simply doesn't
+        have (one throughput number per UE, no socket-level visibility).
+        Duration alone doesn't work as a substitute either: every benign
+        UE in this pipeline sends a flat, continuous trickle to the same
+        destination for as long as it's connected, so "this UE has had a
+        low nonzero rate for a long time" would eventually flag every
+        ordinary UE.
+
+        What's actually anomalous is many distinct UEs simultaneously
+        holding a low, sub-threshold rate toward the *same* destination --
+        the mobile-domain analog of "many slow connections at once" rather
+        than "one connection, slowly". So this counts, per destination,
+        how many distinct mobile-domain UEs have 0 < pps <=
+        LOW_SLOW_MOBILE_MAX_PPS this cycle, and only flags it once that
+        count has held at or above LOW_SLOW_MOBILE_MIN_SOURCES for
+        LOW_SLOW_MOBILE_MIN_CYCLES consecutive cycles. No single attacker
+        to point at -- src_ip="*", with the contributing UEs' IPs carried
+        in `sources` so orchestration can quarantine each of them
+        individually (mirrors DDOS_DISTRIBUTED's per-source list, since
+        unlike OpenFlow there's no destination-wide network lever here).
+
+        exclude_dsts: destinations already flagged by a volumetric flood
+        this cycle (analyze()) -- a real flood already being handled
+        shouldn't also get reported as LOW_SLOW just because some of its
+        traffic happens to sit under the low-rate ceiling.
+        """
+        results = []
+        seen_dsts = set()
+
+        for event in correlated:
+            if event.dst_ip in exclude_dsts:
+                continue
+
+            low_rate_sources = {
+                e.src_ip for e in event.events
+                if e.domain == "mobile" and 0 < e.pps <= settings.LOW_SLOW_MOBILE_MAX_PPS
+            }
+            seen_dsts.add(event.dst_ip)
+
+            if len(low_rate_sources) < settings.LOW_SLOW_MOBILE_MIN_SOURCES:
+                self._mobile_low_rate_streak[event.dst_ip] = 0
+                continue
+
+            streak = self._mobile_low_rate_streak.get(event.dst_ip, 0) + 1
+            self._mobile_low_rate_streak[event.dst_ip] = streak
+
+            if streak < settings.LOW_SLOW_MOBILE_MIN_CYCLES:
+                continue
+
+            score = len(low_rate_sources) / settings.LOW_SLOW_MOBILE_MIN_SOURCES
+            # Full confidence as soon as the persistence requirement is
+            # actually met (unlike the openflow LOW_SLOW variants' .../2.0
+            # softening) -- MIN_CYCLES is already the deliberate
+            # confirmation period (see its settings.py comment), so
+            # reaching it isn't a "maybe", it's the point this detector
+            # exists to wait for.
+            confidence = min(streak / settings.LOW_SLOW_MOBILE_MIN_CYCLES, 1.0)
+
+            results.append(DetectionResult(
+                domain="mobile",
+                device_id="",
+                src_ip="*",
+                dst_ip=event.dst_ip,
+                dst_port=0,
+                protocol="UDP",
+                attack_type="LOW_SLOW",
+                score=score,
+                confidence=confidence,
+                sources=list(low_rate_sources),
+            ))
+
+        # Forget destinations that didn't appear in `correlated` at all
+        # this cycle (e.g. every contributing UE went idle/disconnected) --
+        # otherwise a stale streak would keep counting up untouched and
+        # could fire later from a single coincidental cycle.
+        for dst_ip in list(self._mobile_low_rate_streak):
+            if dst_ip not in seen_dsts:
+                del self._mobile_low_rate_streak[dst_ip]
 
         return results
 

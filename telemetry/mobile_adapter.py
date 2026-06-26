@@ -27,6 +27,21 @@ DEFAULT_RC_COMMAND_QUEUE_PATH = "/tmp/oran_rc_commands.jsonl"
 # simulation/ul_traffic_simulator.py) can supply a real one instead.
 _CSV_COLUMNS = ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps", "prb_usage_pct", "sinr_db", "state"]
 
+# dst_port/protocol: same RAN-has-no-L4-visibility limitation as dst_ip
+# above -- a real KPM-fed producer (simulation/parse_xapp_kpm_log.py)
+# never has these and keeps writing the _CSV_COLUMNS row above unchanged.
+# Only a synthetic producer that already knows what attack it's
+# simulating (ul_traffic_simulator.py) can supply them, as two optional
+# trailing columns -- kept separate from _CSV_COLUMNS, rather than
+# replacing it, so the real pipeline's rows don't suddenly fail the
+# column-count check in collect() below.
+_CSV_COLUMNS_EXT = _CSV_COLUMNS + ["dst_port", "protocol"]
+
+# Falls back to this when a row uses the legacy (no dst_port/protocol)
+# format -- matches DetectionResult/MitigationAction's existing "unknown
+# protocol, no port" convention for telemetry with no L4 visibility.
+_DEFAULT_PROTOCOL = "UDP"
+
 # Average packet size assumed when converting a KPM throughput reading
 # (bytes/sec) into an approximate packets/sec figure -- DDoSDetectionEngine
 # thresholds purely on pps (config/settings.py), never bps, and KPM has no
@@ -174,9 +189,12 @@ class MobileNetworkAdapter(DomainAdapter):
             f.seek(self._csv_read_offset)
             reader = csv.reader(f)
             for row in reader:
-                if len(row) != len(_CSV_COLUMNS):
+                if len(row) == len(_CSV_COLUMNS_EXT):
+                    fields = dict(zip(_CSV_COLUMNS_EXT, row))
+                elif len(row) == len(_CSV_COLUMNS):
+                    fields = dict(zip(_CSV_COLUMNS, row))
+                else:
                     continue
-                fields = dict(zip(_CSV_COLUMNS, row))
                 imsi_raw = fields.get("imsi")
                 if imsi_raw is not None:
                     latest_by_imsi[imsi_raw] = fields
@@ -210,6 +228,16 @@ class MobileNetworkAdapter(DomainAdapter):
         # real one -- see _CSV_COLUMNS' dst_ip comment above.
         dst_ip = fields.get("dst_ip") or "*"
 
+        # dst_port/protocol: only present in the extended (synthetic)
+        # format -- see _CSV_COLUMNS_EXT above. Falls back to the same
+        # "no L4 visibility" convention the real KPM pipeline has always
+        # used otherwise.
+        try:
+            dst_port = int(float(fields["dst_port"])) if "dst_port" in fields else 0
+        except (KeyError, ValueError):
+            dst_port = 0
+        protocol = fields.get("protocol") or _DEFAULT_PROTOCOL
+
         bps = (ul_thr_mbps * 1e6) / 8.0
         pps = bps / ASSUMED_AVG_PACKET_SIZE_BYTES
 
@@ -218,8 +246,8 @@ class MobileNetworkAdapter(DomainAdapter):
             device_id=gnb_id,
             src_ip=src_ip,
             dst_ip=dst_ip,
-            dst_port=0,
-            protocol="UDP",
+            dst_port=dst_port,
+            protocol=protocol,
             pps=pps,
             bps=bps,
         )

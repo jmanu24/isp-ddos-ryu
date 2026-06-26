@@ -74,3 +74,17 @@ VALIDATED_FLOW_HARD_TIMEOUT = 30
 DIST_MIN_SOURCES = 5          # need at least this many distinct sources
 DIST_ENTROPY_THRESHOLD = 0.7  # normalized Shannon entropy (0-1) of src distribution
 DIST_PPS_THRESHOLD = 300      # aggregate pps across all sources toward one dst
+
+# Low-and-slow detection for the mobile domain (DDoSDetectionEngine.
+# analyze_low_slow_mobile). The RAN's per-UE KPM telemetry has no
+# connection/flow-count visibility the way OpenFlow's flow table does
+# (LOW_SLOW_NEW_FLOWS above), so a single UE sending a low, flat rate
+# forever can't be told apart from ordinary background traffic by rate or
+# duration alone -- every benign UE looks like that. The analogous
+# mobile-domain signature is instead "how many distinct UEs are
+# simultaneously holding a low, sub-threshold rate toward the same
+# destination, and for how long" -- many slow contributors at once is the
+# anomaly, not any single one of them.
+LOW_SLOW_MOBILE_MAX_PPS = 8.0      # below SYN_THRESHOLD -- "low rate" band ceiling
+LOW_SLOW_MOBILE_MIN_SOURCES = 5    # distinct low-rate UEs toward one dst, same cycle
+LOW_SLOW_MOBILE_MIN_CYCLES = 20    # consecutive cycles that count must hold before flagging

@@ -26,9 +26,19 @@ exactly like simulation/run_oran_e2_test.sh's output used to be
 consumed -- nothing downstream (correlation, detection, decision,
 mitigation dispatch) changes; only the telemetry source does.
 
+Writes the extended CSV format MobileNetworkAdapter._CSV_COLUMNS_EXT
+expects (adds dst_port/protocol columns) -- real KPM has no L4
+visibility to supply those (see that module's comments), but this
+synthetic producer already knows what it's simulating, so it tags each
+UE's traffic with the protocol its scenario calls for. That's what lets
+DDoSDetectionEngine actually classify SYN_FLOOD/ICMP_FLOOD/DDOS_
+DISTRIBUTED for the mobile domain instead of everything defaulting to
+UDP_FLOOD.
+
 Usage:
   python3 simulation/ul_traffic_simulator.py
-  python3 simulation/ul_traffic_simulator.py --tick 2 --duration 120
+  python3 simulation/ul_traffic_simulator.py --scenario syn_flood
+  python3 simulation/ul_traffic_simulator.py --scenario distributed_syn --tick 0.5
 """
 
 import argparse
@@ -50,6 +60,11 @@ DEFAULT_UE_IP_MAP_PATH = REPO_DIR / "config" / "ue_ip_map.csv"
 # simulator process.
 DEFAULT_RC_COMMAND_QUEUE_PATH = "/tmp/oran_rc_commands.jsonl"
 
+# Output column order -- must match telemetry/mobile_adapter.py's
+# _CSV_COLUMNS_EXT exactly (base KPM columns, then dst_port, protocol).
+_CSV_COLUMNS = ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps",
+                "prb_usage_pct", "sinr_db", "state", "dst_port", "protocol"]
+
 
 class UE:
     """
@@ -59,14 +74,22 @@ class UE:
                                  around baseline -- not flat, so a real
                                  attack visibly stands out rather than
                                  just being "the one nonzero number".
-    attack_window             : (start_tick, end_tick) or None -- while
+    attack_window              : (start_tick, end_tick) or None -- while
                                  inside this window, throughput jumps to
-                                 attack_mbps (a UDP-flood-magnitude
-                                 value, comfortably past
-                                 config/settings.py's UDP_THRESHOLD=200
-                                 pps once converted through
-                                 MobileNetworkAdapter's
-                                 ASSUMED_AVG_PACKET_SIZE_BYTES=512).
+                                 attack_mbps.
+    protocol/dst_port          : tagged on every sample, attack or not --
+                                 real KPM has no L4 visibility to supply
+                                 these (see mobile_adapter.py), but this
+                                 synthetic UE already knows what it's
+                                 playing, so DDoSDetectionEngine can
+                                 actually classify it instead of every
+                                 mobile-domain flow defaulting to UDP.
+    low_slow                   : while attacking, models a Slowloris-style
+                                 UE -- connection stays open and active
+                                 but deliberately trickles data, so it
+                                 does NOT saturate radio resources or
+                                 degrade the channel the way a real flood
+                                 does (see sample()'s attack branch).
     """
 
     def __init__(
@@ -80,6 +103,9 @@ class UE:
         attack_window=None,
         attack_mbps: float = 45.0,
         attack_target_ip: str = "10.0.2.10",
+        protocol: str = "UDP",
+        dst_port: int = 0,
+        low_slow: bool = False,
     ):
         self.imsi = imsi
         self.ip = ip
@@ -101,6 +127,9 @@ class UE:
         self.attack_window = attack_window
         self.attack_mbps = attack_mbps
         self.attack_target_ip = attack_target_ip
+        self.protocol = protocol
+        self.dst_port = dst_port
+        self.low_slow = low_slow
 
         # Wall-clock timestamp until which this UE is quarantined (None ==
         # not throttled). Set by apply_throttle() when a "block"/
@@ -135,8 +164,17 @@ class UE:
             dst_ip = self.attack_target_ip if self.is_attacking(tick) else self.normal_dst_ip
         elif self.is_attacking(tick):
             ul_thr_mbps = self.attack_mbps * random.uniform(0.9, 1.1)
-            prb_usage_pct = min(100.0, random.uniform(85.0, 100.0))
-            sinr_db = random.uniform(2.0, 6.0)  # degraded -- channel saturated
+            if self.low_slow:
+                # Slowloris-style: the connection stays open and active,
+                # but deliberately trickles data -- a single one of these
+                # looks just like ordinary light traffic; what's anomalous
+                # is many of them at once toward the same target (see
+                # DDoSDetectionEngine.analyze_low_slow_mobile).
+                prb_usage_pct = min(100.0, max(0.0, 5.0 + ul_thr_mbps * 3.0))
+                sinr_db = random.uniform(15.0, 25.0)
+            else:
+                prb_usage_pct = min(100.0, random.uniform(85.0, 100.0))
+                sinr_db = random.uniform(2.0, 6.0)  # degraded -- channel saturated
             state = "ACTIVE"
             dst_ip = self.attack_target_ip
         else:
@@ -156,31 +194,122 @@ class UE:
             "prb_usage_pct": f"{prb_usage_pct:.3f}",
             "sinr_db": f"{sinr_db:.3f}",
             "state": state,
+            "dst_port": str(self.dst_port),
+            "protocol": self.protocol,
         }
 
 
-def default_ues(attack_end_tick: int = 25):
-    # config/settings.py's UDP_THRESHOLD=200 pps corresponds to
-    # ~0.82 Mbps through MobileNetworkAdapter's pps approximation
-    # (bps / ASSUMED_AVG_PACKET_SIZE_BYTES=512) -- baseline+jitter below
-    # is kept comfortably under that so benign UEs never trip the
-    # threshold on their own, only the injected attack does.
-    return [
-        # Distinct normal_dst_ip per UE -- MultidomainCorrelator groups
-        # by dst_ip, so benign UEs sharing one placeholder destination
-        # would have their otherwise-individually-safe pps summed
-        # together and could cross the threshold as a false "multi-
-        # source flood toward the same target", which isn't what's
-        # being simulated here.
-        UE(imsi=1, ip="10.60.0.2", baseline_mbps=0.3, jitter_mbps=0.15, normal_dst_ip="203.0.113.10"),
-        UE(imsi=2, ip="10.60.0.3", baseline_mbps=0.4, jitter_mbps=0.15, normal_dst_ip="203.0.113.20"),
-        # Stops on its own at attack_end_tick -- lets check_mobile_unblocks
-        # (orchestration/controller.py) observe a real drop in this UE's
-        # reported throughput and react with an explicit "unblock" RC
-        # command, the same way a real attacker going quiet would.
-        UE(imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
-           attack_window=(10, attack_end_tick), attack_mbps=45.0),
-    ]
+# config/settings.py thresholds each scenario is tuned against (so the
+# attack magnitude is always comfortably past the threshold that
+# classifies it, with margin -- not just barely over):
+#   SYN_THRESHOLD=10 pps  -> ~0.041 Mbps  (TCP_SYN)
+#   UDP_THRESHOLD=200 pps -> ~0.82 Mbps   (UDP)
+#   ICMP_THRESHOLD=150pps -> ~0.61 Mbps   (ICMP)
+#   DIST_MIN_SOURCES=5, DIST_ENTROPY_THRESHOLD=0.7 (near-equal per-source rate)
+#   LOW_SLOW_MOBILE_MAX_PPS=8.0 -> ~0.033 Mbps ceiling, MIN_SOURCES=5
+# via MobileNetworkAdapter's pps = bps / ASSUMED_AVG_PACKET_SIZE_BYTES(512).
+
+_BENIGN_UES = [
+    dict(imsi=1, ip="10.60.0.2", baseline_mbps=0.3, jitter_mbps=0.15, normal_dst_ip="203.0.113.10"),
+    dict(imsi=2, ip="10.60.0.3", baseline_mbps=0.4, jitter_mbps=0.15, normal_dst_ip="203.0.113.20"),
+]
+
+
+def _benign_ues():
+    # Distinct normal_dst_ip per UE -- MultidomainCorrelator groups by
+    # dst_ip, so benign UEs sharing one placeholder destination would
+    # have their otherwise-individually-safe pps summed together and
+    # could cross a threshold as a false multi-source flood, which isn't
+    # what's being simulated here.
+    return [UE(**kwargs) for kwargs in _BENIGN_UES]
+
+
+def scenario_udp_flood(attack_end_tick: int):
+    """Single UE, UDP volumetric flood -- the original/default scenario."""
+    ues = _benign_ues()
+    ues.append(UE(
+        imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
+        attack_window=(10, attack_end_tick), attack_mbps=45.0, protocol="UDP",
+    ))
+    return ues
+
+
+def scenario_syn_flood(attack_end_tick: int):
+    """Single UE, TCP SYN flood toward a typical web port."""
+    ues = _benign_ues()
+    ues.append(UE(
+        imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
+        attack_window=(10, attack_end_tick), attack_mbps=3.0,
+        protocol="TCP_SYN", dst_port=443,
+    ))
+    return ues
+
+
+def scenario_icmp_flood(attack_end_tick: int):
+    """Single UE, ICMP flood."""
+    ues = _benign_ues()
+    ues.append(UE(
+        imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
+        attack_window=(10, attack_end_tick), attack_mbps=5.0,
+        protocol="ICMP", dst_port=0,
+    ))
+    return ues
+
+
+def scenario_distributed_syn(attack_end_tick: int):
+    """
+    Five UEs (>= settings.DIST_MIN_SOURCES), each contributing a near-
+    equal TCP_SYN rate toward the same target -- the near-uniform
+    per-source distribution (high entropy) is what makes
+    DDoSDetectionEngine classify this as DDOS_DISTRIBUTED instead of
+    five independent SYN_FLOOD attackers.
+    """
+    ues = _benign_ues()
+    for i in range(5):
+        ues.append(UE(
+            imsi=10 + i, ip=f"10.60.0.{20 + i}",
+            baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip=f"203.0.113.{40 + i}",
+            attack_window=(10, attack_end_tick), attack_mbps=2.0,
+            protocol="TCP_SYN", dst_port=443,
+        ))
+    return ues
+
+
+def scenario_low_slow(attack_end_tick: int):
+    """
+    Seven UEs (> settings.LOW_SLOW_MOBILE_MIN_SOURCES, with margin --
+    DecisionEngine's weighted score needs the source count to clear
+    MIN_SOURCES by more than the bare minimum to actually cross
+    DECISION_THRESHOLD once confirmed), each holding a low, sub-
+    threshold, deliberately steady rate (well under
+    LOW_SLOW_MOBILE_MAX_PPS) toward the same target for many consecutive
+    cycles -- any one of them alone looks like ordinary light traffic;
+    it's the persistence of several at once that
+    analyze_low_slow_mobile() flags. Low jitter on purpose: a real
+    Slowloris-style connection trickles a steady drip, not a noisy one.
+    """
+    ues = _benign_ues()
+    for i in range(7):
+        ues.append(UE(
+            imsi=20 + i, ip=f"10.60.0.{30 + i}",
+            baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip=f"203.0.113.{50 + i}",
+            attack_window=(10, attack_end_tick), attack_mbps=0.02,
+            # Plain "TCP" (not "TCP_SYN") -- a real Slowloris connection is
+            # fully established, not a bare SYN, and "TCP" isn't one of
+            # _PROTOCOL_CHECKS' literal tags, so this never competes with
+            # the volumetric SYN_FLOOD path even by coincidence.
+            protocol="TCP", dst_port=80, low_slow=True,
+        ))
+    return ues
+
+
+SCENARIOS = {
+    "udp_flood": scenario_udp_flood,
+    "syn_flood": scenario_syn_flood,
+    "icmp_flood": scenario_icmp_flood,
+    "distributed_syn": scenario_distributed_syn,
+    "low_slow": scenario_low_slow,
+}
 
 
 def read_new_commands(path: str, offset: int) -> tuple:
@@ -219,24 +348,27 @@ def write_ue_ip_map(ues, path: Path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="udp_flood",
+                         help="attack pattern to simulate (default: udp_flood)")
     parser.add_argument("--tick", type=float, default=2.0, help="seconds between samples")
     parser.add_argument("--duration", type=float, default=0.0, help="total seconds to run, 0 = forever")
     parser.add_argument("--out-csv", default=DEFAULT_CSV_PATH)
     parser.add_argument("--ue-ip-map", default=str(DEFAULT_UE_IP_MAP_PATH))
-    parser.add_argument("--no-attack", action="store_true", help="disable the injected UE 3 flood")
+    parser.add_argument("--no-attack", action="store_true", help="disable the scenario's attack window(s)")
     parser.add_argument("--attack-end-tick", type=int, default=25,
-                         help="tick at which UE 3's flood stops on its own")
+                         help="tick at which the attack stops on its own")
     parser.add_argument("--rc-command-queue", default=str(DEFAULT_RC_COMMAND_QUEUE_PATH),
                          help="JSONL queue MobileNetworkAdapter.apply_mitigation() writes to")
     args = parser.parse_args()
 
-    ues = default_ues(attack_end_tick=args.attack_end_tick)
+    ues = SCENARIOS[args.scenario](args.attack_end_tick)
     ues_by_imsi = {ue.imsi: ue for ue in ues}
     if args.no_attack:
         for ue in ues:
             ue.attack_window = None
 
     write_ue_ip_map(ues, Path(args.ue_ip_map))
+    print(f"[ul_traffic_simulator] scenario={args.scenario}")
     print(f"[ul_traffic_simulator] wrote {len(ues)} UE(s) to {args.ue_ip_map}")
 
     # Truncate leftover state from a previous run -- MobileNetworkAdapter
@@ -253,7 +385,11 @@ def main():
     Path(args.rc_command_queue).write_text("")
 
     for ue in ues:
-        attack_desc = f"flood from tick {ue.attack_window[0]}" if ue.attack_window else "benign only"
+        attack_desc = (
+            f"{ue.protocol} flood from tick {ue.attack_window[0]}" if ue.attack_window and not ue.low_slow
+            else f"low-and-slow ({ue.protocol}) from tick {ue.attack_window[0]}" if ue.attack_window
+            else "benign only"
+        )
         print(f"  IMSI {ue.imsi} -> {ue.ip} ({attack_desc})")
 
     print(f"[ul_traffic_simulator] appending to {args.out_csv} every {args.tick}s "
@@ -275,7 +411,7 @@ def main():
                     if ue is None:
                         continue
                     # Not printed -- the controller already reports both
-                    # block and unblock through its own MITIGACION
+                    # block and unblock through its own MITIGATION
                     # dashboard/logger line (ryu_controller_2.py's
                     # _run_pipeline); this process only needs to apply the
                     # effect to its synthetic UEs, the same way a real RAN
@@ -293,9 +429,7 @@ def main():
 
                 for ue in ues:
                     row = ue.sample(tick)
-                    writer.writerow([row[c] for c in
-                                      ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps",
-                                       "prb_usage_pct", "sinr_db", "state"]])
+                    writer.writerow([row[c] for c in _CSV_COLUMNS])
                     flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
                     # Same "%Y-%m-%d %H:%M:%S" format ryu_controller_2.py's
                     # logging.basicConfig uses, so a line here and the

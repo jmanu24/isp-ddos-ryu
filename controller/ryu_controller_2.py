@@ -328,6 +328,15 @@ class FlowStatsIDS(app_manager.RyuApp):
             connection_port_counts,
             exclude_pairs=flagged_pairs,
         )
+        # Mobile-domain low-and-slow: many distinct UEs simultaneously
+        # holding a low, sub-threshold rate toward the same destination --
+        # see analyze_low_slow_mobile's docstring for why this needs its
+        # own signal instead of reusing the two flow-count-based variants
+        # above (OpenFlow-only telemetry).
+        detections += self.detector.analyze_low_slow_mobile(
+            correlated,
+            exclude_dsts=flagged_dsts,
+        )
 
         # Surface every NEW detection in the event log, classified — this
         # is the descriptive "what's happening" signal; raw traffic

@@ -308,6 +308,30 @@ class OrchestrationController:
                     ))
                 continue
 
+            if d.domain == "mobile" and decision.attack_type == "LOW_SLOW" and d.sources:
+                # Mirrors the openflow DDOS_DISTRIBUTED branch above, but
+                # simpler: mobile mitigation is inherently per-UE (there's
+                # no destination-wide network lever the way an OpenFlow
+                # drop rule is), so a "*" src_ip can't be dispatched as a
+                # single action the way it can for OpenFlow's own LOW_SLOW
+                # variant. One action per contributing UE instead, each
+                # quarantined individually through the existing mobile
+                # block/unblock machinery.
+                for source in d.sources:
+                    actions.append(MitigationAction(
+                        domain=d.domain,
+                        device_id="",
+                        src_ip=source,
+                        dst_ip=d.dst_ip,
+                        dst_port=d.dst_port,
+                        protocol=d.protocol,
+                        action=action_type,
+                        attack_type=decision.attack_type,
+                        pps=d.pps,
+                        bps=d.bps,
+                    ))
+                continue
+
             device_id, in_port = self._scoped_ingress(d)
 
             actions.append(MitigationAction(
