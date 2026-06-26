@@ -396,6 +396,16 @@ def _run_tick_loop(
     tick = 0
     start = time.time()
     rc_command_offset = 0
+    # Tracks each UE's attacking/not-attacking state across ticks so a
+    # transition (false->true or true->false) can be logged with a
+    # timestamp -- this fires for BOTH modes: the scripted mode's
+    # automatic attack_window start/end, and the interactive mode's
+    # manual attack-config/"stop" (which just flips attack_window, picked
+    # up here on the very next tick). Printed unconditionally (not gated
+    # by `verbose`) since this is exactly the line meant to be grepped
+    # against the controller's own "%Y-%m-%d %H:%M:%S ... ATTACK
+    # DETECTED/MITIGATION" lines to correlate the two processes' clocks.
+    attacking_state = {ue.imsi: False for ue in ues}
 
     with open(out_csv, "a", newline="") as f:
         writer = csv.writer(f)
@@ -410,6 +420,20 @@ def _run_tick_loop(
             for ue in ues:
                 row = ue.sample(tick)
                 writer.writerow([row[c] for c in _CSV_COLUMNS])
+
+                now_attacking = ue.is_attacking(tick)
+                was_attacking = attacking_state[ue.imsi]
+                if now_attacking and not was_attacking:
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"{now_str} [ul_traffic_simulator] ATTACK START imsi={ue.imsi} "
+                          f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port} "
+                          f"mbps={ue.attack_mbps}")
+                elif was_attacking and not now_attacking:
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"{now_str} [ul_traffic_simulator] ATTACK END imsi={ue.imsi} "
+                          f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port}")
+                attacking_state[ue.imsi] = now_attacking
+
                 if verbose:
                     flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
                     # Same "%Y-%m-%d %H:%M:%S" format ryu_controller_2.py's
