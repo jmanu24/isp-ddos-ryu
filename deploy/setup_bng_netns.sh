@@ -20,6 +20,16 @@
 # it's not installed this script installs+configures a minimal instance
 # scoped to veth-a-peer only (not a system-wide DHCP server).
 #
+# BNGBlaster assigns each IPoE session its OWN outer VLAN tag out of
+# simulation/bng_config.py's outer-vlan-min/max range (1..session_count)
+# -- confirmed on a real run: a 0/0 (untagged) range only fits ONE
+# session ("VLAN ranges exhausted!" trying to create an 8-session
+# config). So this script creates one 802.1Q sub-interface per VLAN ID
+# on veth-a-peer (veth-a-peer.1 .. veth-a-peer.MAX_VLAN), each its own
+# /24, and dnsmasq listens + hands out leases on every one of them --
+# otherwise a session's VLAN-tagged DHCPDISCOVER never reaches a plain,
+# VLAN-unaware listener on veth-a-peer itself.
+#
 # NOTE: this interface/DHCP layout is this script's own best-effort
 # design, not something copied from a confirmed BNGBlaster reference
 # setup (see bng_socket.py's docstring on what in this pipeline is
@@ -39,10 +49,13 @@ ACCESS_PEER="veth-a-peer"
 NETWORK_IF="veth-n"
 NETWORK_PEER="veth-n-peer"
 NETWORK_PEER_ADDR="10.50.0.1/24"
-ACCESS_DHCP_RANGE_START="10.60.0.10"
-ACCESS_DHCP_RANGE_END="10.60.0.200"
 ACCESS_PEER_ADDR="10.60.0.1/24"
 DNSMASQ_CONF="/etc/dnsmasq.d/bng-access.conf"
+# Must stay >= the largest session_count any scenario in
+# simulation/bng_config.py's SCENARIOS uses (currently 8, for
+# distributed_syn_flood/low_and_slow) -- one VLAN sub-interface gets
+# created per ID in 1..MAX_VLAN, each its own /24 (10.61.<vid>.0/24).
+MAX_VLAN=8
 
 TEARDOWN=0
 CHECK_ONLY=0
@@ -131,7 +144,26 @@ fi
 disable_ipv6 "$ACCESS_IF"
 ok "IPv6 deshabilitado en ${NETWORK_IF}/${ACCESS_IF}"
 
-echo "== 3. dnsmasq en ${ACCESS_PEER} (DHCP para sesiones IPoE) =="
+echo "== 3. Sub-interfaces VLAN en ${ACCESS_PEER} (1 por VLAN ID, para DHCP por sesión) =="
+
+sudo modprobe 8021q 2>/dev/null || true
+
+for VID in $(seq 1 "$MAX_VLAN"); do
+  SUBIF="${ACCESS_PEER}.${VID}"
+  if iface_exists "$SUBIF"; then
+    ok "${SUBIF} ya existe"
+  else
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      fail "${SUBIF} no existe -- corre sin --check-only"
+    fi
+    sudo ip link add link "$ACCESS_PEER" name "$SUBIF" type vlan id "$VID"
+    sudo ip link set "$SUBIF" up
+    sudo ip addr add "10.61.${VID}.1/24" dev "$SUBIF" 2>/dev/null || true
+  fi
+done
+ok "${MAX_VLAN} sub-interfaces VLAN listas en ${ACCESS_PEER} (10.61.1.1/24 .. 10.61.${MAX_VLAN}.1/24)"
+
+echo "== 4. dnsmasq en ${ACCESS_PEER} (DHCP por VLAN para sesiones IPoE) =="
 
 dnsmasq_running() { pgrep -f "dnsmasq.*${DNSMASQ_CONF}" >/dev/null 2>&1; }
 
@@ -154,12 +186,19 @@ else
   # inside the "not installed" branch.
   sudo mkdir -p "$(dirname "$DNSMASQ_CONF")"
 
-  sudo tee "$DNSMASQ_CONF" >/dev/null <<EOF
-interface=${ACCESS_PEER}
-bind-interfaces
-except-interface=lo
-dhcp-range=${ACCESS_DHCP_RANGE_START},${ACCESS_DHCP_RANGE_END},255.255.255.0,12h
-EOF
+  {
+    echo "bind-interfaces"
+    echo "except-interface=lo"
+    # One interface+dhcp-range pair per VLAN sub-interface -- dnsmasq
+    # serves a distinct lease pool per L2 segment, matching one
+    # BNGBlaster session's VLAN to its own /24 instead of every VLAN
+    # competing for the same single range on the (VLAN-unaware) parent
+    # ${ACCESS_PEER} interface.
+    for VID in $(seq 1 "$MAX_VLAN"); do
+      echo "interface=${ACCESS_PEER}.${VID}"
+      echo "dhcp-range=10.61.${VID}.10,10.61.${VID}.200,255.255.255.0,12h"
+    done
+  } | sudo tee "$DNSMASQ_CONF" >/dev/null
 
   if dnsmasq_running; then
     sudo pkill -f "dnsmasq.*${DNSMASQ_CONF}"
@@ -175,7 +214,7 @@ EOF
   # `[ -f "$DNSMASQ_PIDFILE" ]` check always reported a false [WARN]
   # even when dnsmasq was healthy.
   if dnsmasq_running; then
-    ok "dnsmasq corriendo en ${ACCESS_PEER} (rango ${ACCESS_DHCP_RANGE_START}-${ACCESS_DHCP_RANGE_END})"
+    ok "dnsmasq corriendo en ${MAX_VLAN} sub-interfaces VLAN de ${ACCESS_PEER}"
   else
     warn "dnsmasq no arrancó -- revisa manualmente (journalctl, o corre el comando sin --no-daemon)"
   fi

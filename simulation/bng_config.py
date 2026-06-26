@@ -91,21 +91,21 @@ def _base_config(
             "access": [{
                 "interface": access_interface,
                 "type": "ipoe",
-                # 0/0 = untagged (BNGBlaster's own default) -- per-VLAN
-                # tagging (1..session_count) was this script's original,
-                # unnecessary choice, and a real run showed why it's the
-                # wrong one here: deploy/setup_bng_netns.sh's dnsmasq
-                # listens on veth-a-peer with no 802.1Q sub-interfaces,
-                # so VLAN-tagged DHCPDISCOVER frames likely never reached
-                # its plain UDP socket at all (dhcp-tx-discover kept
-                # incrementing, dhcp-rx-offer stayed 0 forever). IPoE
-                # sessions don't need VLANs to be distinct -- BNGBlaster
-                # already gives each one its own MAC (confirmed: session 1
-                # got "02:00:00:00:00:01" on a real run) -- so untagged
-                # avoids the whole VLAN/dnsmasq mismatch instead of fixing
-                # it by adding VLAN sub-interfaces on the peer side.
-                "outer-vlan-min": 0,
-                "outer-vlan-max": 0,
+                # BNGBlaster assigns each session its OWN outer VLAN out
+                # of this range (confirmed on a real run: outer-vlan-min/
+                # max=0/0, i.e. a range of exactly one value, hard-failed
+                # creating an 8-session config with "VLAN ranges
+                # exhausted!" after the first session) -- it is not an
+                # optional per-session distinguisher the way per-session
+                # MAC is, at least not for IPoE with type=ipoe here. So
+                # this range must be at least as wide as session_count.
+                # deploy/setup_bng_netns.sh creates one 802.1Q
+                # sub-interface per VLAN ID in this range on veth-a-peer
+                # (dnsmasq listens on each) to actually answer DHCP for
+                # every one of them -- VLAN ID 1..session_count must stay
+                # in sync with that script's own MAX_VLAN.
+                "outer-vlan-min": 1,
+                "outer-vlan-max": max(session_count, 1),
             }],
         },
         "sessions": {
