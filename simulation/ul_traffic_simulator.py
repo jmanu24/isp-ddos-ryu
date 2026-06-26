@@ -111,12 +111,27 @@ class UE:
         protocol: str = "UDP",
         dst_port: int = 0,
         low_slow: bool = False,
+        benign_protocol: str = "UDP",
+        benign_dst_port: int = 0,
     ):
         self.imsi = imsi
         self.ip = ip
         self.gnb_id = gnb_id
         self.baseline_mbps = baseline_mbps
         self.jitter_mbps = jitter_mbps
+        # protocol/dst_port (below) are the ATTACK-time tag only --
+        # benign_protocol/benign_dst_port are what this UE reports the
+        # rest of the time, including right after an attack stops. Without
+        # this split, a UE that was ever configured as e.g. a TCP_SYN
+        # attacker would keep reporting its *normal* baseline traffic
+        # tagged "TCP_SYN" forever after -- and since SYN_THRESHOLD=10pps
+        # is far below typical benign baseline pps, the next pipeline
+        # cycle would misclassify ordinary background traffic as a brand
+        # new SYN_FLOOD (observed: every UE that had ever attacked kept
+        # re-triggering SYN_FLOOD detections/blocks indefinitely after the
+        # real attack had already stopped).
+        self.benign_protocol = benign_protocol
+        self.benign_dst_port = benign_dst_port
         # A UE's normal UL traffic goes to whatever it's actually
         # talking to out on the internet -- not modeled per-flow here,
         # just a placeholder external IP so benign samples still carry
@@ -166,7 +181,10 @@ class UE:
             prb_usage_pct = random.uniform(0.0, 1.0)
             sinr_db = random.uniform(15.0, 25.0)
             state = "ACTIVE"
-            dst_ip = self.attack_target_ip if self.is_attacking(tick) else self.normal_dst_ip
+            attacking_now = self.is_attacking(tick)
+            dst_ip = self.attack_target_ip if attacking_now else self.normal_dst_ip
+            protocol = self.protocol if attacking_now else self.benign_protocol
+            dst_port = self.dst_port if attacking_now else self.benign_dst_port
         elif self.is_attacking(tick):
             ul_thr_mbps = self.attack_mbps * random.uniform(0.9, 1.1)
             if self.low_slow:
@@ -182,6 +200,8 @@ class UE:
                 sinr_db = random.uniform(2.0, 6.0)  # degraded -- channel saturated
             state = "ACTIVE"
             dst_ip = self.attack_target_ip
+            protocol = self.protocol
+            dst_port = self.dst_port
         else:
             wobble = math.sin(tick / 7.0) * self.jitter_mbps
             ul_thr_mbps = max(0.0, self.baseline_mbps + wobble + random.uniform(-0.05, 0.05))
@@ -189,6 +209,8 @@ class UE:
             sinr_db = random.uniform(15.0, 25.0)
             state = "ACTIVE" if ul_thr_mbps > 0.05 else "IDLE"
             dst_ip = self.normal_dst_ip
+            protocol = self.benign_protocol
+            dst_port = self.benign_dst_port
 
         return {
             "timestamp": f"{time.time():.6f}",
@@ -199,8 +221,8 @@ class UE:
             "prb_usage_pct": f"{prb_usage_pct:.3f}",
             "sinr_db": f"{sinr_db:.3f}",
             "state": state,
-            "dst_port": str(self.dst_port),
-            "protocol": self.protocol,
+            "dst_port": str(dst_port),
+            "protocol": protocol,
         }
 
 

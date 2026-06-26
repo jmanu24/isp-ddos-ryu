@@ -556,6 +556,24 @@ class OrchestrationController:
             )
         return False
 
+    def is_mobile_blocked(self, src_ip: str, dst_ip: str) -> bool:
+        """
+        True if this UE already has an active mobile-domain block toward
+        this destination, regardless of attack type/protocol/port.
+        Queried by DDoSDetectionEngine.analyze_low_slow_mobile to exclude
+        already-quarantined UEs from its low-rate source count: a
+        successful throttle (from ANY attack type -- UDP/SYN/ICMP flood,
+        DDOS_DISTRIBUTED) drops a UE's reported rate to near-zero, which
+        falls squarely inside LOW_SLOW_MOBILE_MAX_PPS's "low rate" band --
+        without this exclusion, the mitigation's own side effect on a
+        group of UEs gets misread as a brand new LOW_SLOW attack forming
+        on top of the one already being handled (observed: a DDOS_
+        DISTRIBUTED block immediately followed by a LOW_SLOW detection
+        for the exact same UEs and destination, caused entirely by their
+        own quarantine noise).
+        """
+        return any(key[0] == src_ip and key[1] == dst_ip for key in self._active_mobile_blocks)
+
     def is_validated_destination(self, dst_ip: str) -> bool:
         """
         True once dst_ip has completed at least one full detection cycle

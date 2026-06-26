@@ -336,6 +336,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         detections += self.detector.analyze_low_slow_mobile(
             correlated,
             exclude_dsts=flagged_dsts,
+            is_blocked=self.orchestrator.is_mobile_blocked,
         )
 
         # Surface every NEW detection in the event log, classified — this

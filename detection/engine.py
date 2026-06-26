@@ -151,7 +151,7 @@ class DDoSDetectionEngine:
         return results
 
     def analyze_low_slow_mobile(
-        self, correlated: List[CorrelatedEvent], exclude_dsts=frozenset()
+        self, correlated: List[CorrelatedEvent], exclude_dsts=frozenset(), is_blocked=None
     ) -> List[DetectionResult]:
         """
         Low-and-slow detection for the mobile domain.
@@ -182,6 +182,14 @@ class DDoSDetectionEngine:
         this cycle (analyze()) -- a real flood already being handled
         shouldn't also get reported as LOW_SLOW just because some of its
         traffic happens to sit under the low-rate ceiling.
+
+        is_blocked: optional Callable[[src_ip, dst_ip], bool] (OrchestrationController.
+        is_mobile_blocked) -- excludes UEs already under an active mobile
+        block from the count. A successful quarantine from ANY attack
+        type drops a UE's reported rate to near-zero, which falls inside
+        this detector's own low-rate band; without this exclusion, that
+        mitigation side effect on a group of UEs reads as a brand new
+        LOW_SLOW attack forming on top of the one already being handled.
         """
         results = []
         seen_dsts = set()
@@ -192,7 +200,9 @@ class DDoSDetectionEngine:
 
             low_rate_sources = {
                 e.src_ip for e in event.events
-                if e.domain == "mobile" and 0 < e.pps <= settings.LOW_SLOW_MOBILE_MAX_PPS
+                if e.domain == "mobile"
+                and 0 < e.pps <= settings.LOW_SLOW_MOBILE_MAX_PPS
+                and not (is_blocked and is_blocked(e.src_ip, event.dst_ip))
             }
             seen_dsts.add(event.dst_ip)
 
