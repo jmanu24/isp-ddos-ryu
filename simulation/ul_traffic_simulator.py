@@ -42,11 +42,17 @@ Usage:
   python3 simulation/ul_traffic_simulator.py --interactive
 """
 
+# === Calibración tesis (2026-06-26) ===
+# - PRB/SINR diferenciado por protocolo (fix #1)
+# - Modelo de tráfico benigno bursty/lognormal con skew positivo (fix #2)
+# - Rampa warm-up/cool-down configurable (fix #3)
+# - Columnas extended-kpms opcionales (fix #4)
+# - attack_mbps recalibrado por protocolo (fix #5)
+
 import argparse
 import contextlib
 import csv
 import json
-import math
 import random
 import sys
 import threading
@@ -68,8 +74,38 @@ DEFAULT_RC_COMMAND_QUEUE_PATH = "/tmp/oran_rc_commands.jsonl"
 
 # Output column order -- must match telemetry/mobile_adapter.py's
 # _CSV_COLUMNS_EXT exactly (base KPM columns, then dst_port, protocol).
+# Mutated in place (module-global swap, not a new name) by main()/
+# run_interactive() when --extended-kpms is given -- _run_tick_loop reads
+# this name directly and its signature must not change (interface with
+# other call sites), so toggling what it points at before the loop
+# starts is the only way to add columns without touching it.
 _CSV_COLUMNS = ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps",
                 "prb_usage_pct", "sinr_db", "state", "dst_port", "protocol"]
+
+# --extended-kpms appends these two. Both are synthetic-only fields with
+# no direct equivalent in E2SM-KPM v3.00's standardized measurement set --
+# real KPM has no connection/dwell-time or inter-packet-arrival counter,
+# so a real producer (simulation/parse_xapp_kpm_log.py) could never emit
+# them; only this synthetic one, which already knows ul_thr_mbps/dst_ip
+# per tick, can derive them. MobileNetworkAdapter is never updated to
+# read them (nothing in TelemetryEvent models them yet) -- they exist for
+# offline thesis analysis of the LOW_SLOW CSV trail, not the live
+# detection path. See UE.sample()'s connected_ticks/pkt_interval_ms
+# comments for how each is derived.
+_CSV_COLUMNS_EXTENDED_KPMS = ["connected_ticks", "pkt_interval_ms"]
+_CSV_COLUMNS_BASE = list(_CSV_COLUMNS)
+
+# Same assumed average packet size telemetry/mobile_adapter.py uses to
+# convert ul_thr_mbps into an approximate pps figure (ASSUMED_AVG_
+# PACKET_SIZE_BYTES) -- kept in sync by convention, not by import, since
+# this process deliberately avoids importing telemetry/__init__.py's ryu
+# dependency chain (see DEFAULT_RC_COMMAND_QUEUE_PATH's comment above).
+_ASSUMED_AVG_PACKET_SIZE_BYTES = 512
+# Sentinel for pkt_interval_ms when there's effectively no traffic (pps
+# estimate is 0) -- "an extremely long time between packets", not a
+# division-by-zero crash or a misleading 0.0 (which would read as
+# "packets arriving constantly", the opposite of what's being recorded).
+_MAX_PKT_INTERVAL_MS = 999_999.0
 
 
 class UE:
@@ -96,6 +132,15 @@ class UE:
                                  does NOT saturate radio resources or
                                  degrade the channel the way a real flood
                                  does (see sample()'s attack branch).
+    ramp_ticks                 : warm-up/cool-down length, in ticks, at
+                                 the start/end of attack_window -- a real
+                                 flood doesn't jump to full rate in one
+                                 sample, and ramping makes the CSV's step
+                                 less of a free, trivially-detectable
+                                 "the threshold crossed instantly" tell.
+                                 Ignored for low_slow (already starts at
+                                 a deliberately low, flat rate -- see
+                                 _ramp_factor).
     """
 
     def __init__(
@@ -114,6 +159,7 @@ class UE:
         low_slow: bool = False,
         benign_protocol: str = "UDP",
         benign_dst_port: int = 0,
+        ramp_ticks: int = 3,
     ):
         self.imsi = imsi
         self.ip = ip
@@ -151,6 +197,20 @@ class UE:
         self.protocol = protocol
         self.dst_port = dst_port
         self.low_slow = low_slow
+        self.ramp_ticks = ramp_ticks
+
+        # Benign-traffic burst state (see _sample_benign_mbps) -- last
+        # tick (inclusive) this UE is still inside a burst; -1 means not
+        # currently bursting.
+        self._burst_until_tick = -1
+
+        # connected_ticks state (see sample()'s tail) -- consecutive
+        # ACTIVE ticks toward the SAME dst_ip, reset on IDLE or a dst_ip
+        # change. Proxy for "how long has this DRB/connection been held
+        # open", which is exactly what distinguishes a persistent low-
+        # rate LOW_SLOW UE from one that's merely idle between bursts.
+        self._connected_ticks = 0
+        self._last_active_dst_ip = None
 
         # Wall-clock timestamp until which this UE is quarantined (None ==
         # not throttled). Set by apply_throttle() when a "block"/
@@ -172,6 +232,72 @@ class UE:
     def apply_throttle(self, duration: float) -> None:
         self.throttled_until = time.time() + duration
 
+    def _ramp_factor(self, tick: int) -> float:
+        """
+        Linear warm-up/cool-down multiplier in [0, 1] applied to the gap
+        between baseline_mbps and attack_mbps -- 1.0 means "fully ramped
+        (or ramping doesn't apply)", 0.0 means "still at baseline".
+        Doesn't touch is_attacking()/attack_window -- purely an internal
+        shaping of the rate sample() computes while already inside the
+        window.
+
+        Short-circuits to 1.0 (no ramp) for low_slow (already starts at
+        a deliberately low, flat rate -- ramping it would just be a
+        slower version of the same non-event) and when ramp_ticks<=0 or
+        there's no attack_window to ramp against (e.g. interactive
+        mode's "until stopped" window has no known end tick, so only the
+        warm-up half is meaningful there).
+        """
+        if self.low_slow or self.ramp_ticks <= 0 or self.attack_window is None:
+            return 1.0
+        start, end = self.attack_window
+        elapsed = tick - start
+        remaining = end - tick
+        warm_up = 1.0 if elapsed >= self.ramp_ticks else (elapsed + 1) / self.ramp_ticks
+        cool_down = 1.0 if remaining > self.ramp_ticks else remaining / self.ramp_ticks
+        return max(0.0, min(warm_up, cool_down))
+
+    # Per-protocol radio degradation profile applied while attacking (not
+    # low_slow, which never saturates the channel by design -- see the
+    # low_slow branch in sample()). PRB usage and SINR scale with how
+    # close ul_thr_mbps (itself already shaped by _ramp_factor) is to
+    # sat_mbps, instead of a flat 85-100%/2-6dB regardless of actual
+    # rate -- a 0.5 Mbps TCP SYN flood's bare-SYN packets occupy a small
+    # fraction of the resource blocks a 45 Mbps UDP volumetric flood
+    # would saturate; modeling both identically wasn't physically
+    # credible. sat_mbps is calibrated near each protocol's own
+    # recalibrated attack_mbps default (see SCENARIOS' threshold-margin
+    # comment below), not an arbitrary ceiling.
+    _ATTACK_RADIO_PROFILES = {
+        "UDP":     dict(sat_mbps=45.0, prb_floor=85.0, prb_ceiling=100.0, sinr_floor=2.0,  sinr_ceiling=6.0),
+        "TCP_SYN": dict(sat_mbps=1.0,  prb_floor=15.0, prb_ceiling=30.0,  sinr_floor=10.0, sinr_ceiling=18.0),
+        "ICMP":    dict(sat_mbps=3.0,  prb_floor=20.0, prb_ceiling=40.0,  sinr_floor=8.0,  sinr_ceiling=15.0),
+    }
+
+    # Benign UL traffic model -- bursty + heavy-tailed instead of the old
+    # smooth sine wobble, closer to real mobile HTTP/video traffic: short
+    # bursts of elevated throughput (BENIGN_BURST_TICKS ticks) separated
+    # by quieter stretches, each multiplicatively scaled by a lognormal
+    # variable (always >= 0, right-skewed by construction -- occasional
+    # sharp peaks, valleys that never go far below baseline) instead of
+    # the old symmetric sin()+uniform noise. jitter_mbps still drives how
+    # variable a given UE is (used as the lognormal sigma directly,
+    # clamped to a sane range), so existing per-UE jitter_mbps values
+    # keep meaning instead of becoming a no-op.
+    _BENIGN_BURST_PROBABILITY = 0.08   # per-tick chance of starting a burst while idle
+    _BENIGN_BURST_TICKS = (3, 5)       # inclusive tick-length range of a burst
+    _BENIGN_BURST_MU = 0.5             # bursts run hotter on average, not just noisier
+
+    def _sample_benign_mbps(self, tick: int) -> float:
+        idle_sigma = min(0.6, max(0.05, self.jitter_mbps))
+        burst_sigma = idle_sigma + 0.15
+        if self._burst_until_tick >= tick:
+            return max(0.0, self.baseline_mbps * random.lognormvariate(self._BENIGN_BURST_MU, burst_sigma))
+        if random.random() < self._BENIGN_BURST_PROBABILITY:
+            self._burst_until_tick = tick + random.randint(*self._BENIGN_BURST_TICKS) - 1
+            return max(0.0, self.baseline_mbps * random.lognormvariate(self._BENIGN_BURST_MU, burst_sigma))
+        return max(0.0, self.baseline_mbps * random.lognormvariate(0.0, idle_sigma))
+
     def sample(self, tick: int) -> dict:
         if self.is_throttled():
             # Quarantine-slice effect: scheduler starves the UE down to
@@ -187,7 +313,9 @@ class UE:
             protocol = self.protocol if attacking_now else self.benign_protocol
             dst_port = self.dst_port if attacking_now else self.benign_dst_port
         elif self.is_attacking(tick):
-            ul_thr_mbps = self.attack_mbps * random.uniform(0.9, 1.1)
+            target_mbps = self.attack_mbps * random.uniform(0.9, 1.1)
+            ramp = self._ramp_factor(tick)
+            ul_thr_mbps = max(0.0, self.baseline_mbps + (target_mbps - self.baseline_mbps) * ramp)
             if self.low_slow:
                 # Slowloris-style: the connection stays open and active,
                 # but deliberately trickles data -- a single one of these
@@ -197,21 +325,48 @@ class UE:
                 prb_usage_pct = min(100.0, max(0.0, 5.0 + ul_thr_mbps * 3.0))
                 sinr_db = random.uniform(15.0, 25.0)
             else:
-                prb_usage_pct = min(100.0, random.uniform(85.0, 100.0))
-                sinr_db = random.uniform(2.0, 6.0)  # degraded -- channel saturated
+                profile = self._ATTACK_RADIO_PROFILES.get(self.protocol, self._ATTACK_RADIO_PROFILES["UDP"])
+                saturation = min(ul_thr_mbps / profile["sat_mbps"], 1.0) if profile["sat_mbps"] > 0 else 1.0
+                prb_usage_pct = profile["prb_floor"] + (profile["prb_ceiling"] - profile["prb_floor"]) * saturation
+                prb_usage_pct = min(100.0, max(0.0, prb_usage_pct + random.uniform(-2.0, 2.0)))
+                sinr_db = profile["sinr_ceiling"] - (profile["sinr_ceiling"] - profile["sinr_floor"]) * saturation
+                sinr_db = max(0.1, sinr_db + random.uniform(-1.0, 1.0))
             state = "ACTIVE"
             dst_ip = self.attack_target_ip
             protocol = self.protocol
             dst_port = self.dst_port
         else:
-            wobble = math.sin(tick / 7.0) * self.jitter_mbps
-            ul_thr_mbps = max(0.0, self.baseline_mbps + wobble + random.uniform(-0.05, 0.05))
+            ul_thr_mbps = self._sample_benign_mbps(tick)
             prb_usage_pct = min(100.0, max(0.0, 5.0 + ul_thr_mbps * 3.0))
             sinr_db = random.uniform(15.0, 25.0)
             state = "ACTIVE" if ul_thr_mbps > 0.05 else "IDLE"
             dst_ip = self.normal_dst_ip
             protocol = self.benign_protocol
             dst_port = self.benign_dst_port
+
+        assert 0.0 <= prb_usage_pct <= 100.0, f"prb_usage_pct out of range: {prb_usage_pct}"
+        assert sinr_db > 0.0, f"sinr_db out of range: {sinr_db}"
+
+        # connected_ticks: consecutive ACTIVE ticks toward the SAME
+        # dst_ip -- proxy for "DRB hold duration" (see __init__'s
+        # comment). Tracked unconditionally (cheap); only written to the
+        # CSV when --extended-kpms swaps in _CSV_COLUMNS_EXTENDED_KPMS.
+        if state == "ACTIVE" and dst_ip == self._last_active_dst_ip:
+            self._connected_ticks += 1
+        elif state == "ACTIVE":
+            self._connected_ticks = 1
+        else:
+            self._connected_ticks = 0
+        self._last_active_dst_ip = dst_ip if state == "ACTIVE" else None
+
+        # pkt_interval_ms: mean inter-packet gap implied by ul_thr_mbps at
+        # the same ASSUMED_AVG_PACKET_SIZE_BYTES the rest of this pipeline
+        # already assumes (pps = bps / 512, see mobile_adapter.py) --
+        # 1000/pps, not pps itself. Deliberately HIGH for low_slow's
+        # trickle rate (few packets, far apart) and LOW for a volumetric
+        # flood (many packets, close together) -- the opposite of pps.
+        pps_est = (ul_thr_mbps * 1e6 / 8.0) / _ASSUMED_AVG_PACKET_SIZE_BYTES
+        pkt_interval_ms = (1000.0 / pps_est) if pps_est > 0 else _MAX_PKT_INTERVAL_MS
 
         return {
             "timestamp": f"{time.time():.6f}",
@@ -224,6 +379,8 @@ class UE:
             "state": state,
             "dst_port": str(dst_port),
             "protocol": protocol,
+            "connected_ticks": str(self._connected_ticks),
+            "pkt_interval_ms": f"{pkt_interval_ms:.3f}",
         }
 
 
@@ -236,6 +393,24 @@ class UE:
 #   DIST_MIN_SOURCES=5, DIST_ENTROPY_THRESHOLD=0.7 (near-equal per-source rate)
 #   LOW_SLOW_MOBILE_MAX_PPS=8.0 -> ~0.033 Mbps ceiling, MIN_SOURCES=5
 # via MobileNetworkAdapter's pps = bps / ASSUMED_AVG_PACKET_SIZE_BYTES(512).
+#
+# Calibración tesis (2026-06-26, fix #5) -- recalibrated attack_mbps
+# defaults below: a single mobile UE sustaining 3 Mbps of bare TCP SYNs
+# (the old default) is ~73k SYN/s at a 40-byte packet, not a credible
+# single-handset flood for the thesis narrative. New defaults, still
+# comfortably classified (worst case at the existing ±10% sampling
+# jitter in sample(), i.e. the low end of that range):
+#   scenario_syn_flood:        0.5 Mbps  -> ~122.07 pps (×12.2 over SYN_THRESHOLD=10,
+#                               worst case ~109.9 pps at -10% jitter)
+#   scenario_icmp_flood:       1.5 Mbps  -> ~366.21 pps (×2.44 over ICMP_THRESHOLD=150,
+#                               worst case ~329.6 pps at -10% jitter -- still >150;
+#                               ICMP_THRESHOLD itself left unchanged, margin checked
+#                               sufficient)
+#   scenario_distributed_syn:  0.4 Mbps/UE x 5 UEs = 2.0 Mbps total -> ~97.66 pps/UE,
+#                               ~488.3 pps aggregate (entropy unaffected -- still equal
+#                               per-source rate)
+#   scenario_udp_flood:        45.0 Mbps (unchanged -- this IS meant to be the extreme
+#                               volumetric case) -> ~10986.3 pps (×54.9 over UDP_THRESHOLD=200)
 
 _BENIGN_UES = [
     dict(imsi=1, ip="10.60.0.2", baseline_mbps=0.3, jitter_mbps=0.15, normal_dst_ip="203.0.113.10"),
@@ -295,7 +470,7 @@ def scenario_syn_flood(attack_end_tick: int, gnb_count: int = 1):
     ues = _benign_ues(gnb_count)
     ues.append(UE(
         imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
-        attack_window=(10, attack_end_tick), attack_mbps=3.0,
+        attack_window=(10, attack_end_tick), attack_mbps=0.5,
         protocol="TCP_SYN", dst_port=443,
         gnb_id=_gnb_for(len(ues), gnb_count),
     ))
@@ -307,7 +482,7 @@ def scenario_icmp_flood(attack_end_tick: int, gnb_count: int = 1):
     ues = _benign_ues(gnb_count)
     ues.append(UE(
         imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
-        attack_window=(10, attack_end_tick), attack_mbps=5.0,
+        attack_window=(10, attack_end_tick), attack_mbps=1.5,
         protocol="ICMP", dst_port=0,
         gnb_id=_gnb_for(len(ues), gnb_count),
     ))
@@ -330,7 +505,7 @@ def scenario_distributed_syn(attack_end_tick: int, gnb_count: int = 1):
         ues.append(UE(
             imsi=10 + i, ip=f"10.60.0.{20 + i}",
             baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip=f"203.0.113.{40 + i}",
-            attack_window=(10, attack_end_tick), attack_mbps=2.0,
+            attack_window=(10, attack_end_tick), attack_mbps=0.4,
             protocol="TCP_SYN", dst_port=443,
             gnb_id=_gnb_for(len(ues), gnb_count),
         ))
@@ -545,7 +720,18 @@ def main():
                          help="number of simulated gNBs to round-robin UEs across (default: 1)")
     parser.add_argument("--rc-command-queue", default=str(DEFAULT_RC_COMMAND_QUEUE_PATH),
                          help="JSONL queue MobileNetworkAdapter.apply_mitigation() writes to")
+    parser.add_argument("--extended-kpms", action="store_true",
+                         help="append connected_ticks/pkt_interval_ms synthetic columns "
+                              "(no E2SM-KPM v3 equivalent -- see _CSV_COLUMNS_EXTENDED_KPMS)")
     args = parser.parse_args()
+
+    if args.extended_kpms:
+        # Module-global swap, not a parameter -- _run_tick_loop's
+        # signature can't change (see _CSV_COLUMNS' comment), and it
+        # reads this name directly, so this must happen before it's
+        # started, in both the scripted and interactive entry points.
+        global _CSV_COLUMNS
+        _CSV_COLUMNS = _CSV_COLUMNS_BASE + _CSV_COLUMNS_EXTENDED_KPMS
 
     if args.interactive:
         return run_interactive(args)
@@ -773,14 +959,14 @@ def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] 
         elif choice == "2":  # TCP SYN Flood
             mbps = _prompt_float(
                 f"  Throughput de ataque en Mbps (umbral SYN_THRESHOLD={settings.SYN_THRESHOLD}pps)",
-                3.0,
+                0.5,
             )
             dst_port = _prompt_int("  Puerto TCP objetivo", 443)
             protocol = "TCP_SYN"
         else:  # ICMP Flood
             mbps = _prompt_float(
                 f"  Throughput de ataque en Mbps (umbral ICMP_THRESHOLD={settings.ICMP_THRESHOLD}pps)",
-                5.0,
+                1.5,
             )
             protocol, dst_port = "ICMP", 0
         with ues_lock:
@@ -794,7 +980,7 @@ def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] 
         group = _choose_group(ues, settings.DIST_MIN_SOURCES, default_count=5)
         if not group:
             return None
-        mbps = _prompt_float("  Throughput de ataque por UE en Mbps", 2.0)
+        mbps = _prompt_float("  Throughput de ataque por UE en Mbps", 0.4)
         dst_port = _prompt_int("  Puerto TCP objetivo", 443)
         with ues_lock:
             for ue in group:

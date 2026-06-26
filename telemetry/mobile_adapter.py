@@ -194,7 +194,15 @@ class MobileNetworkAdapter(DomainAdapter):
             f.seek(self._csv_read_offset)
             reader = csv.reader(f)
             for row in reader:
-                if len(row) == len(_CSV_COLUMNS_EXT):
+                # >= (not ==) _CSV_COLUMNS_EXT -- ul_traffic_simulator.py's
+                # --extended-kpms appends connected_ticks/pkt_interval_ms
+                # trailing columns this adapter has no TelemetryEvent field
+                # for. zip() with the shorter _CSV_COLUMNS_EXT just stops
+                # consuming there and ignores the extras, instead of the
+                # row failing this length check entirely and getting
+                # silently dropped (which would have meant turning on
+                # --extended-kpms breaks mobile telemetry collection).
+                if len(row) >= len(_CSV_COLUMNS_EXT):
                     fields = dict(zip(_CSV_COLUMNS_EXT, row))
                 elif len(row) == len(_CSV_COLUMNS):
                     fields = dict(zip(_CSV_COLUMNS, row))
