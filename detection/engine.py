@@ -206,7 +206,19 @@ class DDoSDetectionEngine:
             if streak < settings.LOW_SLOW_MOBILE_MIN_CYCLES:
                 continue
 
-            score = len(low_rate_sources) / settings.LOW_SLOW_MOBILE_MIN_SOURCES
+            # 1.3x headroom at the documented minimum source count, not a
+            # plain count/MIN_SOURCES ratio -- DecisionEngine weights
+            # LOW_SLOW at 1.2 and requires score*confidence*weight >=
+            # DECISION_THRESHOLD(1.5). A plain ratio caps at exactly 1.0
+            # when count==MIN_SOURCES, and confidence (below) caps at 1.0
+            # too, so 1.0*1.0*1.2=1.2 could never clear 1.5 no matter how
+            # long the attack persisted -- meeting the stated minimum
+            # would be detected (logged every cycle, see is_active_block)
+            # but silently never actually mitigated. The 1.3 multiplier
+            # makes the documented minimum genuinely sufficient: 1.3*1.2=
+            # 1.56 clears 1.5 right at MIN_SOURCES/MIN_CYCLES, instead of
+            # requiring undocumented extra sources to ever cross threshold.
+            score = 1.3 * (len(low_rate_sources) / settings.LOW_SLOW_MOBILE_MIN_SOURCES)
             # Full confidence as soon as the persistence requirement is
             # actually met (unlike the openflow LOW_SLOW variants' .../2.0
             # softening) -- MIN_CYCLES is already the deliberate

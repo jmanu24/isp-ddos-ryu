@@ -282,19 +282,19 @@ def scenario_distributed_syn(attack_end_tick: int):
 
 def scenario_low_slow(attack_end_tick: int):
     """
-    Seven UEs (> settings.LOW_SLOW_MOBILE_MIN_SOURCES, with margin --
-    DecisionEngine's weighted score needs the source count to clear
-    MIN_SOURCES by more than the bare minimum to actually cross
-    DECISION_THRESHOLD once confirmed), each holding a low, sub-
+    settings.LOW_SLOW_MOBILE_MIN_SOURCES UEs, each holding a low, sub-
     threshold, deliberately steady rate (well under
     LOW_SLOW_MOBILE_MAX_PPS) toward the same target for many consecutive
     cycles -- any one of them alone looks like ordinary light traffic;
     it's the persistence of several at once that
-    analyze_low_slow_mobile() flags. Low jitter on purpose: a real
-    Slowloris-style connection trickles a steady drip, not a noisy one.
+    analyze_low_slow_mobile() flags (its score formula gives this exact
+    minimum count enough headroom to actually clear DECISION_THRESHOLD
+    once confirmed, not just get detected and never mitigated). Low
+    jitter on purpose: a real Slowloris-style connection trickles a
+    steady drip, not a noisy one.
     """
     ues = _benign_ues()
-    for i in range(7):
+    for i in range(settings.LOW_SLOW_MOBILE_MIN_SOURCES):
         ues.append(UE(
             imsi=20 + i, ip=f"10.60.0.{30 + i}",
             baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip=f"203.0.113.{50 + i}",
@@ -667,7 +667,8 @@ def _configure_attack(ues: list) -> "tuple[str, list] | None":
         return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
 
     # low_slow
-    group = _choose_group(ues, settings.LOW_SLOW_MOBILE_MIN_SOURCES, default_count=7)
+    group = _choose_group(ues, settings.LOW_SLOW_MOBILE_MIN_SOURCES,
+                           default_count=settings.LOW_SLOW_MOBILE_MIN_SOURCES)
     if not group:
         return None
     max_mbps = settings.LOW_SLOW_MOBILE_MAX_PPS * 512 * 8 / 1e6
