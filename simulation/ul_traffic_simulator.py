@@ -288,15 +288,31 @@ class UE:
     _BENIGN_BURST_TICKS = (3, 5)       # inclusive tick-length range of a burst
     _BENIGN_BURST_MU = 0.5             # bursts run hotter on average, not just noisier
 
+    # Hard ceiling on benign output, comfortably under UDP_THRESHOLD's
+    # ~0.82 Mbps equivalent -- benign traffic's default protocol tag is
+    # "UDP" (benign_protocol), so that's the threshold it would compete
+    # against. A lognormal's right tail is unbounded by construction:
+    # without this cap, a large-enough (if individually rare) burst
+    # sample eventually clears the threshold purely by chance, with no
+    # attack ever configured -- confirmed: 15 idle UEs free-running for a
+    # few minutes produced repeated "UDP_FLOOD" detections, ~0.4% of
+    # samples (200k-sample check) landing above 0.82 Mbps. This caps the
+    # tail without removing it -- bursts can still run several times
+    # hotter than baseline, just never past a level real benign traffic
+    # plausibly reaches anyway.
+    _BENIGN_MAX_MBPS = 0.6
+
     def _sample_benign_mbps(self, tick: int) -> float:
         idle_sigma = min(0.6, max(0.05, self.jitter_mbps))
         burst_sigma = idle_sigma + 0.15
         if self._burst_until_tick >= tick:
-            return max(0.0, self.baseline_mbps * random.lognormvariate(self._BENIGN_BURST_MU, burst_sigma))
-        if random.random() < self._BENIGN_BURST_PROBABILITY:
+            mbps = self.baseline_mbps * random.lognormvariate(self._BENIGN_BURST_MU, burst_sigma)
+        elif random.random() < self._BENIGN_BURST_PROBABILITY:
             self._burst_until_tick = tick + random.randint(*self._BENIGN_BURST_TICKS) - 1
-            return max(0.0, self.baseline_mbps * random.lognormvariate(self._BENIGN_BURST_MU, burst_sigma))
-        return max(0.0, self.baseline_mbps * random.lognormvariate(0.0, idle_sigma))
+            mbps = self.baseline_mbps * random.lognormvariate(self._BENIGN_BURST_MU, burst_sigma)
+        else:
+            mbps = self.baseline_mbps * random.lognormvariate(0.0, idle_sigma)
+        return min(self._BENIGN_MAX_MBPS, max(0.0, mbps))
 
     def sample(self, tick: int) -> dict:
         if self.is_throttled():
