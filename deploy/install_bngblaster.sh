@@ -104,7 +104,9 @@ else
   else
     echo "  -> consultando releases en GitHub (rtbrick/bngblaster)..."
     for PAGE in 1 2 3; do
-      RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/rtbrick/bngblaster/releases?per_page=100&page=${PAGE}")" || break
+      RELEASES_JSON="$(curl -fsSL --connect-timeout 5 --max-time 20 \
+        "https://api.github.com/repos/rtbrick/bngblaster/releases?per_page=100&page=${PAGE}")" \
+        || { warn "curl a la API de GitHub falló o tardó más de 20s (página ${PAGE})"; break; }
       [ -z "$RELEASES_JSON" ] && break
       DEB_URL="$(echo "$RELEASES_JSON" \
         | grep -o "https://github.com/rtbrick/bngblaster/releases/download/[^\"]*-${OS_TAG}_${ARCH}\.deb" \
@@ -119,7 +121,7 @@ else
 
   TMP_DEB="$(mktemp --suffix=.deb)"
   echo "  -> descargando ${DEB_URL}..."
-  if ! curl -fsSL "$DEB_URL" -o "$TMP_DEB"; then
+  if ! curl -fsSL --connect-timeout 5 --max-time 60 "$DEB_URL" -o "$TMP_DEB"; then
     rm -f "$TMP_DEB"
     fail "no se pudo descargar ${DEB_URL}"
   fi
