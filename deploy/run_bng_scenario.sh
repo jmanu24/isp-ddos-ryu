@@ -14,9 +14,15 @@
 #      running from another terminal)
 #   4. Runs simulation/bng_traffic_simulator.py for the chosen scenario
 #      in the foreground, so you see its own [BNG] log lines live
-#   5. On exit (Ctrl-C or natural end), stops the controller it started
-#      and leaves the netns/dnsmasq setup in place (re-run with
-#      --teardown-network to remove it)
+#   5. On exit (Ctrl-C or natural end): stops the controller it started,
+#      then tears down everything setup_bng_netns.sh created (veth
+#      pairs, dnsmasq, /etc/dnsmasq.d/bng-access.conf) plus this run's
+#      transient /tmp/bng_run_config.json and /tmp/bng_run.sock --
+#      leaves the Ubuntu host exactly as it found it. Pass
+#      --keep-network to skip this and leave the setup in place (faster
+#      next run, but you'll need --teardown-network yourself eventually).
+#      The telemetry CSV (/tmp/ddos_bng_events.csv) and controller log
+#      are never deleted -- they're output, not configuration.
 #
 # Usage:
 #   sudo ./deploy/run_bng_scenario.sh syn_flood
@@ -25,6 +31,7 @@
 #   sudo ./deploy/run_bng_scenario.sh distributed_syn_flood
 #   sudo ./deploy/run_bng_scenario.sh low_and_slow --duration 120
 #   sudo ./deploy/run_bng_scenario.sh syn_flood --no-controller
+#   sudo ./deploy/run_bng_scenario.sh syn_flood --keep-network
 #   sudo ./deploy/run_bng_scenario.sh --teardown-network
 #
 # Must run as root (or with sudo) -- BNGBlaster needs raw sockets and
@@ -41,16 +48,18 @@ TICK=0.5    # matches config/settings.py's COLLECT_INTERVAL by default
 TARGET_IP="10.0.2.10"
 START_CONTROLLER=1
 TEARDOWN_NETWORK=0
+KEEP_NETWORK=0
 EXTRA_SIM_ARGS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --teardown-network) TEARDOWN_NETWORK=1; shift ;;
+    --keep-network) KEEP_NETWORK=1; shift ;;
     --duration) DURATION="$2"; shift 2 ;;
     --tick) TICK="$2"; shift 2 ;;
     --target-ip) TARGET_IP="$2"; shift 2 ;;
     --no-controller) START_CONTROLLER=0; shift ;;
-    -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)
       if [ -z "$SCENARIO" ]; then SCENARIO="$1"; shift; else EXTRA_SIM_ARGS+=("$1"); shift; fi
       ;;
@@ -102,6 +111,14 @@ cleanup() {
     echo "== Deteniendo ryu-manager (pid ${CONTROLLER_PID}) =="
     kill "$CONTROLLER_PID" 2>/dev/null || true
     wait "$CONTROLLER_PID" 2>/dev/null || true
+  fi
+
+  if [ "$KEEP_NETWORK" -eq 0 ]; then
+    echo "== Limpiando configuración de red (veth + dnsmasq) =="
+    ./deploy/setup_bng_netns.sh --teardown || true
+    rm -f /tmp/bng_run_config.json /tmp/bng_run.sock
+  else
+    echo "== --keep-network: dejando veth-a/veth-n/dnsmasq como están =="
   fi
 }
 trap cleanup EXIT INT TERM

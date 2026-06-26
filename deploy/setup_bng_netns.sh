@@ -43,7 +43,6 @@ ACCESS_DHCP_RANGE_START="10.60.0.10"
 ACCESS_DHCP_RANGE_END="10.60.0.200"
 ACCESS_PEER_ADDR="10.60.0.1/24"
 DNSMASQ_CONF="/etc/dnsmasq.d/bng-access.conf"
-DNSMASQ_PIDFILE="/run/dnsmasq-bng-access.pid"
 
 TEARDOWN=0
 CHECK_ONLY=0
@@ -69,10 +68,13 @@ iface_exists() { ip link show "$1" >/dev/null 2>&1; }
 
 if [ "$TEARDOWN" -eq 1 ]; then
   echo "== Desmontando interfaces y dnsmasq de acceso =="
-  if [ -f "$DNSMASQ_PIDFILE" ]; then
-    sudo kill "$(cat "$DNSMASQ_PIDFILE")" 2>/dev/null || true
-    sudo rm -f "$DNSMASQ_PIDFILE"
-  fi
+  # Matched by conf-file path in its own argv, not a pid-file -- dnsmasq
+  # under --no-daemon doesn't reliably write the --pid-file path (the
+  # pidfile is meant for a daemonized parent to manage; confirmed on a
+  # real run: the file never appeared even though dnsmasq itself logged
+  # "started" successfully), so a pidfile-based kill silently killed
+  # nothing.
+  sudo pkill -f "dnsmasq.*${DNSMASQ_CONF}" 2>/dev/null && ok "dnsmasq de acceso detenido" || ok "dnsmasq de acceso no estaba corriendo"
   sudo rm -f "$DNSMASQ_CONF"
   iface_exists "$ACCESS_IF" && sudo ip link del "$ACCESS_IF" && ok "${ACCESS_IF}/${ACCESS_PEER} eliminados"
   iface_exists "$NETWORK_IF" && sudo ip link del "$NETWORK_IF" && ok "${NETWORK_IF}/${NETWORK_PEER} eliminados"
@@ -131,9 +133,11 @@ ok "IPv6 deshabilitado en ${NETWORK_IF}/${ACCESS_IF}"
 
 echo "== 3. dnsmasq en ${ACCESS_PEER} (DHCP para sesiones IPoE) =="
 
+dnsmasq_running() { pgrep -f "dnsmasq.*${DNSMASQ_CONF}" >/dev/null 2>&1; }
+
 if [ "$CHECK_ONLY" -eq 1 ]; then
   command -v dnsmasq >/dev/null 2>&1 && ok "dnsmasq instalado" || warn "dnsmasq no instalado -- corre sin --check-only"
-  [ -f "$DNSMASQ_PIDFILE" ] && ok "dnsmasq de acceso corriendo" || warn "dnsmasq de acceso no está corriendo"
+  dnsmasq_running && ok "dnsmasq de acceso corriendo" || warn "dnsmasq de acceso no está corriendo"
 else
   if ! command -v dnsmasq >/dev/null 2>&1; then
     echo "  -> instalando dnsmasq..."
@@ -157,17 +161,23 @@ except-interface=lo
 dhcp-range=${ACCESS_DHCP_RANGE_START},${ACCESS_DHCP_RANGE_END},255.255.255.0,12h
 EOF
 
-  if [ -f "$DNSMASQ_PIDFILE" ] && sudo kill -0 "$(cat "$DNSMASQ_PIDFILE")" 2>/dev/null; then
-    sudo kill "$(cat "$DNSMASQ_PIDFILE")"
+  if dnsmasq_running; then
+    sudo pkill -f "dnsmasq.*${DNSMASQ_CONF}"
     sleep 0.5
   fi
-  sudo dnsmasq --conf-file="$DNSMASQ_CONF" --pid-file="$DNSMASQ_PIDFILE" --no-daemon &
+  sudo dnsmasq --conf-file="$DNSMASQ_CONF" --no-daemon &
   disown
   sleep 0.5
-  if [ -f "$DNSMASQ_PIDFILE" ] || pgrep -f "dnsmasq.*${ACCESS_PEER}" >/dev/null 2>&1; then
+  # Matched by conf-file path, not a --pid-file -- confirmed on a real
+  # run: dnsmasq logged "started" successfully and IS actually running
+  # under --no-daemon, but never writes the pid-file path in that mode
+  # (it's meant for a daemonized parent to manage), so the old
+  # `[ -f "$DNSMASQ_PIDFILE" ]` check always reported a false [WARN]
+  # even when dnsmasq was healthy.
+  if dnsmasq_running; then
     ok "dnsmasq corriendo en ${ACCESS_PEER} (rango ${ACCESS_DHCP_RANGE_START}-${ACCESS_DHCP_RANGE_END})"
   else
-    warn "dnsmasq pudo no haber arrancado -- revisa manualmente (journalctl, o corre el comando sin --no-daemon)"
+    warn "dnsmasq no arrancó -- revisa manualmente (journalctl, o corre el comando sin --no-daemon)"
   fi
 fi
 
