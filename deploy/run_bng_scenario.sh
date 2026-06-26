@@ -85,13 +85,15 @@ else
   echo "  [OK] bngblaster ya instalado en $(command -v bngblaster)"
 fi
 
-echo "== 2. Verificando red (veth + dnsmasq) =="
-if ! ip link show veth-a >/dev/null 2>&1 || ! ip link show veth-n >/dev/null 2>&1; then
-  echo "  -> interfaces no encontradas, configurando..."
-  ./deploy/setup_bng_netns.sh
-else
-  echo "  [OK] veth-a/veth-n ya existen"
-fi
+echo "== 2. Configurando red (veth + dnsmasq) =="
+# Always re-runs setup_bng_netns.sh, not just when the interfaces are
+# missing -- it's idempotent (checks before creating), and skipping it
+# once the interfaces already exist meant a fix added there later
+# (disabling IPv6 on veth-a/veth-n) silently never got applied on a
+# rerun against interfaces an older run had already created (confirmed:
+# the conflicting-fe80-address warning kept appearing even after that
+# fix landed, because this script's own existence check bypassed it).
+./deploy/setup_bng_netns.sh
 
 CONTROLLER_PID=""
 cleanup() {
