@@ -896,14 +896,18 @@ class OrchestrationController:
             )
 
             if self._mobile_below_threshold_streak[key] >= self.UNBLOCK_CONFIRM_CYCLES:
-                # Carries the original block's attack_type through so the
-                # dashboard/logger line reads "UNBLOCK (UDP_FLOOD) ..."
-                # instead of a blank "()".
-                attack_type = self._active_mobile_blocks[key].attack_type
+                # Carries the original block's attack_type/device_id
+                # through so the dashboard/logger line reads "UNTHROTTLE
+                # ... gNB=1 ..." instead of a blank attack_type or
+                # "gNB=unknown" -- same gNB the UE was throttled on,
+                # since releasing it is the same RIC-facing operation,
+                # just in reverse.
+                original = self._active_mobile_blocks[key]
+                attack_type = original.attack_type
 
                 unblock_action = MitigationAction(
                     domain="mobile",
-                    device_id="",
+                    device_id=original.device_id,
                     src_ip=src_ip,
                     dst_ip=dst_ip,
                     dst_port=dst_port,
