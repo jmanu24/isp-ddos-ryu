@@ -10,6 +10,7 @@ from ryu.lib.packet import udp
 from ryu.lib.packet import icmp
 
 import config.settings as settings
+from core.log_format import log_line
 
 
 class LearningSwitch:
@@ -167,7 +168,9 @@ class LearningSwitch:
             hard_timeout=0
         )
 
-        self._logger.info("Installing table-miss flow entry on switch %s", datapath.id)
+        self._logger.info(
+            log_line("openflow", "FORWARDING", "TABLE_MISS_INSTALLED", f"switch={datapath.id}")
+        )
 
     def packet_in_handler(self, ev):
 

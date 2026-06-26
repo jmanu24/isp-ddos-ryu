@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple
 
 import config.settings as settings
+from core.log_format import log_line
 from core.models import CorrelatedEvent, DetectionResult, MitigationAction
 from decision.engine import DecisionEngine, Decision
 from telemetry.base import DomainAdapter
@@ -524,7 +525,7 @@ class OrchestrationController:
         if adapter:
             adapter.apply_mitigation(action)
         else:
-            self._logger.error("No adapter registered for domain '%s'", action.domain)
+            self._logger.error(log_line(action.domain, "ORCHESTRATION", "ADAPTER_MISSING"))
 
         return True
 

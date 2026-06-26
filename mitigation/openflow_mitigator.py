@@ -2,6 +2,7 @@ import logging
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import config.settings as settings
+from core.log_format import log_line
 from core.models import MitigationAction
 from mitigation.base import MitigationAdapter
 
@@ -148,10 +149,10 @@ class OpenFlowMitigator(MitigationAdapter):
         # Supplementary detail the standard MITIGATION line (ryu_controller_2.
         # py's _run_pipeline) doesn't carry -- which switch/port the drop
         # rule actually landed on.
-        self._logger.info(
-            "Drop rule installed for %s -> %s:%s/%s on %s",
-            src_ip, dst_ip, dst_port, protocol, scope,
-        )
+        self._logger.info(log_line(
+            "openflow", "MITIGATION", "DROP_RULE_INSTALLED",
+            f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} scope={scope}",
+        ))
 
     def unblock(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> None:
         """
@@ -210,10 +211,10 @@ class OpenFlowMitigator(MitigationAdapter):
                 if calls % self.YIELD_EVERY == 0:
                     self._yield_fn()
 
-        self._logger.info(
-            "Cleared %d forwarding rule(s) toward %s on %d switch(es)",
-            len(sources), dst_ip, len(self._datapaths),
-        )
+        self._logger.info(log_line(
+            "openflow", "MITIGATION", "FORWARDING_CLEARED",
+            f"count={len(sources)} destination={dst_ip} switches={len(self._datapaths)}",
+        ))
 
     # ------------------------------------------------------------------
     # Internal OpenFlow helpers

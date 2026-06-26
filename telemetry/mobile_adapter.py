@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Dict, List, Optional
 
+from core.log_format import log_line
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
 from oran_bridge.ue_ip_map import DEFAULT_PATH as DEFAULT_UE_IP_MAP_PATH, load_ue_ip_map
@@ -132,10 +133,10 @@ class MobileNetworkAdapter(DomainAdapter):
         if mtime != self._ue_ip_map_mtime:
             self._ue_ip_map = load_ue_ip_map(self._ue_ip_map_path)
             self._ue_ip_map_mtime = mtime
-            self._logger.info(
-                "Reloaded UE IP map from %s (%d entries)",
-                self._ue_ip_map_path, len(self._ue_ip_map),
-            )
+            self._logger.info(log_line(
+                "mobile", "TELEMETRY", "UE_MAP_RELOADED",
+                f"path={self._ue_ip_map_path} entries={len(self._ue_ip_map)}",
+            ))
 
     def is_connected(self) -> bool:
         return os.path.exists(self.kpm_csv_path)
@@ -145,9 +146,13 @@ class MobileNetworkAdapter(DomainAdapter):
 
         connected = os.path.exists(self.kpm_csv_path)
         if connected and not self._was_connected:
-            self._logger.info("Mobile domain telemetry source connected: %s", self.kpm_csv_path)
+            self._logger.info(log_line(
+                "mobile", "TELEMETRY", "SOURCE_CONNECTED", f"path={self.kpm_csv_path}"
+            ))
         elif not connected and self._was_connected:
-            self._logger.warning("Mobile domain telemetry source lost: %s", self.kpm_csv_path)
+            self._logger.warning(log_line(
+                "mobile", "TELEMETRY", "SOURCE_LOST", f"path={self.kpm_csv_path}"
+            ))
         self._was_connected = connected
 
         if not connected:
@@ -175,10 +180,10 @@ class MobileNetworkAdapter(DomainAdapter):
         # the new file's contents back up from the start instead.
         try:
             if os.path.getsize(self.kpm_csv_path) < self._csv_read_offset:
-                self._logger.info(
-                    "Mobile domain telemetry source %s was truncated -- resuming from offset 0",
-                    self.kpm_csv_path,
-                )
+                self._logger.info(log_line(
+                    "mobile", "TELEMETRY", "SOURCE_TRUNCATED",
+                    f"path={self.kpm_csv_path} resuming_from=0",
+                ))
                 self._csv_read_offset = 0
         except OSError:
             pass
@@ -259,11 +264,10 @@ class MobileNetworkAdapter(DomainAdapter):
         # flooding) -- see _row_to_event's src_ip/dst_ip comment.
         imsi = self._imsi_for_ip(action.src_ip)
         if imsi is None:
-            self._logger.warning(
-                "Cannot resolve src_ip %s back to an IMSI -- "
-                "ue_ip_map.csv may be out of date for this run",
-                action.src_ip,
-            )
+            self._logger.warning(log_line(
+                "mobile", "MITIGATION", "IMSI_UNRESOLVED",
+                f"src_ip={action.src_ip} (ue_ip_map.csv may be out of date for this run)",
+            ))
             return False
 
         command = {

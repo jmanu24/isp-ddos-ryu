@@ -54,6 +54,7 @@ from web.socket_server import start_server, emit_update
 from web import metrics
 
 import config.settings as settings
+from core.log_format import log_line
 
 # Display verb for the MITIGATION log line, by domain -- the mobile
 # domain doesn't block anything on a network path the way an OpenFlow
@@ -91,15 +92,15 @@ def _format_mitigation_message(action) -> str:
         # leak MitigationAction's dataclass default (60) on every
         # UNTHROTTLE line regardless of how long the real one ran.
         duration_part = f" duration={action.duration}s" if action.action == "block" else ""
-        return (
-            f"MITIGATION: {verb} UE src_ip={action.src_ip} gNB={gnb}{duration_part} "
-            f"-- {action.attack_type} [{action.domain}]"
+        return log_line(
+            "mobile", "MITIGATION", verb,
+            f"{action.attack_type} UE src_ip={action.src_ip} gNB={gnb}{duration_part}",
         )
 
-    return (
-        f"MITIGATION: {verb} ({action.attack_type}) "
-        f"source={action.src_ip} destination={action.dst_ip}:{action.dst_port}/{action.protocol} "
-        f"[{action.domain}]"
+    return log_line(
+        action.domain, "MITIGATION", verb,
+        f"{action.attack_type} source={action.src_ip} "
+        f"destination={action.dst_ip}:{action.dst_port}/{action.protocol}",
     )
 
 
@@ -171,7 +172,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         # ── Web dashboard ─────────────────────────────────────────────
         threading.Thread(target=start_server, daemon=True).start()
 
-        self.logger.info("FlowStats IDS started")
+        self.logger.info(log_line("controller", "STARTUP", "READY"))
 
     # ------------------------------------------------------------------
     # TOPOLOGY
@@ -219,7 +220,7 @@ class FlowStatsIDS(app_manager.RyuApp):
                 interswitch_ports.add((lk.dst.dpid, lk.dst.port_no))
             self.orchestrator.update_interswitch_ports(interswitch_ports)
         except Exception as e:
-            self.logger.error("Topology update error: %s", e)
+            self.logger.error(log_line("controller", "TOPOLOGY", "ERROR", str(e)))
 
     @set_ev_cls(event.EventSwitchEnter)
     def switch_enter_handler(self, ev):
@@ -261,7 +262,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         dashboard_state.add_event(f"Switch connected: {datapath.id}")
         emit_update()
 
-        self.logger.info("Switch connected: %s", datapath.id)
+        self.logger.info(log_line("openflow", "FORWARDING", "SWITCH_CONNECTED", f"id={datapath.id}"))
 
     # ------------------------------------------------------------------
     # PACKET IN
@@ -289,7 +290,7 @@ class FlowStatsIDS(app_manager.RyuApp):
                     self._request_flow_stats(dp)
                     self._request_port_stats(dp)
                 except Exception as e:
-                    self.logger.error("Stats request error: %s", e)
+                    self.logger.error(log_line("openflow", "TELEMETRY", "ERROR", str(e)))
 
             hub.sleep(settings.COLLECT_INTERVAL)
 
@@ -320,7 +321,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             try:
                 all_events.extend(adapter.collect())
             except Exception as e:
-                self.logger.error("Telemetry collect error (%s): %s", adapter.domain_name, e)
+                self.logger.error(log_line(adapter.domain_name, "TELEMETRY", "ERROR", str(e)))
 
         # Stage 2 — correlate across domains
         self.correlator.ingest(all_events)
@@ -402,10 +403,9 @@ class FlowStatsIDS(app_manager.RyuApp):
             if self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol, sources=d.sources):
                 continue
 
-            msg = (
-                f"ATTACK DETECTED: {d.attack_type} "
-                f"source={d.src_ip} destination={d.dst_ip}:{d.dst_port}/{d.protocol} "
-                f"[{d.domain}]"
+            msg = log_line(
+                d.domain, "DETECTION", "ATTACK_DETECTED",
+                f"{d.attack_type} source={d.src_ip} destination={d.dst_ip}:{d.dst_port}/{d.protocol}",
             )
             dashboard_state.add_event(msg)
             self.logger.warning(msg)
