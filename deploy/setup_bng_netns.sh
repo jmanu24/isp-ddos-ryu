@@ -121,6 +121,15 @@ else
     sudo apt-get install -y -qq dnsmasq
   fi
 
+  # `command -v dnsmasq` can already be true from a DIFFERENT package
+  # (e.g. dnsmasq-base, pulled in by NetworkManager/libvirt) that never
+  # creates /etc/dnsmasq.d -- confirmed on a real run: dnsmasq was
+  # already present, the install step above was skipped, and the `tee`
+  # below failed outright ("No such file or directory") instead of
+  # silently doing nothing. Created unconditionally rather than only
+  # inside the "not installed" branch.
+  sudo mkdir -p "$(dirname "$DNSMASQ_CONF")"
+
   sudo tee "$DNSMASQ_CONF" >/dev/null <<EOF
 interface=${ACCESS_PEER}
 bind-interfaces
