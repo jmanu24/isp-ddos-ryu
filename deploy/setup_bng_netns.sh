@@ -79,6 +79,23 @@ if [ "$TEARDOWN" -eq 1 ]; then
   exit 0
 fi
 
+# disable_ipv6 + flush -- the kernel auto-assigns an IPv6 link-local
+# address (fe80::...) to any interface the moment it goes up, and
+# BNGBlaster logged exactly that as a real blocker on a live run
+# ("Warning: IP address fe80::... on interface veth-n is conflicting!"):
+# it wants exclusive raw-socket control of veth-n/veth-a, no
+# kernel-managed address at all, not even an automatic IPv6 one
+# ("Interfaces must not have an IP address configured in the host OS!").
+# Applied unconditionally (not just at interface-creation time) so a
+# rerun against interfaces a PREVIOUS version of this script already
+# created also gets fixed, not just brand-new ones. Only applied to
+# BNGBlaster's own sides -- the *-peer ends keep their IPv4 addresses,
+# those need to stay reachable.
+disable_ipv6() {
+  sudo sysctl -qw "net.ipv6.conf.$1.disable_ipv6=1"
+  sudo ip -6 addr flush dev "$1" 2>/dev/null || true
+}
+
 echo "== 1. Par veth de red (${NETWORK_IF} <-> ${NETWORK_PEER}) =="
 
 if iface_exists "$NETWORK_IF"; then
@@ -93,6 +110,7 @@ else
   sudo ip addr add "$NETWORK_PEER_ADDR" dev "$NETWORK_PEER" 2>/dev/null || true
   ok "${NETWORK_IF}/${NETWORK_PEER} creados (${NETWORK_PEER} = ${NETWORK_PEER_ADDR})"
 fi
+disable_ipv6 "$NETWORK_IF"
 
 echo "== 2. Par veth de acceso (${ACCESS_IF} <-> ${ACCESS_PEER}) =="
 
@@ -108,6 +126,8 @@ else
   sudo ip addr add "$ACCESS_PEER_ADDR" dev "$ACCESS_PEER" 2>/dev/null || true
   ok "${ACCESS_IF}/${ACCESS_PEER} creados (${ACCESS_PEER} = ${ACCESS_PEER_ADDR})"
 fi
+disable_ipv6 "$ACCESS_IF"
+ok "IPv6 deshabilitado en ${NETWORK_IF}/${ACCESS_IF}"
 
 echo "== 3. dnsmasq en ${ACCESS_PEER} (DHCP para sesiones IPoE) =="
 

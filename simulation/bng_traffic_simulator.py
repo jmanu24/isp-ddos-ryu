@@ -66,28 +66,28 @@ _NORMAL_PROTOCOL = "TCP"
 
 def _extract_rate(stats: dict) -> tuple:
     """
-    Pulls (pps, bps) out of a session-streams/session-traffic response.
-    Defensive on purpose -- see bng_socket.py's docstring on why the
-    exact field names are unverified.
+    Pulls (pps, bps) out of a real `session-streams` response, confirmed
+    against a live run:
+        {"status": "ok", "code": 200, "session-streams": {
+            "session-id": 1, "rx-packets": 0, "tx-packets": 6,
+            "rx-pps": 0, "tx-pps": 0, "rx-bps-l2": 0, "tx-bps-l2": 728,
+            "rx-mbps-l2": 0.0, "tx-mbps-l2": 0.000728, "streams": []}}
+    -- "session-streams" is the per-SESSION aggregate (not a list), with
+    an optional nested "streams" list breaking it down per individual
+    stream (empty unless BNGBlaster attaches per-stream detail; this
+    pipeline doesn't need that breakdown, the session-level tx-pps/
+    tx-bps-l2 already covers what one subscriber session sent). Field
+    name is "...-bps-l2" (the actual key), not the "...-bps" this code
+    originally guessed -- that earlier guess silently produced bps=0.0
+    forever (no error, just an always-empty bps column) until a real
+    run surfaced the right name.
     """
-    candidates = []
-    if isinstance(stats.get("session-streams"), list):
-        candidates.extend(s for s in stats["session-streams"] if isinstance(s, dict))
-    if isinstance(stats.get("streams"), list):
-        candidates.extend(s for s in stats["streams"] if isinstance(s, dict))
-    if isinstance(stats.get("stream"), dict):
-        candidates.append(stats["stream"])
-    candidates.append(stats)
-
-    total_pps, total_bps, found = 0.0, 0.0, False
-    for c in candidates:
-        pps = c.get("tx-pps", c.get("rx-pps"))
-        bps = c.get("tx-bps", c.get("rx-bps"))
-        if pps is not None or bps is not None:
-            total_pps += float(pps or 0.0)
-            total_bps += float(bps or 0.0)
-            found = True
-    return (total_pps, total_bps) if found else (0.0, 0.0)
+    node = stats.get("session-streams", stats)
+    if not isinstance(node, dict):
+        return 0.0, 0.0
+    pps = node.get("tx-pps", node.get("rx-pps", 0.0))
+    bps = node.get("tx-bps-l2", node.get("rx-bps-l2", 0.0))
+    return float(pps or 0.0), float(bps or 0.0)
 
 
 def _extract_session_address(info: dict) -> str:
