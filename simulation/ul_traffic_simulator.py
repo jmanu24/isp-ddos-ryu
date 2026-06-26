@@ -243,67 +243,86 @@ _BENIGN_UES = [
 ]
 
 
-def _benign_ues():
+def _gnb_for(index: int, gnb_count: int) -> str:
+    """Round-robins UEs across gnb_count simulated gNBs ("1".."gnb_count")
+    by creation order -- e.g. with gnb_count=3, UE 0/3/6/... land on gNB 1,
+    UE 1/4/7/... on gNB 2, UE 2/5/8/... on gNB 3. gnb_count=1 (the default
+    everywhere) keeps every UE on gNB 1, i.e. today's prior single-gNB
+    behavior, unchanged unless the caller explicitly asks for more."""
+    return str((index % max(gnb_count, 1)) + 1)
+
+
+def _benign_ues(gnb_count: int = 1):
     # Distinct normal_dst_ip per UE -- MultidomainCorrelator groups by
     # dst_ip, so benign UEs sharing one placeholder destination would
     # have their otherwise-individually-safe pps summed together and
     # could cross a threshold as a false multi-source flood, which isn't
     # what's being simulated here.
-    return [UE(**kwargs) for kwargs in _BENIGN_UES]
+    return [
+        UE(gnb_id=_gnb_for(i, gnb_count), **kwargs)
+        for i, kwargs in enumerate(_BENIGN_UES)
+    ]
 
 
-def scenario_udp_flood(attack_end_tick: int):
+def scenario_udp_flood(attack_end_tick: int, gnb_count: int = 1):
     """Single UE, UDP volumetric flood -- the original/default scenario."""
-    ues = _benign_ues()
+    ues = _benign_ues(gnb_count)
     ues.append(UE(
         imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
         attack_window=(10, attack_end_tick), attack_mbps=45.0, protocol="UDP",
+        gnb_id=_gnb_for(len(ues), gnb_count),
     ))
     return ues
 
 
-def scenario_syn_flood(attack_end_tick: int):
+def scenario_syn_flood(attack_end_tick: int, gnb_count: int = 1):
     """Single UE, TCP SYN flood toward a typical web port."""
-    ues = _benign_ues()
+    ues = _benign_ues(gnb_count)
     ues.append(UE(
         imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
         attack_window=(10, attack_end_tick), attack_mbps=3.0,
         protocol="TCP_SYN", dst_port=443,
+        gnb_id=_gnb_for(len(ues), gnb_count),
     ))
     return ues
 
 
-def scenario_icmp_flood(attack_end_tick: int):
+def scenario_icmp_flood(attack_end_tick: int, gnb_count: int = 1):
     """Single UE, ICMP flood."""
-    ues = _benign_ues()
+    ues = _benign_ues(gnb_count)
     ues.append(UE(
         imsi=3, ip="10.60.0.4", baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip="203.0.113.30",
         attack_window=(10, attack_end_tick), attack_mbps=5.0,
         protocol="ICMP", dst_port=0,
+        gnb_id=_gnb_for(len(ues), gnb_count),
     ))
     return ues
 
 
-def scenario_distributed_syn(attack_end_tick: int):
+def scenario_distributed_syn(attack_end_tick: int, gnb_count: int = 1):
     """
     Five UEs (>= settings.DIST_MIN_SOURCES), each contributing a near-
     equal TCP_SYN rate toward the same target -- the near-uniform
     per-source distribution (high entropy) is what makes
     DDoSDetectionEngine classify this as DDOS_DISTRIBUTED instead of
-    five independent SYN_FLOOD attackers.
+    five independent SYN_FLOOD attackers. Spread across gnb_count gNBs
+    (round-robin) when given more than one -- a distributed attack
+    coming from several gNBs at once is the realistic case; gnb_count=1
+    keeps them all on gNB 1.
     """
-    ues = _benign_ues()
+    ues = _benign_ues(gnb_count)
     for i in range(5):
         ues.append(UE(
             imsi=10 + i, ip=f"10.60.0.{20 + i}",
             baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip=f"203.0.113.{40 + i}",
             attack_window=(10, attack_end_tick), attack_mbps=2.0,
             protocol="TCP_SYN", dst_port=443,
+            gnb_id=_gnb_for(len(ues), gnb_count),
         ))
     return ues
 
 
-def scenario_low_slow(attack_end_tick: int):
+def scenario_low_slow(attack_end_tick: int, gnb_count: int = 1):
     """
     settings.LOW_SLOW_MOBILE_MIN_SOURCES UEs, each holding a low, sub-
     threshold, deliberately steady rate (well under
@@ -314,9 +333,10 @@ def scenario_low_slow(attack_end_tick: int):
     minimum count enough headroom to actually clear DECISION_THRESHOLD
     once confirmed, not just get detected and never mitigated). Low
     jitter on purpose: a real Slowloris-style connection trickles a
-    steady drip, not a noisy one.
+    steady drip, not a noisy one. Spread across gnb_count gNBs
+    (round-robin) like scenario_distributed_syn above.
     """
-    ues = _benign_ues()
+    ues = _benign_ues(gnb_count)
     for i in range(settings.LOW_SLOW_MOBILE_MIN_SOURCES):
         ues.append(UE(
             imsi=20 + i, ip=f"10.60.0.{30 + i}",
@@ -327,6 +347,7 @@ def scenario_low_slow(attack_end_tick: int):
             # _PROTOCOL_CHECKS' literal tags, so this never competes with
             # the volumetric SYN_FLOOD path even by coincidence.
             protocol="TCP", dst_port=80, low_slow=True,
+            gnb_id=_gnb_for(len(ues), gnb_count),
         ))
     return ues
 
@@ -505,6 +526,8 @@ def main():
     parser.add_argument("--no-attack", action="store_true", help="disable the scenario's attack window(s)")
     parser.add_argument("--attack-end-tick", type=int, default=25,
                          help="tick at which the attack stops on its own")
+    parser.add_argument("--gnb-count", type=int, default=1,
+                         help="number of simulated gNBs to round-robin UEs across (default: 1)")
     parser.add_argument("--rc-command-queue", default=str(DEFAULT_RC_COMMAND_QUEUE_PATH),
                          help="JSONL queue MobileNetworkAdapter.apply_mitigation() writes to")
     args = parser.parse_args()
@@ -512,7 +535,7 @@ def main():
     if args.interactive:
         return run_interactive(args)
 
-    ues = SCENARIOS[args.scenario](args.attack_end_tick)
+    ues = SCENARIOS[args.scenario](args.attack_end_tick, args.gnb_count)
     if args.no_attack:
         for ue in ues:
             ue.attack_window = None
@@ -540,7 +563,7 @@ def main():
             else f"low-and-slow ({ue.protocol}) from tick {ue.attack_window[0]}" if ue.attack_window
             else "benign only"
         )
-        print(f"  IMSI {ue.imsi} -> {ue.ip} ({attack_desc})")
+        print(f"  IMSI {ue.imsi} -> {ue.ip} (gNB {ue.gnb_id}) ({attack_desc})")
 
     print(f"[ul_traffic_simulator] appending to {args.out_csv} every {args.tick}s "
           f"({'forever' if args.duration <= 0 else f'{args.duration}s total'}) -- Ctrl+C to stop")
@@ -620,10 +643,11 @@ def _prompt_float(prompt: str, default: float) -> float:
             print("  Ingresa un número válido.")
 
 
-def build_normal_ues(n: int) -> list:
+def build_normal_ues(n: int, gnb_count: int = 1) -> list:
     """N UEs with ordinary, individually-benign background traffic --
     each gets its own normal_dst_ip (see SCENARIOS' "Distinct
-    normal_dst_ip" comment for why that matters to the correlator)."""
+    normal_dst_ip" comment for why that matters to the correlator), and
+    is round-robin'd across gnb_count simulated gNBs (see _gnb_for)."""
     ues = []
     for i in range(n):
         ues.append(UE(
@@ -632,6 +656,7 @@ def build_normal_ues(n: int) -> list:
             baseline_mbps=round(random.uniform(0.2, 0.5), 2),
             jitter_mbps=0.15,
             normal_dst_ip=f"203.0.113.{10 + i}",
+            gnb_id=_gnb_for(i, gnb_count),
         ))
     return ues
 
@@ -669,7 +694,7 @@ def _choose_single_attacker(ues: list) -> "UE | None":
     if not free:
         print("  No hay ninguna UE libre (todas están atacando ya). Detén un ataque primero.")
         return None
-    print("  UEs disponibles: " + ", ".join(f"IMSI {u.imsi}" for u in free))
+    print("  UEs disponibles: " + ", ".join(f"IMSI {u.imsi} (gNB {u.gnb_id})" for u in free))
     while True:
         raw = _prompt("  ¿Qué UE ataca? (IMSI)", str(free[0].imsi))
         matches = [u for u in free if str(u.imsi) == raw]
@@ -748,7 +773,7 @@ def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] 
             ue.attack_mbps = mbps
             ue.attack_target_ip = target_ip
             ue.attack_window = (0, 10 ** 9)  # "until stopped" -- see is_attacking()
-        return f"{name} desde IMSI {ue.imsi} -> {target_ip} ({mbps} Mbps)", [ue]
+        return f"{name} desde IMSI {ue.imsi} (gNB {ue.gnb_id}) -> {target_ip} ({mbps} Mbps)", [ue]
 
     if kind == "distributed":
         group = _choose_group(ues, settings.DIST_MIN_SOURCES, default_count=5)
@@ -762,7 +787,7 @@ def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] 
                 ue.attack_mbps = mbps
                 ue.attack_target_ip = target_ip
                 ue.attack_window = (0, 10 ** 9)
-        imsis = ", ".join(str(u.imsi) for u in group)
+        imsis = ", ".join(f"{u.imsi}(gNB{u.gnb_id})" for u in group)
         return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
 
     # low_slow
@@ -782,21 +807,28 @@ def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] 
             ue.attack_mbps = mbps
             ue.attack_target_ip = target_ip
             ue.attack_window = (0, 10 ** 9)
-    imsis = ", ".join(str(u.imsi) for u in group)
+    imsis = ", ".join(f"{u.imsi}(gNB{u.gnb_id})" for u in group)
     return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
 
 
 def run_interactive(args):
     print("=== Simulador interactivo de tráfico móvil ===")
     n = _prompt_int("¿Cuántas UEs quieres simular con tráfico normal?", default=3, min_value=1)
-    ues = build_normal_ues(n)
+    gnb_count = _prompt_int(
+        "¿Cuántos gNB (estaciones base) quieres simular?",
+        default=min(3, n), min_value=1,
+    )
+    if gnb_count > n:
+        print(f"  Aviso: hay menos UEs ({n}) que gNB solicitados ({gnb_count}) -- "
+              f"algunos gNB quedarán sin UEs asignadas.")
+    ues = build_normal_ues(n, gnb_count)
 
     write_ue_ip_map(ues, Path(args.ue_ip_map))
     Path(args.out_csv).write_text("")
     Path(args.rc_command_queue).write_text("")
-    print(f"[ul_traffic_simulator] {n} UE(s) configuradas, tráfico normal:")
+    print(f"[ul_traffic_simulator] {n} UE(s) configuradas en {gnb_count} gNB, tráfico normal:")
     for ue in ues:
-        print(f"  IMSI {ue.imsi} -> {ue.ip} (baseline {ue.baseline_mbps} Mbps -> {ue.normal_dst_ip})")
+        print(f"  IMSI {ue.imsi} -> {ue.ip} (gNB {ue.gnb_id}, baseline {ue.baseline_mbps} Mbps -> {ue.normal_dst_ip})")
 
     stop_event = threading.Event()
     # Held around every full per-tick UE batch (background thread) and
