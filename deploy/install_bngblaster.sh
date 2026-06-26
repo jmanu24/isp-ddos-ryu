@@ -98,21 +98,55 @@ else
   esac
   ok "OS detectado: ID=${OS_ID:-?} VERSION_ID=${OS_VERSION_ID:-?} -> buscando assets *-${OS_TAG}_${ARCH}.deb"
 
+  # Last release confirmed (via the GitHub API, see this file's git log)
+  # to still publish a .deb for an OS tag the "latest" release dropped --
+  # 0.9.17 is the newest release with an ubuntu-20.04 build (0.9.18+
+  # stopped shipping one). Used only as a fallback, and only for tags
+  # not in the latest release -- newer/still-supported tags always try
+  # "latest" first, so this table doesn't need to be kept in sync with
+  # every new BNGBlaster release, only with tags that get DROPPED.
+  case "$OS_TAG" in
+    ubuntu-20.04) FALLBACK_VERSION="0.9.17" ;;
+    ubuntu-18.04) FALLBACK_VERSION="0.8.26" ;;
+    *)            FALLBACK_VERSION="" ;;
+  esac
+
+  url_exists() {
+    curl -fsSL --connect-timeout 5 --max-time 15 -o /dev/null -r 0-0 "$1"
+  }
+
   DEB_URL=""
   if [ -n "$VERSION" ]; then
     DEB_URL="https://github.com/rtbrick/bngblaster/releases/download/${VERSION}/bngblaster-${VERSION}-${OS_TAG}_${ARCH}.deb"
   else
-    echo "  -> consultando releases en GitHub (rtbrick/bngblaster)..."
-    for PAGE in 1 2 3; do
-      RELEASES_JSON="$(curl -fsSL --connect-timeout 5 --max-time 20 \
-        "https://api.github.com/repos/rtbrick/bngblaster/releases?per_page=100&page=${PAGE}")" \
-        || { warn "curl a la API de GitHub falló o tardó más de 20s (página ${PAGE})"; break; }
-      [ -z "$RELEASES_JSON" ] && break
-      DEB_URL="$(echo "$RELEASES_JSON" \
-        | grep -o "https://github.com/rtbrick/bngblaster/releases/download/[^\"]*-${OS_TAG}_${ARCH}\.deb" \
-        | head -1)"
-      [ -n "$DEB_URL" ] && break
-    done
+    # Single, small request (one release, not the whole history) --
+    # earlier versions of this script paged through ALL releases
+    # (hundreds) to find one with a matching asset, which OOM-killed the
+    # process on a memory-constrained VM with no error message at all
+    # (set -x's trace of each full JSON page made the symptom obvious,
+    # but the bug existed either way). A HEAD-style range request
+    # (-r 0-0) checks existence without downloading the whole .deb.
+    echo "  -> consultando el último release de GitHub (rtbrick/bngblaster)..."
+    LATEST_TAG="$(curl -fsSL --connect-timeout 5 --max-time 15 \
+      "https://api.github.com/repos/rtbrick/bngblaster/releases/latest" \
+      | grep -o '"tag_name": *"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')" || true
+
+    if [ -n "$LATEST_TAG" ]; then
+      CANDIDATE_URL="https://github.com/rtbrick/bngblaster/releases/download/${LATEST_TAG}/bngblaster-${LATEST_TAG}-${OS_TAG}_${ARCH}.deb"
+      if url_exists "$CANDIDATE_URL"; then
+        DEB_URL="$CANDIDATE_URL"
+      else
+        warn "el release más reciente (${LATEST_TAG}) no publica un .deb para ${OS_TAG}"
+      fi
+    else
+      warn "no se pudo obtener el tag del último release"
+    fi
+
+    if [ -z "$DEB_URL" ] && [ -n "$FALLBACK_VERSION" ]; then
+      CANDIDATE_URL="https://github.com/rtbrick/bngblaster/releases/download/${FALLBACK_VERSION}/bngblaster-${FALLBACK_VERSION}-${OS_TAG}_${ARCH}.deb"
+      echo "  -> probando el último release conocido con build para ${OS_TAG} (${FALLBACK_VERSION})..."
+      url_exists "$CANDIDATE_URL" && DEB_URL="$CANDIDATE_URL"
+    fi
   fi
 
   if [ -z "$DEB_URL" ]; then
