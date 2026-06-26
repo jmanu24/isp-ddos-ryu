@@ -43,6 +43,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import csv
 import json
 import math
@@ -405,6 +406,7 @@ def _run_tick_loop(
     duration: float = 0.0,
     verbose: bool = True,
     stop_event: "threading.Event | None" = None,
+    ues_lock: "threading.Lock | None" = None,
 ):
     """
     The actual sampling loop: every tick_seconds, consume pending RC
@@ -413,6 +415,21 @@ def _run_tick_loop(
     mode's background thread -- stop_event lets the interactive mode
     end this from another thread without relying on KeyboardInterrupt
     (which only the main thread receives).
+
+    ues_lock: held for the whole per-tick sampling pass when given
+    (interactive mode only). Without it, the interactive menu's thread
+    can mutate a UE's attack_window/protocol/etc. *while* this thread is
+    midway through sampling that same tick's batch -- e.g. the menu
+    clears attack_window for UEs 1-5 on "stop", but this loop already
+    sampled UE 1 as still attacking before the mutation landed and only
+    then samples UEs 2-5 as already reverted. That leaves UE 1's active
+    block one confirm-cycle behind the other four's, and if the
+    interactive session exits before that extra cycle completes, UE 1's
+    quarantine never gets confirmed-unblocked at all (observed: 4 of 5
+    UEs in a group attack correctly unblocked, the 5th left blocked
+    forever after the simulator process exited). Locking the whole
+    per-tick batch makes "all UEs sampled" and "the menu's mutation"
+    mutually exclusive, so a tick is never split across the change.
     """
     ues_by_imsi = {ue.imsi: ue for ue in ues}
     tick = 0
@@ -439,32 +456,33 @@ def _run_tick_loop(
 
             rc_command_offset = _consume_rc_commands(ues_by_imsi, rc_command_queue, rc_command_offset)
 
-            for ue in ues:
-                row = ue.sample(tick)
-                writer.writerow([row[c] for c in _CSV_COLUMNS])
+            with ues_lock if ues_lock is not None else contextlib.nullcontext():
+                for ue in ues:
+                    row = ue.sample(tick)
+                    writer.writerow([row[c] for c in _CSV_COLUMNS])
 
-                now_attacking = ue.is_attacking(tick)
-                was_attacking = attacking_state[ue.imsi]
-                if now_attacking and not was_attacking:
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print(f"{now_str} [ul_traffic_simulator] ATTACK START imsi={ue.imsi} "
-                          f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port} "
-                          f"mbps={ue.attack_mbps}")
-                elif was_attacking and not now_attacking:
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print(f"{now_str} [ul_traffic_simulator] ATTACK END imsi={ue.imsi} "
-                          f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port}")
-                attacking_state[ue.imsi] = now_attacking
+                    now_attacking = ue.is_attacking(tick)
+                    was_attacking = attacking_state[ue.imsi]
+                    if now_attacking and not was_attacking:
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"{now_str} [ul_traffic_simulator] ATTACK START imsi={ue.imsi} "
+                              f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port} "
+                              f"mbps={ue.attack_mbps}")
+                    elif was_attacking and not now_attacking:
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"{now_str} [ul_traffic_simulator] ATTACK END imsi={ue.imsi} "
+                              f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port}")
+                    attacking_state[ue.imsi] = now_attacking
 
-                if verbose:
-                    flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
-                    # Same "%Y-%m-%d %H:%M:%S" format ryu_controller_2.py's
-                    # logging.basicConfig uses, so a line here and the
-                    # controller's own log line for the same event can be
-                    # matched up directly without converting formats by hand.
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print(f"{now_str} tick={tick} imsi={ue.imsi} ul_thr_mbps={row['ul_thr_mbps']} "
-                          f"prb={row['prb_usage_pct']}%{flag}")
+                    if verbose:
+                        flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
+                        # Same "%Y-%m-%d %H:%M:%S" format ryu_controller_2.py's
+                        # logging.basicConfig uses, so a line here and the
+                        # controller's own log line for the same event can be
+                        # matched up directly without converting formats by hand.
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"{now_str} tick={tick} imsi={ue.imsi} ul_thr_mbps={row['ul_thr_mbps']} "
+                              f"prb={row['prb_usage_pct']}%{flag}")
             f.flush()
             tick += 1
 
@@ -653,10 +671,14 @@ def _choose_group(ues: list, min_sources: int, default_count: int) -> "list | No
     return free[:count]
 
 
-def _configure_attack(ues: list) -> "tuple[str, list] | None":
+def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] | None":
     """Prompts for an attack type and its parameters, applies it to the
     chosen UE(s), and returns (description, affected_ues) -- or None if
-    the user cancelled / no UE was available."""
+    the user cancelled / no UE was available. The actual attribute
+    mutation (not the prompting, which can block on user input
+    indefinitely) is done under ues_lock -- see _run_tick_loop's
+    docstring for why a torn mutation across a tick's UE batch leaves a
+    block confirm-cycle permanently out of sync with its siblings."""
     while True:
         _print_menu(ues)
         choice = _prompt("Opción", "0")
@@ -679,23 +701,25 @@ def _configure_attack(ues: list) -> "tuple[str, list] | None":
                 f"  Throughput de ataque en Mbps (umbral UDP_THRESHOLD={settings.UDP_THRESHOLD}pps)",
                 45.0,
             )
-            ue.protocol, ue.dst_port, ue.low_slow = "UDP", 0, False
+            protocol, dst_port = "UDP", 0
         elif choice == "2":  # TCP SYN Flood
             mbps = _prompt_float(
                 f"  Throughput de ataque en Mbps (umbral SYN_THRESHOLD={settings.SYN_THRESHOLD}pps)",
                 3.0,
             )
             dst_port = _prompt_int("  Puerto TCP objetivo", 443)
-            ue.protocol, ue.dst_port, ue.low_slow = "TCP_SYN", dst_port, False
+            protocol = "TCP_SYN"
         else:  # ICMP Flood
             mbps = _prompt_float(
                 f"  Throughput de ataque en Mbps (umbral ICMP_THRESHOLD={settings.ICMP_THRESHOLD}pps)",
                 5.0,
             )
-            ue.protocol, ue.dst_port, ue.low_slow = "ICMP", 0, False
-        ue.attack_mbps = mbps
-        ue.attack_target_ip = target_ip
-        ue.attack_window = (0, 10 ** 9)  # "until stopped" -- see is_attacking()
+            protocol, dst_port = "ICMP", 0
+        with ues_lock:
+            ue.protocol, ue.dst_port, ue.low_slow = protocol, dst_port, False
+            ue.attack_mbps = mbps
+            ue.attack_target_ip = target_ip
+            ue.attack_window = (0, 10 ** 9)  # "until stopped" -- see is_attacking()
         return f"{name} desde IMSI {ue.imsi} -> {target_ip} ({mbps} Mbps)", [ue]
 
     if kind == "distributed":
@@ -704,11 +728,12 @@ def _configure_attack(ues: list) -> "tuple[str, list] | None":
             return None
         mbps = _prompt_float("  Throughput de ataque por UE en Mbps", 2.0)
         dst_port = _prompt_int("  Puerto TCP objetivo", 443)
-        for ue in group:
-            ue.protocol, ue.dst_port, ue.low_slow = "TCP_SYN", dst_port, False
-            ue.attack_mbps = mbps
-            ue.attack_target_ip = target_ip
-            ue.attack_window = (0, 10 ** 9)
+        with ues_lock:
+            for ue in group:
+                ue.protocol, ue.dst_port, ue.low_slow = "TCP_SYN", dst_port, False
+                ue.attack_mbps = mbps
+                ue.attack_target_ip = target_ip
+                ue.attack_window = (0, 10 ** 9)
         imsis = ", ".join(str(u.imsi) for u in group)
         return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
 
@@ -723,11 +748,12 @@ def _configure_attack(ues: list) -> "tuple[str, list] | None":
         round(max_mbps * 0.6, 4),
     )
     dst_port = _prompt_int("  Puerto TCP objetivo", 80)
-    for ue in group:
-        ue.protocol, ue.dst_port, ue.low_slow = "TCP", dst_port, True
-        ue.attack_mbps = mbps
-        ue.attack_target_ip = target_ip
-        ue.attack_window = (0, 10 ** 9)
+    with ues_lock:
+        for ue in group:
+            ue.protocol, ue.dst_port, ue.low_slow = "TCP", dst_port, True
+            ue.attack_mbps = mbps
+            ue.attack_target_ip = target_ip
+            ue.attack_window = (0, 10 ** 9)
     imsis = ", ".join(str(u.imsi) for u in group)
     return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
 
@@ -745,10 +771,14 @@ def run_interactive(args):
         print(f"  IMSI {ue.imsi} -> {ue.ip} (baseline {ue.baseline_mbps} Mbps -> {ue.normal_dst_ip})")
 
     stop_event = threading.Event()
+    # Held around every full per-tick UE batch (background thread) and
+    # around every attack-config/stop mutation (this thread) -- see
+    # _run_tick_loop's docstring for the exact race this closes.
+    ues_lock = threading.Lock()
     thread = threading.Thread(
         target=_run_tick_loop,
         args=(ues, args.out_csv, args.rc_command_queue, args.tick),
-        kwargs={"verbose": False, "stop_event": stop_event},
+        kwargs={"verbose": False, "stop_event": stop_event, "ues_lock": ues_lock},
         daemon=True,
     )
     thread.start()
@@ -757,7 +787,7 @@ def run_interactive(args):
 
     try:
         while True:
-            result = _configure_attack(ues)
+            result = _configure_attack(ues, ues_lock)
             if result is None:
                 break
             description, attacking_ues = result
@@ -766,8 +796,9 @@ def run_interactive(args):
             while True:
                 cmd = input("> ").strip().lower()
                 if cmd in ("stop", "s", ""):
-                    for ue in attacking_ues:
-                        ue.attack_window = None
+                    with ues_lock:
+                        for ue in attacking_ues:
+                            ue.attack_window = None
                     print("[ul_traffic_simulator] Ataque detenido. Las UEs volvieron a tráfico normal.")
                     break
                 print("  Comando no reconocido -- escribe 'stop' para detener el ataque actual.")
