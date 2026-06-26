@@ -237,13 +237,26 @@ class DDoSDetectionEngine:
             # exists to wait for.
             confidence = min(streak / settings.LOW_SLOW_MOBILE_MIN_CYCLES, 1.0)
 
+            # Real dst_port/protocol from one of the actual contributing
+            # UEs, not a hardcoded placeholder -- this detector doesn't
+            # need protocol/port to decide (it's a source-count signature,
+            # not a volumetric one), but logging a fake "UDP/0" when the
+            # simulator was actually configured as e.g. TCP/80 made the
+            # controller's own MITIGATION line look inconsistent with what
+            # was simulated. All contributing UEs share the same tag in
+            # practice (one attack config applied to the whole group), so
+            # any single representative is correct.
+            representative = next(
+                e for e in event.events if e.src_ip in low_rate_sources
+            )
+
             results.append(DetectionResult(
                 domain="mobile",
                 device_id="",
                 src_ip="*",
                 dst_ip=event.dst_ip,
-                dst_port=0,
-                protocol="UDP",
+                dst_port=representative.dst_port,
+                protocol=representative.protocol,
                 attack_type="LOW_SLOW",
                 score=score,
                 confidence=confidence,
