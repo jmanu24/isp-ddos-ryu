@@ -462,11 +462,22 @@ class OrchestrationController:
             if action.action == "block":
                 key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
                 is_new = key not in self._active_blocks
-                self._active_blocks[key] = action
-                self._below_threshold_streak[key] = 0
-                metrics.set_active_blocks(len(self._active_blocks))
 
                 if is_new:
+                    # Only set on first block, not every re-evaluation --
+                    # the same flow can flip between classifications cycle
+                    # to cycle right at the edge of a threshold/entropy
+                    # boundary (e.g. LOW_SLOW one cycle, SYN_FLOOD the
+                    # next, for the literal same attack -- see
+                    # DDoSDetectionEngine's grace-period comments for why
+                    # this race exists). Overwriting _active_blocks[key]
+                    # on every re-evaluation made the eventual UNBLOCK
+                    # line report whichever attack_type happened to be
+                    # classified LAST, not the one that was actually
+                    # logged as the block -- confusing when they differ.
+                    self._active_blocks[key] = action
+                    self._below_threshold_streak[key] = 0
+                    metrics.set_active_blocks(len(self._active_blocks))
                     # Counted per distinct block event, not per cycle an
                     # already-active one gets re-evaluated — see is_new
                     # above and the docstring.
@@ -491,11 +502,17 @@ class OrchestrationController:
             # the UE's reported throughput actually drops.
             key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
             is_new = key not in self._active_mobile_blocks
-            self._active_mobile_blocks[key] = action
-            self._mobile_below_threshold_streak[key] = 0
 
             if not is_new:
                 return False
+
+            # Only set on first throttle, not every re-evaluation -- see
+            # the matching comment in the openflow branch above for why
+            # (a flow can flip classification cycle to cycle right at a
+            # threshold/entropy boundary; overwriting here would make the
+            # eventual UNTHROTTLE line report the wrong attack_type).
+            self._active_mobile_blocks[key] = action
+            self._mobile_below_threshold_streak[key] = 0
 
             adapter = self._adapters.get(action.domain)
             if adapter:
