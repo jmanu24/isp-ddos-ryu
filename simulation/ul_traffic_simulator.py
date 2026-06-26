@@ -102,7 +102,7 @@ class UE:
         self,
         imsi: int,
         ip: str,
-        gnb_id: str = "1",
+        gnb_id: str = "00101-1",  # PLMN(001/01)-nbID 1 -- see _gnb_for below
         baseline_mbps: float = 0.8,
         jitter_mbps: float = 0.3,
         normal_dst_ip: str = "203.0.113.10",
@@ -243,13 +243,28 @@ _BENIGN_UES = [
 ]
 
 
+# FlexRIC's E2 node identity (global_e2_node_id_t, src/lib/e2ap/v3_01/
+# e2ap_types/common/e2ap_global_node_id.h) is PLMN (MCC/MNC, plain
+# integers -- e2ap_plmn_t) + a numeric gNB ID (e2ap_gnb_id_t.nb_id,
+# uint32_t). FlexRIC itself never formats this as one string -- its
+# example xApps print mcc/mnc/nb_id as separate fields (examples/xApp/c/
+# helloworld/hw.c) -- but a single CSV column needs one, so this uses the
+# common real-world "PLMN-nbID" convention (e.g. "00101-1") instead of a
+# bare counter. MCC=001/MNC=01 is the well-known generic test PLMN used
+# across RAN testbeds (srsRAN, OAI, etc.), not a real operator's.
+_TEST_MCC = "001"
+_TEST_MNC = "01"
+
+
 def _gnb_for(index: int, gnb_count: int) -> str:
-    """Round-robins UEs across gnb_count simulated gNBs ("1".."gnb_count")
-    by creation order -- e.g. with gnb_count=3, UE 0/3/6/... land on gNB 1,
-    UE 1/4/7/... on gNB 2, UE 2/5/8/... on gNB 3. gnb_count=1 (the default
-    everywhere) keeps every UE on gNB 1, i.e. today's prior single-gNB
-    behavior, unchanged unless the caller explicitly asks for more."""
-    return str((index % max(gnb_count, 1)) + 1)
+    """Round-robins UEs across gnb_count simulated gNBs
+    ("<mcc><mnc>-1".."<mcc><mnc>-gnb_count") by creation order -- e.g.
+    with gnb_count=3, UE 0/3/6/... land on gNB "00101-1", UE 1/4/7/... on
+    "00101-2", UE 2/5/8/... on "00101-3". gnb_count=1 (the default
+    everywhere) keeps every UE on "00101-1", unchanged unless the caller
+    explicitly asks for more."""
+    nb_id = (index % max(gnb_count, 1)) + 1
+    return f"{_TEST_MCC}{_TEST_MNC}-{nb_id}"
 
 
 def _benign_ues(gnb_count: int = 1):
