@@ -143,14 +143,15 @@ class FlowStatsIDS(app_manager.RyuApp):
         # ── Stage 1: Telemetry Collection ────────────────────────────
         self.of_adapter = OpenFlowAdapter(is_host_port=self.forwarding.is_host_port)
 
-        # MobileNetworkAdapter is real now (real E2/KPM pipeline via
-        # simulation/parse_xapp_kpm_log.py's output CSV — see that
-        # module and telemetry/mobile_adapter.py's docstring). The
-        # other three remain stubs.
+        # MobileNetworkAdapter and BroadbandAdapter are real now (real
+        # E2/KPM pipeline via simulation/parse_xapp_kpm_log.py's CSV for
+        # mobile, real BNGBlaster pipeline via simulation/
+        # bng_traffic_simulator.py's CSV + control socket for broadband
+        # -- see each module's docstring). The other two remain stubs.
         self.all_adapters = [
             self.of_adapter,
             MobileNetworkAdapter(logger=self.logger),
-            BroadbandAdapter(),          # stub — wire up bng_host later
+            BroadbandAdapter(bng_host="bng-blaster-1"),
             EnterpriseAdapter(),         # stub — wire up pe_host later
             BGPPeeringAdapter(),         # stub — wire up router_host later
         ]

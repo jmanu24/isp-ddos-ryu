@@ -88,3 +88,14 @@ DIST_PPS_THRESHOLD = 300      # aggregate pps across all sources toward one dst
 LOW_SLOW_MOBILE_MAX_PPS = 8.0      # below SYN_THRESHOLD -- "low rate" band ceiling
 LOW_SLOW_MOBILE_MIN_SOURCES = 5    # distinct low-rate UEs toward one dst, same cycle
 LOW_SLOW_MOBILE_MIN_CYCLES = 20    # consecutive cycles that count must hold before flagging
+
+# Domains whose mitigation is inherently per-source (one quarantine action
+# per attacking UE/session, not one destination-wide network lever the way
+# an OpenFlow drop rule is) -- DDoSDetectionEngine.analyze_low_slow_mobile
+# (despite its name, now domain-generic -- see its docstring) and
+# OrchestrationController's per-UE/per-session block/unblock branches
+# (_build_actions, dispatch(), check_mobile_unblocks) both key off this
+# tuple instead of a hardcoded "mobile" string, so BroadbandAdapter's
+# per-session BNGBlaster sessions reuse the exact same machinery
+# MobileNetworkAdapter's per-UE quarantine already validated.
+PER_SOURCE_MITIGATION_DOMAINS = ("mobile", "broadband")

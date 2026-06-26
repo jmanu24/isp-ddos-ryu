@@ -231,29 +231,39 @@ class DDoSDetectionEngine:
         self, correlated: List[CorrelatedEvent], exclude_dsts=frozenset(), is_blocked=None
     ) -> List[DetectionResult]:
         """
-        Low-and-slow detection for the mobile domain.
+        Low-and-slow detection for domains with no connection/flow-count
+        visibility (config.settings.PER_SOURCE_MITIGATION_DOMAINS --
+        mobile's per-UE KPM and the broadband/BNGBlaster domain's
+        per-session counters both report one throughput number per
+        source, no socket-level visibility). Kept this method's original
+        "_mobile" name (only mobile existed when it was written) even
+        though it's domain-generic now, rather than rename it and update
+        every call site for what's purely a label change.
 
         OpenFlow's two LOW_SLOW variants above both key off connection/flow
-        *count* -- a signal the RAN's per-UE KPM telemetry simply doesn't
-        have (one throughput number per UE, no socket-level visibility).
-        Duration alone doesn't work as a substitute either: every benign
-        UE in this pipeline sends a flat, continuous trickle to the same
-        destination for as long as it's connected, so "this UE has had a
-        low nonzero rate for a long time" would eventually flag every
-        ordinary UE.
+        *count* -- a signal that visibility gap rules out. Duration alone
+        doesn't work as a substitute either: every benign UE/session in
+        this pipeline sends a flat, continuous trickle to the same
+        destination for as long as it's connected, so "this source has had
+        a low nonzero rate for a long time" would eventually flag every
+        ordinary one.
 
-        What's actually anomalous is many distinct UEs simultaneously
+        What's actually anomalous is many distinct sources simultaneously
         holding a low, sub-threshold rate toward the *same* destination --
-        the mobile-domain analog of "many slow connections at once" rather
-        than "one connection, slowly". So this counts, per destination,
-        how many distinct mobile-domain UEs have 0 < pps <=
-        LOW_SLOW_MOBILE_MAX_PPS this cycle, and only flags it once that
-        count has held at or above LOW_SLOW_MOBILE_MIN_SOURCES for
-        LOW_SLOW_MOBILE_MIN_CYCLES consecutive cycles. No single attacker
-        to point at -- src_ip="*", with the contributing UEs' IPs carried
-        in `sources` so orchestration can quarantine each of them
-        individually (mirrors DDOS_DISTRIBUTED's per-source list, since
-        unlike OpenFlow there's no destination-wide network lever here).
+        the analog of "many slow connections at once" rather than "one
+        connection, slowly". So this counts, per destination, how many
+        distinct sources (across any domain in PER_SOURCE_MITIGATION_DOMAINS)
+        have 0 < pps <= LOW_SLOW_MOBILE_MAX_PPS this cycle, and only flags
+        it once that count has held at or above LOW_SLOW_MOBILE_MIN_SOURCES
+        for LOW_SLOW_MOBILE_MIN_CYCLES consecutive cycles. No single
+        attacker to point at -- src_ip="*", with the contributing sources'
+        IPs carried in `sources` so orchestration can quarantine each of
+        them individually (mirrors DDOS_DISTRIBUTED's per-source list,
+        since unlike OpenFlow there's no destination-wide network lever
+        here). Mixing sources from more than one PER_SOURCE_MITIGATION_
+        DOMAINS member toward the same destination in one streak is
+        intentional, not a bug -- a multidomain low-and-slow attack is a
+        real (if rarer) case this should still catch.
 
         exclude_dsts: destinations already flagged by a volumetric flood
         this cycle (analyze()) -- a real flood already being handled
@@ -277,7 +287,7 @@ class DDoSDetectionEngine:
 
             low_rate_sources = {
                 e.src_ip for e in event.events
-                if e.domain == "mobile"
+                if e.domain in settings.PER_SOURCE_MITIGATION_DOMAINS
                 and 0 < e.pps <= settings.LOW_SLOW_MOBILE_MAX_PPS
                 and not (is_blocked and is_blocked(e.src_ip, event.dst_ip))
             }
@@ -339,7 +349,7 @@ class DDoSDetectionEngine:
             }
 
             results.append(DetectionResult(
-                domain="mobile",
+                domain=representative.domain,
                 device_id=representative.device_id,
                 src_ip="*",
                 dst_ip=event.dst_ip,
