@@ -67,20 +67,51 @@ else
     fail "bngblaster no está instalado -- corre sin --check-only"
   fi
 
+  # Asset names are "bngblaster-<version>-<os-tag>_<arch>.deb" -- NOT a
+  # generic "latest/download/bngblaster-<arch>.deb" (that 404s; confirmed
+  # on a real run). <os-tag> is "ubuntu-XX.YY" for Ubuntu or a Debian
+  # codename (bookworm/trixie) for Debian, and recent releases don't
+  # necessarily ship a build for every OS tag -- e.g. as of 0.9.36 there
+  # is no ubuntu-20.04 build; 0.9.17 is the last release that has one.
+  # So this queries the GitHub API for actual release assets instead of
+  # guessing a URL, and walks backwards from the newest release until it
+  # finds one that actually published a .deb for this OS tag.
   ARCH="$(dpkg --print-architecture)"
+
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+  fi
+  case "${ID:-}" in
+    ubuntu) OS_TAG="ubuntu-${VERSION_ID:-}" ;;
+    debian) OS_TAG="${VERSION_CODENAME:-bookworm}" ;;
+    *)      OS_TAG="ubuntu-${VERSION_ID:-22.04}" ;;
+  esac
+  ok "OS detectado: ID=${ID:-?} VERSION_ID=${VERSION_ID:-?} -> buscando assets *-${OS_TAG}_${ARCH}.deb"
+
+  DEB_URL=""
   if [ -n "$VERSION" ]; then
-    DEB_URL="https://github.com/rtbrick/bngblaster/releases/download/${VERSION}/bngblaster-${VERSION}-${ARCH}.deb"
+    DEB_URL="https://github.com/rtbrick/bngblaster/releases/download/${VERSION}/bngblaster-${VERSION}-${OS_TAG}_${ARCH}.deb"
   else
-    # "latest" redirect -- avoids hardcoding a version this script will
-    # silently go stale against.
-    DEB_URL="https://github.com/rtbrick/bngblaster/releases/latest/download/bngblaster-${ARCH}.deb"
+    echo "  -> consultando releases en GitHub (rtbrick/bngblaster)..."
+    for PAGE in 1 2 3; do
+      RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/rtbrick/bngblaster/releases?per_page=100&page=${PAGE}")" || break
+      [ -z "$RELEASES_JSON" ] && break
+      DEB_URL="$(echo "$RELEASES_JSON" \
+        | grep -o "https://github.com/rtbrick/bngblaster/releases/download/[^\"]*-${OS_TAG}_${ARCH}\.deb" \
+        | head -1)"
+      [ -n "$DEB_URL" ] && break
+    done
+  fi
+
+  if [ -z "$DEB_URL" ]; then
+    fail "no se encontró ningún release con un .deb para ${OS_TAG}_${ARCH} -- revisa manualmente https://github.com/rtbrick/bngblaster/releases y pasa --version <tag>"
   fi
 
   TMP_DEB="$(mktemp --suffix=.deb)"
   echo "  -> descargando ${DEB_URL}..."
   if ! curl -fsSL "$DEB_URL" -o "$TMP_DEB"; then
     rm -f "$TMP_DEB"
-    fail "no se pudo descargar el .deb -- revisa la versión/arquitectura en https://github.com/rtbrick/bngblaster/releases"
+    fail "no se pudo descargar ${DEB_URL}"
   fi
 
   sudo dpkg -i "$TMP_DEB" || sudo apt-get install -f -y -qq
