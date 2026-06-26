@@ -465,13 +465,13 @@ def _run_tick_loop(
                     was_attacking = attacking_state[ue.imsi]
                     if now_attacking and not was_attacking:
                         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        print(f"{now_str} [ul_traffic_simulator] ATTACK START imsi={ue.imsi} "
-                              f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port} "
-                              f"mbps={ue.attack_mbps}")
+                        _print_async(f"{now_str} [ul_traffic_simulator] ATTACK START imsi={ue.imsi} "
+                                     f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port} "
+                                     f"mbps={ue.attack_mbps}")
                     elif was_attacking and not now_attacking:
                         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        print(f"{now_str} [ul_traffic_simulator] ATTACK END imsi={ue.imsi} "
-                              f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port}")
+                        _print_async(f"{now_str} [ul_traffic_simulator] ATTACK END imsi={ue.imsi} "
+                                     f"protocol={ue.protocol} target={ue.attack_target_ip}:{ue.dst_port}")
                     attacking_state[ue.imsi] = now_attacking
 
                     if verbose:
@@ -563,9 +563,37 @@ def main():
 # one continuous CSV/run, matching what a person actually wants from a
 # live demo instead of relaunching the process per attack.
 
+# Text of whatever prompt is currently awaiting input on the main
+# thread, if any -- set right before each input() call, cleared right
+# after. Read by _print_async (called from the background tick-loop
+# thread) so an ATTACK START/END line printed mid-prompt doesn't just
+# glue itself onto the end of the visible "Opción [0]: " or "> " text;
+# instead it breaks to its own line and redraws the prompt below it, so
+# there's always a clean line to type into. A benign race (the main
+# thread clearing this a moment after the background thread already
+# read it) just means an occasional missed redraw, not a correctness
+# issue -- not worth a lock for a cosmetic concern.
+_CURRENT_PROMPT = {"text": None}
+
+
+def _print_async(message: str) -> None:
+    prompt_text = _CURRENT_PROMPT["text"]
+    if prompt_text:
+        print()  # break out of the half-drawn prompt line
+        print(message)
+        print(prompt_text, end="", flush=True)  # redraw it so there's something to type into
+    else:
+        print(message)
+
+
 def _prompt(prompt: str, default: "str | None" = None) -> str:
     suffix = f" [{default}]" if default is not None else ""
-    raw = input(f"{prompt}{suffix}: ").strip()
+    text = f"{prompt}{suffix}: "
+    _CURRENT_PROMPT["text"] = text
+    try:
+        raw = input(text).strip()
+    finally:
+        _CURRENT_PROMPT["text"] = None
     return raw if raw else (default or "")
 
 
@@ -794,8 +822,18 @@ def run_interactive(args):
             print(f"\n[ul_traffic_simulator] Ataque iniciado: {description}")
             print("Escribe 'stop' y Enter para detenerlo y elegir otro ataque.")
             while True:
-                cmd = input("> ").strip().lower()
-                if cmd in ("stop", "s", ""):
+                _CURRENT_PROMPT["text"] = "> "
+                try:
+                    cmd = input("> ").strip().lower()
+                finally:
+                    _CURRENT_PROMPT["text"] = None
+                if cmd == "":
+                    # Enter alone is not "stop" -- an accidental keystroke
+                    # (or one of the background ATTACK START/END redraws
+                    # below) shouldn't end a running attack with no
+                    # explicit intent behind it.
+                    continue
+                if cmd in ("stop", "s"):
                     with ues_lock:
                         for ue in attacking_ues:
                             ue.attack_window = None
