@@ -346,13 +346,18 @@ class OrchestrationController:
                 for source in d.sources:
                     actions.append(MitigationAction(
                         domain=d.domain,
-                        # Real gNB id (TelemetryEvent.device_id, set by
-                        # MobileNetworkAdapter from the KPM row's gnb_id)
-                        # -- this IS a parameter the RIC would need to
-                        # locate the UE's E2 node, unlike in_port/ingress
-                        # location below, which is an OpenFlow-only
-                        # concept and meaningless for mobile.
-                        device_id=d.device_id,
+                        # This UE's OWN gNB (DetectionResult.source_device_ids),
+                        # not d.device_id (just one representative
+                        # contributing event's gNB) -- contributing UEs can
+                        # each be attached to a different simulated gNB
+                        # (see ul_traffic_simulator.py's --gnb-count), so
+                        # using d.device_id for all of them mislabeled
+                        # every UE except the representative's with the
+                        # wrong gNB. Falls back to d.device_id only if a
+                        # source is somehow missing from the map (shouldn't
+                        # happen -- every source in d.sources came from the
+                        # same event.events this map was built from).
+                        device_id=d.source_device_ids.get(source, d.device_id),
                         src_ip=source,
                         dst_ip=d.dst_ip,
                         dst_port=d.dst_port,

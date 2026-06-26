@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List
+from typing import Dict, List
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +92,16 @@ class DetectionResult:
     confidence  : 0.0–1.0, boosted when attack spans multiple domains
     sources     : distinct source IPs contributing — only populated for
                   DDOS_DISTRIBUTED, where src_ip is "*" (no single attacker)
+    source_device_ids : src_ip -> that source's own device_id (e.g. real
+                  gNB id for a mobile UE) — only populated alongside
+                  `sources`. A mobile multi-source attack's contributing
+                  UEs can each be attached to a *different* gNB (see
+                  simulation/ul_traffic_simulator.py's --gnb-count), so
+                  `device_id` above (one representative event's gNB) is
+                  NOT a stand-in for every source's own gNB the way it is
+                  for dst_port/protocol, which the simulator's attack
+                  config genuinely does apply identically to the whole
+                  group.
     in_port     : ingress switch port of the representative event, when
                   known — lets mitigation scope a block to the exact
                   switch+port closest to the attacker instead of the
@@ -110,6 +120,7 @@ class DetectionResult:
     score: float
     confidence: float
     sources: List[str] = field(default_factory=list)
+    source_device_ids: Dict[str, str] = field(default_factory=dict)
     in_port: int = 0
     pps: float = 0.0
     bps: float = 0.0

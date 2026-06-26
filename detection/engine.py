@@ -328,6 +328,15 @@ class DDoSDetectionEngine:
             representative = next(
                 e for e in event.events if e.src_ip in low_rate_sources
             )
+            # Each contributing UE's OWN device_id (gNB) -- unlike
+            # dst_port/protocol, gnb_id is NOT something one attack config
+            # applies identically to the whole group; UEs spread across
+            # multiple simulated gNBs (ul_traffic_simulator.py's
+            # --gnb-count) each keep their real one. See
+            # DetectionResult.source_device_ids.
+            source_device_ids = {
+                e.src_ip: e.device_id for e in event.events if e.src_ip in low_rate_sources
+            }
 
             results.append(DetectionResult(
                 domain="mobile",
@@ -340,6 +349,7 @@ class DDoSDetectionEngine:
                 score=score,
                 confidence=confidence,
                 sources=list(low_rate_sources),
+                source_device_ids=source_device_ids,
             ))
 
         # Forget destinations that didn't appear in `correlated` at all
@@ -431,6 +441,10 @@ class DDoSDetectionEngine:
             # context, picked from whichever event has the most pps.
             representative = self._pick_representative(proto_events)
             confidence = min(entropy * (self.MULTIDOMAIN_BOOST if multidomain else 1.0), 1.0)
+            # See DetectionResult.source_device_ids -- each contributing
+            # source's own device_id (e.g. a mobile UE's real gNB), not
+            # the single representative event's.
+            source_device_ids = {e.src_ip: e.device_id for e in proto_events}
             return DetectionResult(
                 domain=representative.domain,
                 device_id=representative.device_id,
@@ -442,6 +456,7 @@ class DDoSDetectionEngine:
                 score=score,
                 confidence=confidence,
                 sources=list(pps_by_src.keys()),
+                source_device_ids=source_device_ids,
                 pps=total_pps,
                 bps=total_bps,
             )
@@ -538,6 +553,10 @@ class DDoSDetectionEngine:
         # No single attacking IP to point at — representative is just used
         # for domain/device/protocol/port context.
         representative: TelemetryEvent = max(candidate_events, key=lambda e: e.pps)
+        # See DetectionResult.source_device_ids -- each contributing
+        # source's own device_id (e.g. a mobile UE's real gNB), not the
+        # single representative event's.
+        source_device_ids = {e.src_ip: e.device_id for e in candidate_events}
 
         return DetectionResult(
             domain=representative.domain,
@@ -550,6 +569,7 @@ class DDoSDetectionEngine:
             score=score,
             confidence=confidence,
             sources=list(pps_by_src.keys()),
+            source_device_ids=source_device_ids,
             pps=total_pps,
             bps=total_bps,
         )
