@@ -113,6 +113,17 @@ def _base_config(
             "start-rate": min(400, max(1, session_count)),
         },
         "dhcp": {"enable": True},
+        # Confirmed on a real run: with DHCPv6 left at BNGBlaster's
+        # default (enabled), every session got a real, fully-bound IPv4
+        # lease (dhcp-state="Bound", dhcp-sessions-established=8/8) but
+        # stayed stuck at session-state="IPoE Setup"/session-substate=
+        # "DHCPv6 pending" forever (sessions-established=0/8) -- this
+        # pipeline never set up a DHCPv6 server (deploy/setup_bng_netns.sh
+        # disables IPv6 entirely on veth-a/veth-n), so DHCPv6 could never
+        # complete and the session-level (v4+v6 combined) established
+        # flag never flipped, even though the only protocol this attack
+        # simulation actually needs (IPv4) was already fully working.
+        "dhcpv6": {"enable": False},
         "streams": [],
     }
 
