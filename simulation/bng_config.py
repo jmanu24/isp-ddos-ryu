@@ -164,7 +164,11 @@ def build_scenario(
             "destination-ipv4-address": target_ip,
             "destination-port": p["dst_port"],
             "pps": p["pps"],
-            "length": 64 if p["raw_tcp"] else 128,
+            # BNGBlaster enforces 76 <= length <= 9000 (confirmed on a
+            # real run: "Invalid value for stream->length (76 - 9000)")
+            # -- 64 (a bare Ethernet-frame-sized guess for the raw-tcp
+            # case) was below that floor.
+            "length": 76 if p["raw_tcp"] else 128,
         }
         if attack_start_delay:
             attack_stream["start-delay"] = attack_start_delay
