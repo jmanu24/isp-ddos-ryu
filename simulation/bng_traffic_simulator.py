@@ -90,20 +90,37 @@ def _extract_rate(stats: dict) -> tuple:
     return float(pps or 0.0), float(bps or 0.0)
 
 
-def _extract_session_address(info: dict) -> str:
+def _extract_session_address(info: dict, session_id: int) -> tuple:
     """Pulls this session's own framed (subscriber-side) IPv4 address out
     of a session-info response -- the real per-subscriber source address
     that makes distinct-source detection (Distributed TCP SYN Flood,
-    Low and Slow) possible. Falls back to a deterministic placeholder
-    derived from the session-id if the field name doesn't match (keeps
-    sources distinct even if this assumption is wrong, rather than
-    silently collapsing every session onto the same IP)."""
-    for key in ("ipv4-address", "framed-ip-address", "ip-address"):
-        addr = info.get(key)
-        if isinstance(addr, str) and addr:
-            return addr.split("/")[0]
-    session_id = info.get("session-id", 0)
-    return f"10.50.{(session_id // 254) % 254}.{(session_id % 254) + 1}"
+    Low and Slow) possible. Returns (address, confirmed) -- confirmed is
+    True only when a real address field was found, so the caller knows
+    not to cache a placeholder permanently.
+
+    Response is wrapped (confirmed on a real run: {"status":...,
+    "session-info": {"session-id":..., ...}}), unlike the flat dict
+    this originally assumed -- that bug made every session fall through
+    to the placeholder AND, since it read "session-id" from the same
+    (wrong, top-level) dict, always defaulted to 0, producing the exact
+    same placeholder IP for every single session regardless of its real
+    session-id. session_id is now taken from the caller's own loop
+    variable instead of re-reading it back out of the response.
+
+    A real run's session-info had no IP address field at all yet (DHCP
+    was still stuck pending) -- this fallback is what made that failure
+    visible at all (every session reporting the literal same src_ip)
+    instead of silently collapsing into one false single-attacker
+    signature.
+    """
+    node = info.get("session-info", info)
+    if isinstance(node, dict):
+        for key in ("ipv4-address", "framed-ip-address", "ip-address"):
+            addr = node.get(key)
+            if isinstance(addr, str) and addr:
+                return addr.split("/")[0], True
+    placeholder = f"10.50.{(session_id // 254) % 254}.{(session_id % 254) + 1}"
+    return placeholder, False
 
 
 def _extract_session_counters(stats: dict) -> tuple:
@@ -163,6 +180,7 @@ def run(
         # other BNGBlaster doc example -- see bng_socket.py's docstring.
         session_ids = list(range(1, scn["sessions"] + 1))
         session_ips = {}
+        session_confirmed = set()
 
         elapsed = 0.0
         while elapsed < duration_s:
@@ -197,10 +215,19 @@ def run(
             established, flapped = _extract_session_counters(counters)
 
             for sid in session_ids:
-                if sid not in session_ips:
+                # Re-fetched every tick until a REAL address shows up
+                # (i.e. not yet "confirmed") -- caching the very first
+                # lookup unconditionally meant a session still stuck in
+                # DHCP at that point got its placeholder IP locked in
+                # forever, never updated once DHCP actually completed a
+                # tick or two later.
+                if sid not in session_confirmed:
                     try:
                         info = ctrl.call("session-info", {"session-id": sid})
-                        session_ips[sid] = _extract_session_address(info)
+                        addr, confirmed = _extract_session_address(info, sid)
+                        session_ips[sid] = addr
+                        if confirmed:
+                            session_confirmed.add(sid)
                     except (OSError, RuntimeError, json.JSONDecodeError) as exc:
                         print(f"[BNG] session-info({sid}) failed: {exc}", file=sys.stderr)
                         continue

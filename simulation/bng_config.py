@@ -91,8 +91,21 @@ def _base_config(
             "access": [{
                 "interface": access_interface,
                 "type": "ipoe",
-                "outer-vlan-min": 1,
-                "outer-vlan-max": max(session_count, 1),
+                # 0/0 = untagged (BNGBlaster's own default) -- per-VLAN
+                # tagging (1..session_count) was this script's original,
+                # unnecessary choice, and a real run showed why it's the
+                # wrong one here: deploy/setup_bng_netns.sh's dnsmasq
+                # listens on veth-a-peer with no 802.1Q sub-interfaces,
+                # so VLAN-tagged DHCPDISCOVER frames likely never reached
+                # its plain UDP socket at all (dhcp-tx-discover kept
+                # incrementing, dhcp-rx-offer stayed 0 forever). IPoE
+                # sessions don't need VLANs to be distinct -- BNGBlaster
+                # already gives each one its own MAC (confirmed: session 1
+                # got "02:00:00:00:00:01" on a real run) -- so untagged
+                # avoids the whole VLAN/dnsmasq mismatch instead of fixing
+                # it by adding VLAN sub-interfaces on the peer side.
+                "outer-vlan-min": 0,
+                "outer-vlan-max": 0,
             }],
         },
         "sessions": {
