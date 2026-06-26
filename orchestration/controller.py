@@ -813,8 +813,23 @@ class OrchestrationController:
             src_ip, dst_ip, dst_port, protocol = key
 
             c = by_dst.get(dst_ip)
+            # Matches on src_ip alone, not protocol -- MobileNetworkAdapter.
+            # collect() only ever produces one TelemetryEvent per UE per
+            # cycle (the IMSI's single current row), so a src_ip can't be
+            # ambiguous between protocols the way an OpenFlow 5-tuple could
+            # be. Matching on protocol too caused real false unblocks: the
+            # stored key's protocol comes from DetectionResult, which
+            # carries either the *normalized* tag (DDoSDetectionEngine.
+            # _normalize_protocol turns "TCP_SYN" into "TCP" for OpenFlow's
+            # benefit) or a hardcoded placeholder ("UDP" for analyze_low_
+            # slow_mobile's protocol-agnostic detections) -- neither of
+            # which equals the real TelemetryEvent.protocol ("TCP_SYN" or
+            # whatever the UE actually sends), so the comparison always
+            # failed and every mobile SYN_FLOOD/DDOS_DISTRIBUTED/LOW_SLOW
+            # block unblocked itself after exactly UNBLOCK_CONFIRM_CYCLES
+            # regardless of whether the attack was still running.
             still_present = c is not None and any(
-                e.src_ip == src_ip and e.protocol == protocol for e in c.events
+                e.domain == "mobile" and e.src_ip == src_ip for e in c.events
             )
 
             if still_present:
