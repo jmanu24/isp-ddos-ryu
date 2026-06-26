@@ -72,21 +72,28 @@ def _format_mitigation_message(action) -> str:
     OpenFlow's drop rule genuinely is scoped to one flow (src/dst/port/
     protocol), so "source=X destination=Y:Z/W" accurately describes what
     got blocked. The mobile throttle doesn't work that way: it quarantines
-    the UE's entire radio link (MobileNetworkAdapter just resolves
-    src_ip -> IMSI and queues a per-UE RC command), so the same wording
-    would wrongly imply the action is scoped to traffic toward that one
-    destination -- it isn't; the UE is throttled regardless of what it's
-    talking to. dst_ip/dst_port/protocol are kept in the message as
-    context (what attack triggered this), explicitly labeled as such.
+    the UE's entire radio link regardless of what it's talking to, so the
+    destination it was attacking is irrelevant to *performing* the
+    throttle -- it's just what triggered the decision, already reported
+    by the ATTACK DETECTED line a few lines up. What an E2SM-RC slice-
+    association control actually needs to locate and quarantine the UE
+    is its identity and which gNB/E2 node it's attached to (see Option 1
+    in the FlexRIC investigation: control_sm_xapp_api() takes a UE id and
+    E2 node id, not a destination), plus how long the quarantine should
+    last -- so that's what this message reports instead.
     """
     verb = _MITIGATION_VERBS.get(action.domain, {}).get(action.action, action.action.upper())
 
     if action.domain == "mobile":
+        gnb = action.device_id or "unknown"
+        # duration only means something for the throttle itself -- the
+        # unblock/release action never sets it, so it'd otherwise just
+        # leak MitigationAction's dataclass default (60) on every
+        # UNTHROTTLE line regardless of how long the real one ran.
+        duration_part = f" duration={action.duration}s" if action.action == "block" else ""
         return (
-            f"MITIGATION: {verb} UE src_ip={action.src_ip} "
-            f"(entire radio link, not scoped to one destination) "
-            f"-- triggered by {action.attack_type} toward "
-            f"{action.dst_ip}:{action.dst_port}/{action.protocol} [{action.domain}]"
+            f"MITIGATION: {verb} UE src_ip={action.src_ip} gNB={gnb}{duration_part} "
+            f"-- {action.attack_type} [{action.domain}]"
         )
 
     return (

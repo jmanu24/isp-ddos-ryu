@@ -345,7 +345,13 @@ class OrchestrationController:
                 for source in d.sources:
                     actions.append(MitigationAction(
                         domain=d.domain,
-                        device_id="",
+                        # Real gNB id (TelemetryEvent.device_id, set by
+                        # MobileNetworkAdapter from the KPM row's gnb_id)
+                        # -- this IS a parameter the RIC would need to
+                        # locate the UE's E2 node, unlike in_port/ingress
+                        # location below, which is an OpenFlow-only
+                        # concept and meaningless for mobile.
+                        device_id=d.device_id,
                         src_ip=source,
                         dst_ip=d.dst_ip,
                         dst_port=d.dst_port,
@@ -357,7 +363,16 @@ class OrchestrationController:
                     ))
                 continue
 
-            device_id, in_port = self._scoped_ingress(d)
+            if d.domain == "mobile":
+                # _scoped_ingress below resolves an OpenFlow switch+port
+                # via LearningSwitch's host-location tracking -- not
+                # applicable here (mobile has no ingress port concept).
+                # d.device_id is already the real gNB id for this UE
+                # (see the per-UE branch above), which IS what the RIC
+                # would need to locate it.
+                device_id, in_port = d.device_id, 0
+            else:
+                device_id, in_port = self._scoped_ingress(d)
 
             actions.append(MitigationAction(
                 domain=d.domain,
