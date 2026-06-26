@@ -351,8 +351,14 @@ class FlowStatsIDS(app_manager.RyuApp):
         # --flood does) looks just like "many distinct connections"
         # otherwise, and shouldn't get double-reported as LOW_SLOW too.
         flood_detections = self.detector.analyze(correlated) if correlated else []
-        flagged_dsts = {d.dst_ip for d in flood_detections}
-        flagged_pairs = {(d.src_ip, d.dst_ip) for d in flood_detections}
+        # Merges in pairs/dsts that were a volumetric flood within the
+        # last few cycles, not just this exact one -- closes a race where
+        # a flow-stats data gap on the same cycle LOW_SLOW's count first
+        # crosses its threshold would otherwise let it fire uncontested
+        # and permanently lock in the wrong classification (see
+        # DDoSDetectionEngine._RECENT_FLOOD_GRACE_CYCLES's docstring).
+        flagged_dsts = {d.dst_ip for d in flood_detections} | self.detector.recent_flood_dsts()
+        flagged_pairs = {(d.src_ip, d.dst_ip) for d in flood_detections} | self.detector.recent_flood_pairs()
 
         # Fetched once, reused for both detection input and Grafana metrics
         # below — so the "concurrent/new connections" panels show the real

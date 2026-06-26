@@ -35,6 +35,32 @@ class DDoSDetectionEngine:
     # Confidence multiplier when attack spans more than one domain
     MULTIDOMAIN_BOOST = 1.3
 
+    # How many cycles a (src_ip, dst_ip) pair / dst_ip keeps counting as
+    # "recently a volumetric flood" after the LAST cycle it was actually
+    # classified as one. Exists to close a real race in
+    # analyze_low_slow_single_source/analyze_low_slow's exclusion:
+    # OpenFlow's forwarding rule for an unvalidated (under-attack-from-
+    # the-start) destination is a short-lived PROVISIONAL rule
+    # (LearningSwitch.PROVISIONAL_TIMEOUT=2s) that gets torn down and
+    # reinstalled with its counters reset to 0 roughly every 2s --
+    # FlowCollector sees that reset as a negative byte/packet delta and
+    # silently skips that one sample (collectors/flow_collector.py), so
+    # the volumetric check has periodic one-cycle gaps with no data at
+    # all. Meanwhile DDoSCollector's distinct-source-port count (which is
+    # what catches a single-source low-and-slow signature) never resets
+    # and keeps climbing every cycle regardless -- a flood tool that
+    # randomizes its source port per packet (hping3 --flood does, by
+    # default) will eventually cross LOW_SLOW_NEW_FLOWS even though it's
+    # really just one continuous SYN flood. If that crossing happens to
+    # land on exactly one of the volumetric check's data-gap cycles, the
+    # *same-cycle-only* exclusion this engine used to rely on has nothing
+    # to exclude with, LOW_SLOW fires and blocks the flow -- and since
+    # the block then silences all further packets, the volumetric
+    # classification never gets another chance to set the record straight.
+    # A multi-cycle grace period instead of a same-cycle-only check
+    # absorbs that gap.
+    _RECENT_FLOOD_GRACE_CYCLES = 6
+
     def __init__(self):
         # dst_ip -> consecutive cycles with >= LOW_SLOW_MOBILE_MIN_SOURCES
         # distinct low-rate mobile UEs seen toward it (analyze_low_slow_
@@ -43,18 +69,69 @@ class DDoSDetectionEngine:
         # cycle's count alone is indistinguishable from coincidence.
         self._mobile_low_rate_streak: Dict[str, int] = {}
 
+        # (src_ip, dst_ip) -> cycles remaining in its post-flood grace
+        # period, and dst_ip -> same, for the flow-count-only LOW_SLOW
+        # variant. Refreshed to _RECENT_FLOOD_GRACE_CYCLES every cycle a
+        # pair/dst is actually classified as a volumetric flood by
+        # analyze(); decremented (and dropped once it hits 0) every other
+        # cycle. See _RECENT_FLOOD_GRACE_CYCLES above for why this needs
+        # to outlive a single cycle instead of being recomputed fresh
+        # each time.
+        self._recent_flood_pairs: Dict[Tuple[str, str], int] = {}
+        self._recent_flood_dsts: Dict[str, int] = {}
+
     def analyze(self, correlated: List[CorrelatedEvent]) -> List[DetectionResult]:
         """
         Analyze a list of CorrelatedEvents and return detected attacks.
         """
         results = []
+        flagged_pairs_this_cycle = set()
+        flagged_dsts_this_cycle = set()
 
         for event in correlated:
             detection = self._classify(event)
             if detection:
                 results.append(detection)
+                flagged_dsts_this_cycle.add(detection.dst_ip)
+                if detection.attack_type == "DDOS_DISTRIBUTED" and detection.sources:
+                    for source in detection.sources:
+                        flagged_pairs_this_cycle.add((source, detection.dst_ip))
+                else:
+                    flagged_pairs_this_cycle.add((detection.src_ip, detection.dst_ip))
+
+        self._refresh_recent_floods(flagged_pairs_this_cycle, flagged_dsts_this_cycle)
 
         return results
+
+    def _refresh_recent_floods(self, flagged_pairs, flagged_dsts) -> None:
+        """See _RECENT_FLOOD_GRACE_CYCLES for why this exists."""
+        for pair in flagged_pairs:
+            self._recent_flood_pairs[pair] = self._RECENT_FLOOD_GRACE_CYCLES
+        for pair in list(self._recent_flood_pairs):
+            if pair not in flagged_pairs:
+                self._recent_flood_pairs[pair] -= 1
+                if self._recent_flood_pairs[pair] <= 0:
+                    del self._recent_flood_pairs[pair]
+
+        for dst in flagged_dsts:
+            self._recent_flood_dsts[dst] = self._RECENT_FLOOD_GRACE_CYCLES
+        for dst in list(self._recent_flood_dsts):
+            if dst not in flagged_dsts:
+                self._recent_flood_dsts[dst] -= 1
+                if self._recent_flood_dsts[dst] <= 0:
+                    del self._recent_flood_dsts[dst]
+
+    def recent_flood_pairs(self) -> set:
+        """(src_ip, dst_ip) pairs classified as a volumetric flood within
+        the last _RECENT_FLOOD_GRACE_CYCLES calls to analyze() -- merge
+        into exclude_pairs for analyze_low_slow_single_source so a single
+        cycle's flow-stats data gap can't let LOW_SLOW fire uncontested."""
+        return set(self._recent_flood_pairs)
+
+    def recent_flood_dsts(self) -> set:
+        """Same as recent_flood_pairs(), for analyze_low_slow's dst-only
+        exclude_dsts."""
+        return set(self._recent_flood_dsts)
 
     def analyze_low_slow(
         self, flow_counts: Dict[str, int], exclude_dsts=frozenset()
