@@ -55,6 +55,17 @@ from web import metrics
 
 import config.settings as settings
 
+# Display verb for the MITIGATION log line, by domain -- the mobile
+# domain doesn't block anything on a network path the way an OpenFlow
+# drop rule does; MobileNetworkAdapter.apply_mitigation() queues a RAN-
+# side throttle (UE quarantined to a near-zero-PRB slice) instead, so
+# logging it as "BLOCK"/"UNBLOCK" describes a mechanism this domain
+# doesn't actually have. Domains not listed here (openflow, bgp, ...)
+# fall back to the action string itself.
+_MITIGATION_VERBS = {
+    "mobile": {"block": "THROTTLE", "unblock": "UNTHROTTLE"},
+}
+
 
 class FlowStatsIDS(app_manager.RyuApp):
     """
@@ -377,8 +388,9 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         # Reflect mitigations in the dashboard
         for action in actions:
+            verb = _MITIGATION_VERBS.get(action.domain, {}).get(action.action, action.action.upper())
             msg = (
-                f"MITIGATION: {action.action.upper()} ({action.attack_type}) "
+                f"MITIGATION: {verb} ({action.attack_type}) "
                 f"source={action.src_ip} destination={action.dst_ip}:{action.dst_port}/{action.protocol} "
                 f"[{action.domain}]"
             )
