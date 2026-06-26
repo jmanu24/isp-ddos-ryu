@@ -261,12 +261,18 @@ class OrchestrationController:
 
         Sources with no confirmed host-port location yet are skipped
         entirely — NEVER blocked network-wide; they'll get caught once a
-        host-port sighting for them arrives in a later cycle. LOW_SLOW's
-        distributed variant also uses src_ip="*" but carries no
-        per-source IP list at all (it's a flow-count signature), so it's
-        left as a single network-wide action via the normal path below —
-        that one has no per-source location to scope to in the first
-        place, unlike DDOS_DISTRIBUTED.
+        host-port sighting for them arrives in a later cycle. OpenFlow's
+        own LOW_SLOW flow-count variant also uses src_ip="*" but carries
+        no per-source IP list at all (it's a flow-count signature, not a
+        list of attackers), so it's left as a single network-wide action
+        via the normal path below — that one has no per-source location
+        to scope to in the first place, unlike DDOS_DISTRIBUTED.
+
+        Mobile-domain LOW_SLOW and DDOS_DISTRIBUTED are the analogous
+        exception for that domain (see the branch below) — both carry a
+        real per-source UE list, and mobile mitigation has no network-
+        wide lever at all, so each contributing UE gets its own action
+        instead of one with an unresolvable src_ip="*".
         """
         actions: List[MitigationAction] = []
         seen_domains = set()
@@ -308,15 +314,34 @@ class OrchestrationController:
                     ))
                 continue
 
-            if d.domain == "mobile" and decision.attack_type == "LOW_SLOW" and d.sources:
+            if (
+                d.domain == "mobile"
+                and decision.attack_type in ("LOW_SLOW", "DDOS_DISTRIBUTED")
+                and d.sources
+            ):
                 # Mirrors the openflow DDOS_DISTRIBUTED branch above, but
                 # simpler: mobile mitigation is inherently per-UE (there's
                 # no destination-wide network lever the way an OpenFlow
                 # drop rule is), so a "*" src_ip can't be dispatched as a
-                # single action the way it can for OpenFlow's own LOW_SLOW
-                # variant. One action per contributing UE instead, each
-                # quarantined individually through the existing mobile
-                # block/unblock machinery.
+                # single action the way it can for OpenFlow. Covers both
+                # multi-source mobile attack types LOW_SLOW and
+                # DDOS_DISTRIBUTED -- both carry their contributing UEs in
+                # `sources` and both would otherwise build a MitigationAction
+                # with src_ip="*", which MobileNetworkAdapter can never
+                # resolve to an IMSI (logs "Cannot resolve src_ip * ...",
+                # mitigates nothing) and which check_mobile_unblocks can
+                # never confirm "still present" either -- no real
+                # TelemetryEvent ever has src_ip=="*" literally, so that
+                # bogus block would unblock itself again after exactly
+                # UNBLOCK_CONFIRM_CYCLES regardless of whether the attack
+                # was still ongoing (observed: a real distributed attack
+                # being detected once, "blocked" as a no-op, automatically
+                # "unblocked" a few seconds later, and the same traffic
+                # then re-surfacing as several individual SYN_FLOOD
+                # detections instead). One action per contributing UE
+                # instead, each quarantined individually through the
+                # existing mobile block/unblock machinery, which already
+                # works correctly per real source IP.
                 for source in d.sources:
                     actions.append(MitigationAction(
                         domain=d.domain,
