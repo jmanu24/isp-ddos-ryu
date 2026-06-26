@@ -39,6 +39,7 @@ Usage:
   python3 simulation/ul_traffic_simulator.py
   python3 simulation/ul_traffic_simulator.py --scenario syn_flood
   python3 simulation/ul_traffic_simulator.py --scenario distributed_syn --tick 0.5
+  python3 simulation/ul_traffic_simulator.py --interactive
 """
 
 import argparse
@@ -47,11 +48,15 @@ import json
 import math
 import random
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_DIR))
+import config.settings as settings  # noqa: E402 -- needs REPO_DIR on sys.path first
+
 DEFAULT_CSV_PATH = "/tmp/ddos_xapp_events.csv"
 DEFAULT_UE_IP_MAP_PATH = REPO_DIR / "config" / "ue_ip_map.csv"
 # Must match telemetry/mobile_adapter.py's DEFAULT_RC_COMMAND_QUEUE_PATH --
@@ -346,8 +351,87 @@ def write_ue_ip_map(ues, path: Path):
             writer.writerow([ue.imsi, ue.ip])
 
 
+def _consume_rc_commands(ues_by_imsi: dict, rc_command_queue: str, rc_command_offset: int) -> int:
+    """
+    Applies any new throttle/unblock commands off the RC queue to the
+    matching UEs. Returns the new read offset. Not printed -- the
+    controller already reports both through its own MITIGATION
+    dashboard/logger line (ryu_controller_2.py's _run_pipeline); this
+    process only needs to apply the effect, the same way a real RAN
+    wouldn't echo a RIC CONTROL REQUEST back as a log.
+    """
+    commands, new_offset = read_new_commands(rc_command_queue, rc_command_offset)
+    for command in commands:
+        ue = ues_by_imsi.get(command.get("imsi"))
+        if ue is None:
+            continue
+        if command.get("action") == "unblock":
+            # Lifts the quarantine immediately rather than extending it --
+            # an "unblock" with a leftover duration field would otherwise
+            # be treated like another throttle command below.
+            ue.throttled_until = None
+            continue
+        ue.apply_throttle(command.get("duration", 60))
+    return new_offset
+
+
+def _run_tick_loop(
+    ues: list,
+    out_csv: str,
+    rc_command_queue: str,
+    tick_seconds: float,
+    duration: float = 0.0,
+    verbose: bool = True,
+    stop_event: "threading.Event | None" = None,
+):
+    """
+    The actual sampling loop: every tick_seconds, consume pending RC
+    commands, sample every UE, and append one row per UE to out_csv.
+    Shared by the scripted (--scenario) entry point and the interactive
+    mode's background thread -- stop_event lets the interactive mode
+    end this from another thread without relying on KeyboardInterrupt
+    (which only the main thread receives).
+    """
+    ues_by_imsi = {ue.imsi: ue for ue in ues}
+    tick = 0
+    start = time.time()
+    rc_command_offset = 0
+
+    with open(out_csv, "a", newline="") as f:
+        writer = csv.writer(f)
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                return
+            if duration > 0 and (time.time() - start) >= duration:
+                return
+
+            rc_command_offset = _consume_rc_commands(ues_by_imsi, rc_command_queue, rc_command_offset)
+
+            for ue in ues:
+                row = ue.sample(tick)
+                writer.writerow([row[c] for c in _CSV_COLUMNS])
+                if verbose:
+                    flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
+                    # Same "%Y-%m-%d %H:%M:%S" format ryu_controller_2.py's
+                    # logging.basicConfig uses, so a line here and the
+                    # controller's own log line for the same event can be
+                    # matched up directly without converting formats by hand.
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"{now_str} tick={tick} imsi={ue.imsi} ul_thr_mbps={row['ul_thr_mbps']} "
+                          f"prb={row['prb_usage_pct']}%{flag}")
+            f.flush()
+            tick += 1
+
+            if stop_event is not None:
+                stop_event.wait(tick_seconds)
+            else:
+                time.sleep(tick_seconds)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--interactive", action="store_true",
+                         help="prompt for UE count and attacks at runtime instead of --scenario")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="udp_flood",
                          help="attack pattern to simulate (default: udp_flood)")
     parser.add_argument("--tick", type=float, default=2.0, help="seconds between samples")
@@ -361,8 +445,10 @@ def main():
                          help="JSONL queue MobileNetworkAdapter.apply_mitigation() writes to")
     args = parser.parse_args()
 
+    if args.interactive:
+        return run_interactive(args)
+
     ues = SCENARIOS[args.scenario](args.attack_end_tick)
-    ues_by_imsi = {ue.imsi: ue for ue in ues}
     if args.no_attack:
         for ue in ues:
             ue.attack_window = None
@@ -395,54 +481,256 @@ def main():
     print(f"[ul_traffic_simulator] appending to {args.out_csv} every {args.tick}s "
           f"({'forever' if args.duration <= 0 else f'{args.duration}s total'}) -- Ctrl+C to stop")
 
-    tick = 0
-    start = time.time()
-    rc_command_offset = 0
     try:
-        with open(args.out_csv, "a", newline="") as f:
-            writer = csv.writer(f)
-            while args.duration <= 0 or (time.time() - start) < args.duration:
-                commands, rc_command_offset = read_new_commands(
-                    args.rc_command_queue, rc_command_offset
-                )
-                for command in commands:
-                    imsi = command.get("imsi")
-                    ue = ues_by_imsi.get(imsi)
-                    if ue is None:
-                        continue
-                    # Not printed -- the controller already reports both
-                    # block and unblock through its own MITIGATION
-                    # dashboard/logger line (ryu_controller_2.py's
-                    # _run_pipeline); this process only needs to apply the
-                    # effect to its synthetic UEs, the same way a real RAN
-                    # wouldn't echo a RIC CONTROL REQUEST back as a log.
-                    action = command.get("action")
-                    if action == "unblock":
-                        # Lifts the quarantine immediately rather than
-                        # extending it -- an "unblock" with a leftover
-                        # duration field would otherwise be treated like
-                        # another throttle command below.
-                        ue.throttled_until = None
-                        continue
-                    duration = command.get("duration", 60)
-                    ue.apply_throttle(duration)
-
-                for ue in ues:
-                    row = ue.sample(tick)
-                    writer.writerow([row[c] for c in _CSV_COLUMNS])
-                    flag = f" [ATTACK -> {row['dst_ip']}]" if ue.is_attacking(tick) else f" -> {row['dst_ip']}"
-                    # Same "%Y-%m-%d %H:%M:%S" format ryu_controller_2.py's
-                    # logging.basicConfig uses, so a line here and the
-                    # controller's own log line for the same event can be
-                    # matched up directly without converting formats by hand.
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print(f"{now_str} tick={tick} imsi={ue.imsi} ul_thr_mbps={row['ul_thr_mbps']} "
-                          f"prb={row['prb_usage_pct']}%{flag}")
-                f.flush()
-                tick += 1
-                time.sleep(args.tick)
+        _run_tick_loop(ues, args.out_csv, args.rc_command_queue, args.tick, duration=args.duration)
     except KeyboardInterrupt:
         print("\n[ul_traffic_simulator] stopped")
+
+
+# ============================================================
+# Interactive mode
+# ============================================================
+#
+# A background thread runs _run_tick_loop continuously (so telemetry
+# keeps flowing the whole session, regardless of whether an attack is
+# currently active) while the main thread drives a menu: configure N
+# "normal" UEs once, then repeatedly pick an attack type, fill in its
+# parameters, let it run, and stop it to choose another -- all within
+# one continuous CSV/run, matching what a person actually wants from a
+# live demo instead of relaunching the process per attack.
+
+def _prompt(prompt: str, default: "str | None" = None) -> str:
+    suffix = f" [{default}]" if default is not None else ""
+    raw = input(f"{prompt}{suffix}: ").strip()
+    return raw if raw else (default or "")
+
+
+def _prompt_int(prompt: str, default: int, min_value: "int | None" = None) -> int:
+    while True:
+        raw = _prompt(prompt, str(default))
+        try:
+            value = int(raw)
+        except ValueError:
+            print("  Ingresa un número entero válido.")
+            continue
+        if min_value is not None and value < min_value:
+            print(f"  Debe ser >= {min_value}.")
+            continue
+        return value
+
+
+def _prompt_float(prompt: str, default: float) -> float:
+    while True:
+        raw = _prompt(prompt, str(default))
+        try:
+            return float(raw)
+        except ValueError:
+            print("  Ingresa un número válido.")
+
+
+def build_normal_ues(n: int) -> list:
+    """N UEs with ordinary, individually-benign background traffic --
+    each gets its own normal_dst_ip (see SCENARIOS' "Distinct
+    normal_dst_ip" comment for why that matters to the correlator)."""
+    ues = []
+    for i in range(n):
+        ues.append(UE(
+            imsi=i + 1,
+            ip=f"10.60.0.{2 + i}",
+            baseline_mbps=round(random.uniform(0.2, 0.5), 2),
+            jitter_mbps=0.15,
+            normal_dst_ip=f"203.0.113.{10 + i}",
+        ))
+    return ues
+
+
+_ATTACK_TYPES = {
+    "1": ("UDP Flood", "single"),
+    "2": ("TCP SYN Flood", "single"),
+    "3": ("ICMP Flood", "single"),
+    "4": ("Distributed TCP SYN Flood", "distributed"),
+    "5": ("Low and Slow", "low_slow"),
+}
+
+
+def _print_menu(ues: list):
+    print()
+    print("=== Simulador interactivo de tráfico móvil ===")
+    print(f"UEs configuradas: {len(ues)} "
+          f"({sum(1 for u in ues if u.attack_window)} atacando actualmente)")
+    print("Elige un tipo de ataque:")
+    print("  1) UDP Flood")
+    print("  2) TCP SYN Flood")
+    print("  3) ICMP Flood")
+    print("  4) Distributed TCP SYN Flood (varios UE como origen)")
+    print("  5) Low and Slow")
+    print("  0) Salir")
+
+
+def _free_ues(ues: list) -> list:
+    """UEs not currently part of a running attack -- available to pick from."""
+    return [ue for ue in ues if not ue.attack_window]
+
+
+def _choose_single_attacker(ues: list) -> "UE | None":
+    free = _free_ues(ues)
+    if not free:
+        print("  No hay ninguna UE libre (todas están atacando ya). Detén un ataque primero.")
+        return None
+    print("  UEs disponibles: " + ", ".join(f"IMSI {u.imsi}" for u in free))
+    while True:
+        raw = _prompt("  ¿Qué UE ataca? (IMSI)", str(free[0].imsi))
+        matches = [u for u in free if str(u.imsi) == raw]
+        if matches:
+            return matches[0]
+        print("  Esa UE no existe o ya está ocupada -- elige una de la lista.")
+
+
+def _choose_group(ues: list, min_sources: int, default_count: int) -> "list | None":
+    free = _free_ues(ues)
+    if len(free) < min_sources:
+        print(f"  Solo hay {len(free)} UE(s) libres y este ataque necesita al menos "
+              f"{min_sources} para que el detector lo clasifique como tal. "
+              f"Detén otro ataque o configura más UEs.")
+        if not free:
+            return None
+    count = _prompt_int(
+        f"  ¿Cuántas UEs participan? (mínimo recomendado {min_sources}, libres: {len(free)})",
+        default=min(default_count, len(free)) if free else default_count,
+    )
+    if count > len(free):
+        print(f"  Solo hay {len(free)} libres -- se usarán todas.")
+        count = len(free)
+    if count < min_sources:
+        print(f"  Aviso: con {count} UE(s) es posible que el detector NO lo clasifique "
+              f"como este tipo de ataque (mínimo recomendado: {min_sources}).")
+    return free[:count]
+
+
+def _configure_attack(ues: list) -> "tuple[str, list] | None":
+    """Prompts for an attack type and its parameters, applies it to the
+    chosen UE(s), and returns (description, affected_ues) -- or None if
+    the user cancelled / no UE was available."""
+    while True:
+        _print_menu(ues)
+        choice = _prompt("Opción", "0")
+        if choice == "0":
+            return None
+        if choice not in _ATTACK_TYPES:
+            print("  Opción no válida.")
+            continue
+        name, kind = _ATTACK_TYPES[choice]
+        break
+
+    target_ip = _prompt("  IP objetivo del ataque", "10.0.2.10")
+
+    if kind == "single":
+        ue = _choose_single_attacker(ues)
+        if ue is None:
+            return None
+        if choice == "1":  # UDP Flood
+            mbps = _prompt_float(
+                f"  Throughput de ataque en Mbps (umbral UDP_THRESHOLD={settings.UDP_THRESHOLD}pps)",
+                45.0,
+            )
+            ue.protocol, ue.dst_port, ue.low_slow = "UDP", 0, False
+        elif choice == "2":  # TCP SYN Flood
+            mbps = _prompt_float(
+                f"  Throughput de ataque en Mbps (umbral SYN_THRESHOLD={settings.SYN_THRESHOLD}pps)",
+                3.0,
+            )
+            dst_port = _prompt_int("  Puerto TCP objetivo", 443)
+            ue.protocol, ue.dst_port, ue.low_slow = "TCP_SYN", dst_port, False
+        else:  # ICMP Flood
+            mbps = _prompt_float(
+                f"  Throughput de ataque en Mbps (umbral ICMP_THRESHOLD={settings.ICMP_THRESHOLD}pps)",
+                5.0,
+            )
+            ue.protocol, ue.dst_port, ue.low_slow = "ICMP", 0, False
+        ue.attack_mbps = mbps
+        ue.attack_target_ip = target_ip
+        ue.attack_window = (0, 10 ** 9)  # "until stopped" -- see is_attacking()
+        return f"{name} desde IMSI {ue.imsi} -> {target_ip} ({mbps} Mbps)", [ue]
+
+    if kind == "distributed":
+        group = _choose_group(ues, settings.DIST_MIN_SOURCES, default_count=5)
+        if not group:
+            return None
+        mbps = _prompt_float("  Throughput de ataque por UE en Mbps", 2.0)
+        dst_port = _prompt_int("  Puerto TCP objetivo", 443)
+        for ue in group:
+            ue.protocol, ue.dst_port, ue.low_slow = "TCP_SYN", dst_port, False
+            ue.attack_mbps = mbps
+            ue.attack_target_ip = target_ip
+            ue.attack_window = (0, 10 ** 9)
+        imsis = ", ".join(str(u.imsi) for u in group)
+        return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
+
+    # low_slow
+    group = _choose_group(ues, settings.LOW_SLOW_MOBILE_MIN_SOURCES, default_count=7)
+    if not group:
+        return None
+    max_mbps = settings.LOW_SLOW_MOBILE_MAX_PPS * 512 * 8 / 1e6
+    mbps = _prompt_float(
+        f"  Throughput de ataque por UE en Mbps (techo recomendado ~{max_mbps:.3f})",
+        round(max_mbps * 0.6, 4),
+    )
+    dst_port = _prompt_int("  Puerto TCP objetivo", 80)
+    for ue in group:
+        ue.protocol, ue.dst_port, ue.low_slow = "TCP", dst_port, True
+        ue.attack_mbps = mbps
+        ue.attack_target_ip = target_ip
+        ue.attack_window = (0, 10 ** 9)
+    imsis = ", ".join(str(u.imsi) for u in group)
+    return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
+
+
+def run_interactive(args):
+    print("=== Simulador interactivo de tráfico móvil ===")
+    n = _prompt_int("¿Cuántas UEs quieres simular con tráfico normal?", default=3, min_value=1)
+    ues = build_normal_ues(n)
+
+    write_ue_ip_map(ues, Path(args.ue_ip_map))
+    Path(args.out_csv).write_text("")
+    Path(args.rc_command_queue).write_text("")
+    print(f"[ul_traffic_simulator] {n} UE(s) configuradas, tráfico normal:")
+    for ue in ues:
+        print(f"  IMSI {ue.imsi} -> {ue.ip} (baseline {ue.baseline_mbps} Mbps -> {ue.normal_dst_ip})")
+
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_run_tick_loop,
+        args=(ues, args.out_csv, args.rc_command_queue, args.tick),
+        kwargs={"verbose": False, "stop_event": stop_event},
+        daemon=True,
+    )
+    thread.start()
+    print(f"[ul_traffic_simulator] generando telemetría cada {args.tick}s en segundo plano "
+          f"({args.out_csv})")
+
+    try:
+        while True:
+            result = _configure_attack(ues)
+            if result is None:
+                break
+            description, attacking_ues = result
+            print(f"\n[ul_traffic_simulator] Ataque iniciado: {description}")
+            print("Escribe 'stop' y Enter para detenerlo y elegir otro ataque.")
+            while True:
+                cmd = input("> ").strip().lower()
+                if cmd in ("stop", "s", ""):
+                    for ue in attacking_ues:
+                        ue.attack_window = None
+                    print("[ul_traffic_simulator] Ataque detenido. Las UEs volvieron a tráfico normal.")
+                    break
+                print("  Comando no reconocido -- escribe 'stop' para detener el ataque actual.")
+    except (KeyboardInterrupt, EOFError):
+        print()
+    finally:
+        print("[ul_traffic_simulator] cerrando...")
+        stop_event.set()
+        thread.join(timeout=2)
+        print("[ul_traffic_simulator] stopped")
 
 
 if __name__ == "__main__":
