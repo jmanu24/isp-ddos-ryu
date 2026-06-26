@@ -509,10 +509,6 @@ class DDoSDetectionEngine:
         pool = tagged if tagged else events
         return max(pool, key=lambda e: e.pps)
 
-    @staticmethod
-    def _sum_pps(events: List[TelemetryEvent], protocol: str) -> float:
-        return sum(e.pps for e in events if e.protocol == protocol)
-
     def _classify_distributed(
         self,
         event: CorrelatedEvent,

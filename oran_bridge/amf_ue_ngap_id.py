@@ -43,20 +43,6 @@ own sequential IMSI assignment for those two UEs exactly.
 IMSI_STRING_WIDTH = 5
 
 
-def imsi_to_imsi_string(imsi: int) -> str:
-    """Mirrors MmWaveEnbNetDevice::GetImsiString -- zero-pad to 5 digits."""
-    s = str(imsi)
-    if len(s) > IMSI_STRING_WIDTH:
-        raise ValueError(f"IMSI {imsi} does not fit in {IMSI_STRING_WIDTH} digits")
-    return s.zfill(IMSI_STRING_WIDTH)
-
-
-def imsi_to_amf_ue_ngap_id(imsi: int) -> int:
-    """Forward direction -- mirrors FillUeID's encoding, for tests/tooling."""
-    raw = imsi_to_imsi_string(imsi).encode("ascii")
-    return int.from_bytes(raw, byteorder="little")
-
-
 def amf_ue_ngap_id_to_imsi(amf_ue_ngap_id: int) -> int:
     """
     Reverses FillUeID's encoding: take the low IMSI_STRING_WIDTH bytes,

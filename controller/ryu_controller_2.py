@@ -230,6 +230,12 @@ class FlowStatsIDS(app_manager.RyuApp):
     @set_ev_cls(event.EventSwitchLeave)
     def switch_leave_handler(self, ev):
         dashboard_state.add_event("Switch removed from topology")
+        # Forgets this dpid's OpenFlowMitigator datapath -- without this,
+        # a disconnected switch's entry lingered forever, and a future
+        # block decided to target it (e.g. reusing the same dpid after a
+        # Mininet restart) could resolve to a stale, no-longer-valid
+        # datapath handle.
+        self.orchestrator.deregister_datapath(ev.switch.dp.id)
         self._update_topology()
 
     @set_ev_cls(event.EventLinkAdd)
@@ -409,6 +415,15 @@ class FlowStatsIDS(app_manager.RyuApp):
             )
             dashboard_state.add_event(msg)
             self.logger.warning(msg)
+
+            # Dashboard's "attacks" panel (web/api.py, web/socket_server.py,
+            # templates/index.html all read dashboard_state.attacks) is
+            # switch-rate-shaped (dpid/byte_rate/packet_rate) -- only
+            # OpenFlow-domain detections have a real dpid (d.device_id) to
+            # report it under; a mobile-domain UE has no switch to attribute
+            # the rate to.
+            if d.domain == "openflow" and d.device_id.isdigit():
+                dashboard_state.add_attack(int(d.device_id), d.bps, d.pps)
 
         # Mark destinations seen clean this cycle as validated — only now
         # can LearningSwitch start caching forwarding rules for them. Must
