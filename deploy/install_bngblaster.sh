@@ -78,15 +78,25 @@ else
   # finds one that actually published a .deb for this OS tag.
   ARCH="$(dpkg --print-architecture)"
 
+  # Read only the specific keys needed, instead of sourcing
+  # /etc/os-release directly -- it defines its OWN "VERSION" variable
+  # ("20.04.4 LTS (Focal Fossa)"), which collided with and silently
+  # overwrote this script's $VERSION (the --version flag), corrupting
+  # the .deb URL built below (confirmed on a real run).
+  OS_ID=""
+  OS_VERSION_ID=""
+  OS_VERSION_CODENAME=""
   if [ -f /etc/os-release ]; then
-    . /etc/os-release
+    OS_ID="$(. /etc/os-release && echo "$ID")"
+    OS_VERSION_ID="$(. /etc/os-release && echo "$VERSION_ID")"
+    OS_VERSION_CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
   fi
-  case "${ID:-}" in
-    ubuntu) OS_TAG="ubuntu-${VERSION_ID:-}" ;;
-    debian) OS_TAG="${VERSION_CODENAME:-bookworm}" ;;
-    *)      OS_TAG="ubuntu-${VERSION_ID:-22.04}" ;;
+  case "$OS_ID" in
+    ubuntu) OS_TAG="ubuntu-${OS_VERSION_ID}" ;;
+    debian) OS_TAG="${OS_VERSION_CODENAME:-bookworm}" ;;
+    *)      OS_TAG="ubuntu-${OS_VERSION_ID:-22.04}" ;;
   esac
-  ok "OS detectado: ID=${ID:-?} VERSION_ID=${VERSION_ID:-?} -> buscando assets *-${OS_TAG}_${ARCH}.deb"
+  ok "OS detectado: ID=${OS_ID:-?} VERSION_ID=${OS_VERSION_ID:-?} -> buscando assets *-${OS_TAG}_${ARCH}.deb"
 
   DEB_URL=""
   if [ -n "$VERSION" ]; then
