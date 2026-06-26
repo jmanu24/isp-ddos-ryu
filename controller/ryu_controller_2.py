@@ -345,7 +345,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         # as it's ongoing (the underlying traffic is still there), but
         # that's already being handled — skip the repeat announcement.
         for d in detections:
-            if self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol):
+            if self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol, sources=d.sources):
                 continue
 
             msg = (

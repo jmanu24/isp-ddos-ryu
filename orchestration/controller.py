@@ -519,20 +519,42 @@ class OrchestrationController:
             return True
         return ("*", dst_ip, dst_port, protocol) in self._active_blocks
 
-    def is_active_block(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> bool:
+    def is_active_block(
+        self, src_ip: str, dst_ip: str, dst_port: int, protocol: str,
+        sources: "list[str] | None" = None,
+    ) -> bool:
         """
         True if this exact (src_ip, dst_ip, dst_port, protocol) already
         has an active block. Used to skip re-logging "ATTACK DETECTED"
         every cycle for an attack that's already known and being
-        handled — DDOS_DISTRIBUTED detections always carry src_ip="*",
-        which directly matches the literal key stored for it (one entry
-        per distinct physical ingress location; see _build_actions).
-        Also true for an active mobile-domain block (_active_mobile_blocks)
-        — same dedup purpose, separate dict because its unblock signal is
-        telemetry-pps-based rather than openflow drop-rule-counter-based.
+        handled — DDOS_DISTRIBUTED on the openflow domain always carries
+        src_ip="*", which directly matches the literal key stored for it
+        (one entry per distinct physical ingress location; see
+        _build_actions). Also true for an active mobile-domain block
+        (_active_mobile_blocks) — same dedup purpose, separate dict
+        because its unblock signal is telemetry-presence-based rather
+        than openflow drop-rule-counter-based.
+
+        sources: the detection's own per-source UE list, when it has one
+        (DetectionResult.sources, populated for mobile-domain LOW_SLOW/
+        DDOS_DISTRIBUTED). Those are dispatched as one action per real
+        UE IP, not one action keyed by the literal "*" (see _build_
+        actions's mobile branch) -- src_ip="*" alone would never match
+        any of those per-UE keys, so every still-active multi-source
+        mobile attack would otherwise re-log "ATTACK DETECTED" every
+        single cycle even while already correctly blocked. Checking any
+        one contributing UE's key is enough: they're all dispatched
+        together and torn down together.
         """
         key = (src_ip, dst_ip, dst_port, protocol)
-        return key in self._active_blocks or key in self._active_mobile_blocks
+        if key in self._active_blocks or key in self._active_mobile_blocks:
+            return True
+        if sources:
+            return any(
+                (source, dst_ip, dst_port, protocol) in self._active_mobile_blocks
+                for source in sources
+            )
+        return False
 
     def is_validated_destination(self, dst_ip: str) -> bool:
         """
