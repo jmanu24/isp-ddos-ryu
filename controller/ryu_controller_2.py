@@ -67,6 +67,35 @@ _MITIGATION_VERBS = {
 }
 
 
+def _format_mitigation_message(action) -> str:
+    """
+    OpenFlow's drop rule genuinely is scoped to one flow (src/dst/port/
+    protocol), so "source=X destination=Y:Z/W" accurately describes what
+    got blocked. The mobile throttle doesn't work that way: it quarantines
+    the UE's entire radio link (MobileNetworkAdapter just resolves
+    src_ip -> IMSI and queues a per-UE RC command), so the same wording
+    would wrongly imply the action is scoped to traffic toward that one
+    destination -- it isn't; the UE is throttled regardless of what it's
+    talking to. dst_ip/dst_port/protocol are kept in the message as
+    context (what attack triggered this), explicitly labeled as such.
+    """
+    verb = _MITIGATION_VERBS.get(action.domain, {}).get(action.action, action.action.upper())
+
+    if action.domain == "mobile":
+        return (
+            f"MITIGATION: {verb} UE src_ip={action.src_ip} "
+            f"(entire radio link, not scoped to one destination) "
+            f"-- triggered by {action.attack_type} toward "
+            f"{action.dst_ip}:{action.dst_port}/{action.protocol} [{action.domain}]"
+        )
+
+    return (
+        f"MITIGATION: {verb} ({action.attack_type}) "
+        f"source={action.src_ip} destination={action.dst_ip}:{action.dst_port}/{action.protocol} "
+        f"[{action.domain}]"
+    )
+
+
 class FlowStatsIDS(app_manager.RyuApp):
     """
     Centralized SDN Controller with multidomain DDoS detection.
@@ -388,12 +417,7 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         # Reflect mitigations in the dashboard
         for action in actions:
-            verb = _MITIGATION_VERBS.get(action.domain, {}).get(action.action, action.action.upper())
-            msg = (
-                f"MITIGATION: {verb} ({action.attack_type}) "
-                f"source={action.src_ip} destination={action.dst_ip}:{action.dst_port}/{action.protocol} "
-                f"[{action.domain}]"
-            )
+            msg = _format_mitigation_message(action)
             dashboard_state.add_event(msg)
             self.logger.warning(msg)
 
