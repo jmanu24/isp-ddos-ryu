@@ -56,6 +56,14 @@ DNSMASQ_CONF="/etc/dnsmasq.d/bng-access.conf"
 # distributed_syn_flood/low_and_slow) -- one VLAN sub-interface gets
 # created per ID in 1..MAX_VLAN, each its own /24 (10.61.<vid>.0/24).
 MAX_VLAN=8
+# dnsmasq's dhcp-hostsfile -- telemetry/broadband_adapter.py appends
+# "<mac>,ignore" lines here on a block (dnsmasq then refuses to offer
+# that MAC a lease at all) and removes them on unblock, then SIGHUPs
+# dnsmasq to reload without restarting it. World-writable (0666) since
+# the controller process that edits it normally runs as a regular
+# user, not root -- same throwaway-local-simulation justification as
+# the control socket's own chmod (see bng_traffic_simulator.py).
+DHCP_BLACKLIST_PATH="/tmp/bng_dhcp_blacklist.hosts"
 
 TEARDOWN=0
 CHECK_ONLY=0
@@ -88,7 +96,7 @@ if [ "$TEARDOWN" -eq 1 ]; then
   # "started" successfully), so a pidfile-based kill silently killed
   # nothing.
   sudo pkill -f "dnsmasq.*${DNSMASQ_CONF}" 2>/dev/null && ok "dnsmasq de acceso detenido" || ok "dnsmasq de acceso no estaba corriendo"
-  sudo rm -f "$DNSMASQ_CONF"
+  sudo rm -f "$DNSMASQ_CONF" "$DHCP_BLACKLIST_PATH"
   iface_exists "$ACCESS_IF" && sudo ip link del "$ACCESS_IF" && ok "${ACCESS_IF}/${ACCESS_PEER} eliminados"
   iface_exists "$NETWORK_IF" && sudo ip link del "$NETWORK_IF" && ok "${NETWORK_IF}/${NETWORK_PEER} eliminados"
   exit 0
@@ -185,10 +193,13 @@ else
   # silently doing nothing. Created unconditionally rather than only
   # inside the "not installed" branch.
   sudo mkdir -p "$(dirname "$DNSMASQ_CONF")"
+  sudo touch "$DHCP_BLACKLIST_PATH"
+  sudo chmod 0666 "$DHCP_BLACKLIST_PATH"
 
   {
     echo "bind-interfaces"
     echo "except-interface=lo"
+    echo "dhcp-hostsfile=${DHCP_BLACKLIST_PATH}"
     # One interface+dhcp-range pair per VLAN sub-interface -- dnsmasq
     # serves a distinct lease pool per L2 segment, matching one
     # BNGBlaster session's VLAN to its own /24 instead of every VLAN

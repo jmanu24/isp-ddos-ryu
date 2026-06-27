@@ -59,8 +59,15 @@ from simulation.bng_socket import BngControlSocket, wait_for_socket  # noqa: E40
 
 DEFAULT_CSV_PATH = "/tmp/ddos_bng_events.csv"
 # Must match telemetry/broadband_adapter.py's _CSV_COLUMNS exactly.
+# "mac" lets BroadbandAdapter.apply_mitigation() blacklist the
+# attacking session's MAC at the DHCP level (dnsmasq dhcp-hostsfile,
+# "<mac>,ignore"), not just session-stop it -- session-stop alone gets
+# silently undone the moment the session naturally re-DHCPs (BNGBlaster
+# re-establishes it on its own periodically; confirmed on a real run),
+# but dnsmasq will keep refusing that MAC a lease until the block is
+# lifted regardless of how many times BNGBlaster retries.
 CSV_COLUMNS = [
-    "timestamp", "session_id", "device_id", "src_ip", "dst_ip", "dst_port",
+    "timestamp", "session_id", "device_id", "src_ip", "mac", "dst_ip", "dst_port",
     "protocol", "pps", "bps", "sessions_established", "sessions_flapped",
 ]
 
@@ -97,27 +104,31 @@ def _extract_rate(stats: dict) -> tuple:
     return float(pps or 0.0), float(bps or 0.0)
 
 
-def _extract_session_address(info: dict, session_id: int) -> tuple:
-    """Pulls this session's own framed (subscriber-side) IPv4 address out
-    of a session-info response -- the real per-subscriber source address
-    that makes distinct-source detection (Distributed TCP SYN Flood,
-    Low and Slow) possible. Returns (address, confirmed) -- confirmed is
-    True only when a real address field was found, so the caller knows
-    not to cache a placeholder permanently.
+def _extract_session_info(info: dict, session_id: int) -> tuple:
+    """Pulls this session's own framed (subscriber-side) IPv4 address and
+    MAC out of a session-info response -- the address is the real
+    per-subscriber source address that makes distinct-source detection
+    (Distributed TCP SYN Flood, Low and Slow) possible; the MAC is what
+    BroadbandAdapter.apply_mitigation() blacklists at the DHCP level
+    (dnsmasq dhcp-hostsfile). Returns (address, mac, confirmed) --
+    confirmed is True only when a real address field was found, so the
+    caller knows not to cache a placeholder permanently.
 
     Response is wrapped (confirmed on a real run: {"status":...,
-    "session-info": {"session-id":..., ...}}), unlike the flat dict
-    this originally assumed. session_id is taken from the caller's own
-    loop variable, not re-read out of the response.
+    "session-info": {"session-id":..., "mac": "02:00:00:00:00:01",
+    ...}}), unlike the flat dict this originally assumed. session_id is
+    taken from the caller's own loop variable, not re-read out of the
+    response.
     """
     node = info.get("session-info", info)
+    mac = node.get("mac") if isinstance(node, dict) else None
     if isinstance(node, dict):
         for key in ("ipv4-address", "framed-ip-address", "ip-address"):
             addr = node.get(key)
             if isinstance(addr, str) and addr:
-                return addr.split("/")[0], True
+                return addr.split("/")[0], mac, True
     placeholder = f"10.50.{(session_id // 254) % 254}.{(session_id % 254) + 1}"
-    return placeholder, False
+    return placeholder, mac, False
 
 
 def _extract_session_counters(stats: dict) -> tuple:
@@ -181,6 +192,7 @@ class BngScenarioSession:
         self._proc: subprocess.Popen = None
         self.session_ids = list(range(1, self.scn["sessions"] + 1))
         self.session_ips = {}
+        self.session_macs = {}
         self.session_confirmed = set()
         # Mirrors attack_started/attack_stopped's role in the old run()
         # loop -- low_and_slow's session-traffic already autostarts with
@@ -257,8 +269,10 @@ class BngScenarioSession:
             if sid not in self.session_confirmed:
                 try:
                     info = self.ctrl.call("session-info", {"session-id": sid})
-                    addr, confirmed = _extract_session_address(info, sid)
+                    addr, mac, confirmed = _extract_session_info(info, sid)
                     self.session_ips[sid] = addr
+                    if mac:
+                        self.session_macs[sid] = mac
                     if confirmed:
                         self.session_confirmed.add(sid)
                 except (OSError, RuntimeError, json.JSONDecodeError) as exc:
@@ -282,6 +296,7 @@ class BngScenarioSession:
                 "session_id": sid,
                 "device_id": self.bng_host,
                 "src_ip": src_ip,
+                "mac": self.session_macs.get(sid, ""),
                 "dst_ip": self.target_ip,
                 "dst_port": self.scn["dst_port"] if self.attacking else _NORMAL_DST_PORT,
                 "protocol": self.scn["protocol"] if self.attacking else _NORMAL_PROTOCOL,
