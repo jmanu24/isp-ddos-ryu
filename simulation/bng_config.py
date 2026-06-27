@@ -149,6 +149,18 @@ def _base_config(
         # turns off RS/RA for IPoE specifically (separate config block
         # from "dhcp"/"dhcpv6", confirmed via BNGBlaster's own docs).
         "ipoe": {"ipv6": False, "ipv4": True},
+        # DIAGNOSTIC, temporary: BNGBlaster's own confirmed-working IPoE
+        # examples (examples/dhcp11.json, dhcpn1.json in the real repo)
+        # generate traffic via THIS block, not "streams" -- a real run
+        # showed zero traffic ever leaving the network interface for our
+        # "streams"-based config (tcpdump on veth-n: nothing but
+        # unrelated host mDNS, despite sessions fully established and
+        # stream-start succeeding with no error). Added here to isolate
+        # whether the interface/session setup itself is the real blocker
+        # (in which case this would ALSO show nothing) or whether it's
+        # specific to "streams" (in which case this should show traffic
+        # while "streams" still doesn't) -- remove once that's settled.
+        "session-traffic": {"autostart": True, "ipv4-pps": 1},
         "streams": [],
     }
 
