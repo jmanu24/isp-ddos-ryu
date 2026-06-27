@@ -220,6 +220,25 @@ else
   fi
 fi
 
+echo "== 5. IP forwarding (para que el tráfico downstream de session-traffic vuelva a la sesión) =="
+
+# BNGBlaster's session-traffic sends "downstream" packets out the
+# NETWORK interface (veth-n, source 10.50.0.x) addressed to each
+# session's own access-side IP (10.61.<vid>.x) -- a DIFFERENT subnet,
+# reachable only if the host itself routes between them (veth-n-peer's
+# 10.50.0.0/24 and veth-a-peer.<vid>'s 10.61.<vid>.0/24 are both
+# directly-connected routes already; only ip_forward was missing).
+# Confirmed real symptom without this: a session's reported pps ramped
+# up for ~15s then the session abruptly DHCPRELEASEd and re-established
+# itself, repeating in a loop -- session-streams' downstream flow's
+# rx-packets stayed 0 forever (it could never actually arrive back at
+# the access side), and BNGBlaster appears to consider that unhealthy
+# enough to recycle the session. Without forwarding enabled, upstream-
+# only scenarios may still "work" telemetry-wise (collect() only reads
+# tx-pps), but the periodic flap is disruptive either way.
+sudo sysctl -qw net.ipv4.ip_forward=1
+ok "net.ipv4.ip_forward=1"
+
 echo ""
 echo "*** Red lista para BNGBlaster:"
 echo "    acceso : ${ACCESS_IF} (BNGBlaster) <-> ${ACCESS_PEER} (dnsmasq, ${ACCESS_PEER_ADDR})"
