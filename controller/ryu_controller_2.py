@@ -305,8 +305,19 @@ class FlowStatsIDS(app_manager.RyuApp):
             # alone wouldn't pick up a newly-learned host location.
             self._update_topology()
 
-            # Run the full 5-stage pipeline
-            self._run_pipeline()
+            # Run the full 5-stage pipeline. Wrapped -- confirmed on a
+            # real run that an uncaught exception here silently kills
+            # this entire hub greenthread: the process stays up (other
+            # ryu apps/handlers keep responding), ryu-manager prints
+            # nothing visible, and _monitor's while loop simply never
+            # iterates again -- no more telemetry collection, detection,
+            # or mitigation for any domain, indefinitely, with zero
+            # indication anything went wrong. Logged with a full
+            # traceback now instead of vanishing.
+            try:
+                self._run_pipeline()
+            except Exception:
+                self.logger.exception(log_line("controller", "PIPELINE", "ERROR"))
 
     def _run_pipeline(self):
         """
