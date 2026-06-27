@@ -91,42 +91,45 @@ def _base_config(
             "access": [{
                 "interface": access_interface,
                 "type": "ipoe",
-                # BNGBlaster assigns each session its OWN outer VLAN out
-                # of this range (confirmed on a real run: outer-vlan-min/
-                # max=0/0, i.e. a range of exactly one value, hard-failed
-                # creating an 8-session config with "VLAN ranges
-                # exhausted!" after the first session) -- it is not an
-                # optional per-session distinguisher the way per-session
-                # MAC is, at least not for IPoE with type=ipoe here. So
-                # this range must be at least as wide as session_count.
-                # deploy/setup_bng_netns.sh creates one 802.1Q
-                # sub-interface per VLAN ID in this range on veth-a-peer
-                # (dnsmasq listens on each) to actually answer DHCP for
-                # every one of them -- VLAN ID 1..session_count must stay
-                # in sync with that script's own MAX_VLAN.
-                "outer-vlan-min": 1,
-                "outer-vlan-max": max(session_count, 1),
-                # BNGBlaster's own PPPoE+streams quickstart example pairs
-                # this with a matching "stream-group-id" on the stream
-                # definition itself -- our access config never set this
-                # at all, and a real run showed exactly the symptom that
-                # would explain (zero traffic on the wire via tcpdump,
-                # "stream-traffic-flows": 0 in session-counters, despite
-                # stream-start succeeding with no error and sessions
-                # being fully established). Matches NORMAL_STREAM_GROUP_ID
-                # -- this field's singular (not list) in every example
-                # seen, so it's unclear yet whether a session can
-                # replicate streams from more than one group; the attack
-                # stream (group 100) may need a second access-interface
-                # entry instead if this alone doesn't unblock it too.
-                "stream-group-id": NORMAL_STREAM_GROUP_ID,
+                # N:1 (many sessions sharing ONE VLAN, distinguished by
+                # per-session MAC only) instead of the previous per-
+                # session VLAN range (1:1, BNGBlaster's own default when
+                # outer-vlan-min/max differ) -- confirmed on a real run
+                # this is the actual fix for traffic never being
+                # generated: an 8-session 1:1 config always printed
+                # "Total PPS of all streams: 0.00" at startup and zero
+                # session-traffic/stream-traffic-flows ever appeared in
+                # session-counters, while BNGBlaster's own official
+                # dhcpn1.json example (N:1, single shared VLAN) printed a
+                # real nonzero PPS and session-info's nested
+                # "session-traffic" block showed real, growing
+                # tx-packets counts. Single outer-vlan (not a min/max
+                # range) is also what sidesteps the earlier "VLAN ranges
+                # exhausted!" failure for session_count > 1 -- N:1 mode
+                # doesn't consume one VLAN per session at all.
+                "outer-vlan": 1,
+                "vlan-mode": "N:1",
             }],
         },
         "sessions": {
             "count": session_count,
             "start-rate": min(400, max(1, session_count)),
         },
-        "dhcp": {"enable": True},
+        # Present in every confirmed-working BNGBlaster example config
+        # (examples/dhcp11.json, dhcpn1.json) -- {session-global} gives
+        # each session its own readable circuit/remote-id even though
+        # they now share one VLAN (N:1 above), which session-info
+        # confirmed populating correctly on a real run.
+        "access-line": {
+            "agent-remote-id": "RTBRICK.{session-global}",
+            "agent-circuit-id": "0.0.0.0/0.0.0.0 eth 0:{session-global}",
+        },
+        # broadcast:false -- matches the confirmed-working examples;
+        # with N:1 putting every session on the same shared VLAN/
+        # broadcast domain, unicasting DHCP replies where possible
+        # avoids every other session's client also having to filter out
+        # replies not addressed to it.
+        "dhcp": {"enable": True, "broadcast": False},
         # Confirmed on a real run: with DHCPv6 left at BNGBlaster's
         # default (enabled), every session got a real, fully-bound IPv4
         # lease (dhcp-state="Bound", dhcp-sessions-established=8/8) but
@@ -149,18 +152,16 @@ def _base_config(
         # turns off RS/RA for IPoE specifically (separate config block
         # from "dhcp"/"dhcpv6", confirmed via BNGBlaster's own docs).
         "ipoe": {"ipv6": False, "ipv4": True},
-        # DIAGNOSTIC, temporary: BNGBlaster's own confirmed-working IPoE
-        # examples (examples/dhcp11.json, dhcpn1.json in the real repo)
-        # generate traffic via THIS block, not "streams" -- a real run
-        # showed zero traffic ever leaving the network interface for our
-        # "streams"-based config (tcpdump on veth-n: nothing but
-        # unrelated host mDNS, despite sessions fully established and
-        # stream-start succeeding with no error). Added here to isolate
-        # whether the interface/session setup itself is the real blocker
-        # (in which case this would ALSO show nothing) or whether it's
-        # specific to "streams" (in which case this should show traffic
-        # while "streams" still doesn't) -- remove once that's settled.
-        "session-traffic": {"autostart": True, "ipv4-pps": 1},
+        # Confirmed via a real run's diagnostic (BNGBlaster's own
+        # dhcpn1.json example, N:1 mode): session-traffic with
+        # ipv4-pps=1 produced a real, growing tx-packets count and a
+        # nonzero "Total PPS of all streams" at startup -- the access
+        # interface's vlan-mode (now N:1 above) was the actual blocker,
+        # not session-traffic vs streams. Left disabled (0, the schema
+        # default) now that the real fix is applied to "streams" too --
+        # this pipeline's attack shaping (protocol/port/pps per
+        # scenario) needs "streams", session-traffic's flat ipv4-pps
+        # can't express that.
         "streams": [],
     }
 
