@@ -3,8 +3,8 @@ bng_traffic_simulator.py — Fixed Broadband Domain (BNG) DDoS simulator.
 
 Linux-only -- BNGBlaster needs raw-socket access (root or
 cap_net_raw,cap_net_admin) and real network interfaces (a veth pair is
-the simplest setup -- see simulation/bng_setup_netns.sh). It does not
-run on macOS, so this is written and reviewed here but only actually
+the simplest setup -- see deploy/setup_bng_netns.sh). It does not run
+on macOS, so this is written and reviewed here but only actually
 exercised on the Ubuntu test VM (same split as the rest of this repo's
 O-RAN pipeline -- see oran_e2_pipeline_status memory).
 
@@ -29,8 +29,14 @@ Output: appends rows to DEFAULT_CSV_PATH in the column order
 BroadbandAdapter.collect() expects (telemetry/broadband_adapter.py) --
 same role parse_xapp_kpm_log.py's CSV plays for MobileNetworkAdapter.
 
+The core logic lives in BngScenarioSession (start/tick/start_attack/
+stop_attack/stop) so simulation/bng_interactive.py can drive the same
+real BNGBlaster process interactively instead of for a fixed scripted
+duration -- see that module for the menu-driven equivalent of
+ul_traffic_simulator.py's --interactive mode.
+
 Usage (on the Ubuntu VM, as root or with cap_net_raw/cap_net_admin set
-on the bngblaster binary -- see simulation/bng_install.sh):
+on the bngblaster binary -- see deploy/install_bngblaster.sh):
   sudo python3 simulation/bng_traffic_simulator.py --scenario syn_flood
   sudo python3 simulation/bng_traffic_simulator.py --scenario udp_flood
   sudo python3 simulation/bng_traffic_simulator.py --scenario icmp_flood
@@ -53,13 +59,14 @@ from simulation.bng_socket import BngControlSocket, wait_for_socket  # noqa: E40
 
 DEFAULT_CSV_PATH = "/tmp/ddos_bng_events.csv"
 # Must match telemetry/broadband_adapter.py's _CSV_COLUMNS exactly.
-_CSV_COLUMNS = [
+CSV_COLUMNS = [
     "timestamp", "session_id", "device_id", "src_ip", "dst_ip", "dst_port",
     "protocol", "pps", "bps", "sessions_established", "sessions_flapped",
 ]
 
 DEFAULT_CONFIG_PATH = "/tmp/bng_run_config.json"
 DEFAULT_SOCK_PATH = "/tmp/bng_run.sock"
+DEFAULT_BNG_BINARY = "/usr/sbin/bngblaster"
 _NORMAL_DST_PORT = 80
 _NORMAL_PROTOCOL = "TCP"
 
@@ -100,18 +107,8 @@ def _extract_session_address(info: dict, session_id: int) -> tuple:
 
     Response is wrapped (confirmed on a real run: {"status":...,
     "session-info": {"session-id":..., ...}}), unlike the flat dict
-    this originally assumed -- that bug made every session fall through
-    to the placeholder AND, since it read "session-id" from the same
-    (wrong, top-level) dict, always defaulted to 0, producing the exact
-    same placeholder IP for every single session regardless of its real
-    session-id. session_id is now taken from the caller's own loop
-    variable instead of re-reading it back out of the response.
-
-    A real run's session-info had no IP address field at all yet (DHCP
-    was still stuck pending) -- this fallback is what made that failure
-    visible at all (every session reporting the literal same src_ip)
-    instead of silently collapsing into one false single-attacker
-    signature.
+    this originally assumed. session_id is taken from the caller's own
+    loop variable, not re-read out of the response.
     """
     node = info.get("session-info", info)
     if isinstance(node, dict):
@@ -136,9 +133,176 @@ def _append_csv_rows(csv_path: str, rows: list) -> None:
     is_new = not os.path.exists(csv_path)
     with open(csv_path, "a", newline="") as f:
         if is_new:
-            f.write(",".join(_CSV_COLUMNS) + "\n")
+            f.write(",".join(CSV_COLUMNS) + "\n")
         for row in rows:
-            f.write(",".join(str(row[c]) for c in _CSV_COLUMNS) + "\n")
+            f.write(",".join(str(row[c]) for c in CSV_COLUMNS) + "\n")
+
+
+class BngScenarioSession:
+    """
+    Owns one running bngblaster process for one scenario -- launches it,
+    polls per-session telemetry into the CSV on demand (tick()), and
+    starts/stops the attack traffic via the control socket. Shared by
+    the scripted CLI entry point below and simulation/bng_interactive.py's
+    menu-driven mode.
+
+    Not thread-safe internally -- the interactive script's background
+    polling thread and its main menu thread coordinate via their own
+    lock, the same pattern ul_traffic_simulator.py's ues_lock uses.
+    """
+
+    def __init__(
+        self,
+        scenario: str,
+        target_ip: str,
+        bng_host: str = "bng-blaster-1",
+        csv_path: str = DEFAULT_CSV_PATH,
+        bng_binary: str = DEFAULT_BNG_BINARY,
+        access_interface: str = "veth-a",
+        network_interface: str = "veth-n",
+        config_path: str = DEFAULT_CONFIG_PATH,
+        sock_path: str = DEFAULT_SOCK_PATH,
+    ):
+        self.scenario = scenario
+        self.target_ip = target_ip
+        self.bng_host = bng_host
+        self.csv_path = csv_path
+        self.bng_binary = bng_binary
+        self.config_path = config_path
+        self.sock_path = sock_path
+
+        self.scn = build_scenario(
+            scenario=scenario,
+            target_ip=target_ip,
+            access_interface=access_interface,
+            network_interface=network_interface,
+        )
+        self.ctrl: BngControlSocket = None
+        self._proc: subprocess.Popen = None
+        self.session_ids = list(range(1, self.scn["sessions"] + 1))
+        self.session_ips = {}
+        self.session_confirmed = set()
+        # Mirrors attack_started/attack_stopped's role in the old run()
+        # loop -- low_and_slow's session-traffic already autostarts with
+        # the process, so it's "attacking" the moment the session is up.
+        self.attacking = self.scn["autostart"]
+
+    def start(self) -> None:
+        Path(self.config_path).write_text(json.dumps(self.scn["config"], indent=2))
+        if os.path.exists(self.sock_path):
+            os.remove(self.sock_path)
+
+        print(f"[BNG] launching {self.bng_binary} -C {self.config_path} -S {self.sock_path} "
+              f"(scenario={self.scenario}, sessions={self.scn['sessions']})")
+        self._proc = subprocess.Popen([self.bng_binary, "-C", self.config_path, "-S", self.sock_path])
+        wait_for_socket(self.sock_path, timeout_s=10.0)
+        # This process (and bngblaster, which inherits the same user)
+        # runs under sudo for the raw-socket/interface work, so the
+        # control socket file bngblaster creates is root-owned -- but
+        # BroadbandAdapter.apply_mitigation() connects to it from the
+        # controller process, which normally runs as a regular user.
+        # Confirmed on a real run: every session-stop/session-start call
+        # failed with EACCES until this was added. World-writable is
+        # fine here -- a throwaway local-simulation socket, not a
+        # production BNG.
+        os.chmod(self.sock_path, 0o666)
+        self.ctrl = BngControlSocket(self.sock_path)
+
+    def _attack_cmd(self, starting: bool) -> tuple:
+        if self.scn["attack_kind"] == "session-traffic":
+            return ("session-traffic-start" if starting else "session-traffic-stop"), {}
+        return (
+            ("icmp-client-start" if starting else "icmp-client-stop"),
+            {"icmp-client-group-id": self.scn["attack_group_id"]},
+        )
+
+    def start_attack(self) -> None:
+        cmd, args = self._attack_cmd(starting=True)
+        print(f"[BNG] starting attack ({self.scn['attack_kind']}, {self.scenario})")
+        try:
+            self.ctrl.call(cmd, args)
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
+        self.attacking = True
+
+    def stop_attack(self) -> None:
+        cmd, args = self._attack_cmd(starting=False)
+        print(f"[BNG] stopping attack ({self.scn['attack_kind']})")
+        try:
+            self.ctrl.call(cmd, args)
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
+        self.attacking = False
+
+    def tick(self) -> list:
+        """One poll cycle: refreshes session addresses, reads each
+        session's current rate, appends new rows to the CSV, and also
+        returns them (so the interactive script can print a live
+        summary without re-reading the file it just wrote)."""
+        now = time.time()
+        rows = []
+
+        try:
+            counters = self.ctrl.call("session-counters")
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            print(f"[BNG] session-counters failed: {exc}", file=sys.stderr)
+            counters = {}
+        established, flapped = _extract_session_counters(counters)
+
+        for sid in self.session_ids:
+            # Re-fetched every tick until a REAL address shows up (i.e.
+            # not yet "confirmed") -- caching the first lookup
+            # unconditionally meant a session still stuck in DHCP at
+            # that point got its placeholder IP locked in forever.
+            if sid not in self.session_confirmed:
+                try:
+                    info = self.ctrl.call("session-info", {"session-id": sid})
+                    addr, confirmed = _extract_session_address(info, sid)
+                    self.session_ips[sid] = addr
+                    if confirmed:
+                        self.session_confirmed.add(sid)
+                except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+                    print(f"[BNG] session-info({sid}) failed: {exc}", file=sys.stderr)
+                    continue
+            src_ip = self.session_ips.get(sid)
+            if not src_ip:
+                continue
+
+            try:
+                stats = self.ctrl.call("session-streams", {"session-id": sid})
+            except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+                print(f"[BNG] session-streams({sid}) failed: {exc}", file=sys.stderr)
+                continue
+            pps, bps = _extract_rate(stats)
+            if pps <= 0.0 and bps <= 0.0:
+                continue
+
+            rows.append({
+                "timestamp": f"{now:.6f}",
+                "session_id": sid,
+                "device_id": self.bng_host,
+                "src_ip": src_ip,
+                "dst_ip": self.target_ip,
+                "dst_port": self.scn["dst_port"] if self.attacking else _NORMAL_DST_PORT,
+                "protocol": self.scn["protocol"] if self.attacking else _NORMAL_PROTOCOL,
+                "pps": f"{pps:.3f}",
+                "bps": f"{bps:.3f}",
+                "sessions_established": established,
+                "sessions_flapped": flapped,
+            })
+
+        _append_csv_rows(self.csv_path, rows)
+        return rows
+
+    def stop(self) -> None:
+        if self._proc is None:
+            return
+        self._proc.terminate()
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+        self._proc = None
 
 
 def run(
@@ -156,136 +320,30 @@ def run(
     config_path: str,
     sock_path: str,
 ) -> None:
-    scn = build_scenario(
-        scenario=scenario,
-        target_ip=target_ip,
-        access_interface=access_interface,
-        network_interface=network_interface,
+    session = BngScenarioSession(
+        scenario=scenario, target_ip=target_ip, bng_host=bng_host, csv_path=csv_path,
+        bng_binary=bng_binary, access_interface=access_interface, network_interface=network_interface,
+        config_path=config_path, sock_path=sock_path,
     )
-    Path(config_path).write_text(json.dumps(scn["config"], indent=2))
-
-    if os.path.exists(sock_path):
-        os.remove(sock_path)
-
-    print(f"[BNG] launching {bng_binary} -C {config_path} -S {sock_path} "
-          f"(scenario={scenario}, sessions={scn['sessions']})")
-    proc = subprocess.Popen([bng_binary, "-C", config_path, "-S", sock_path])
     try:
-        wait_for_socket(sock_path, timeout_s=10.0)
-        # This script (and bngblaster, which inherits the same user) runs
-        # under sudo for the raw-socket/interface work, so the control
-        # socket file bngblaster creates is root-owned -- but
-        # BroadbandAdapter.apply_mitigation() connects to it from the
-        # controller process, which normally runs as a regular user, not
-        # root. Confirmed on a real run: every session-stop/session-start
-        # call failed with EACCES even though detection/mitigation
-        # dispatch worked correctly end-to-end otherwise. World-writable
-        # is fine here -- this is a throwaway control socket for a local
-        # attack simulation, not a production BNG.
-        os.chmod(sock_path, 0o666)
-        ctrl = BngControlSocket(sock_path)
-
-        attack_started = scn["autostart"]
+        session.start()
+        attack_started = session.attacking
         attack_stopped = attack_started and scenario == "low_and_slow"
-        # session-id is assumed sequential starting at 1, matching every
-        # other BNGBlaster doc example -- see bng_socket.py's docstring.
-        session_ids = list(range(1, scn["sessions"] + 1))
-        session_ips = {}
-        session_confirmed = set()
 
         elapsed = 0.0
         while elapsed < duration_s:
-            # session-traffic-start/-stop toggles BNGBlaster's own
-            # built-in traffic generator (confirmed working on a real
-            # run -- see bng_config.py's module docstring on why this
-            # replaced the documented but non-functional "streams"
-            # mechanism). icmp-client-start/-stop still use the
-            # unverified icmp-client-group-id (no real run has
-            # exercised the icmp_flood scenario yet).
             if not attack_started and elapsed >= attack_start_s:
-                print(f"[BNG] starting attack ({scn['attack_kind']}, {scenario})")
-                cmd = "session-traffic-start" if scn["attack_kind"] == "session-traffic" else "icmp-client-start"
-                args = {} if scn["attack_kind"] == "session-traffic" else {"icmp-client-group-id": scn["attack_group_id"]}
-                try:
-                    ctrl.call(cmd, args)
-                except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-                    print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
+                session.start_attack()
                 attack_started = True
-
             if attack_started and not attack_stopped and elapsed >= attack_end_s:
-                print(f"[BNG] stopping attack ({scn['attack_kind']})")
-                cmd = "session-traffic-stop" if scn["attack_kind"] == "session-traffic" else "icmp-client-stop"
-                args = {} if scn["attack_kind"] == "session-traffic" else {"icmp-client-group-id": scn["attack_group_id"]}
-                try:
-                    ctrl.call(cmd, args)
-                except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-                    print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
+                session.stop_attack()
                 attack_stopped = True
 
-            now = time.time()
-            rows = []
-
-            try:
-                counters = ctrl.call("session-counters")
-            except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-                print(f"[BNG] session-counters failed: {exc}", file=sys.stderr)
-                counters = {}
-            established, flapped = _extract_session_counters(counters)
-
-            for sid in session_ids:
-                # Re-fetched every tick until a REAL address shows up
-                # (i.e. not yet "confirmed") -- caching the very first
-                # lookup unconditionally meant a session still stuck in
-                # DHCP at that point got its placeholder IP locked in
-                # forever, never updated once DHCP actually completed a
-                # tick or two later.
-                if sid not in session_confirmed:
-                    try:
-                        info = ctrl.call("session-info", {"session-id": sid})
-                        addr, confirmed = _extract_session_address(info, sid)
-                        session_ips[sid] = addr
-                        if confirmed:
-                            session_confirmed.add(sid)
-                    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-                        print(f"[BNG] session-info({sid}) failed: {exc}", file=sys.stderr)
-                        continue
-                src_ip = session_ips.get(sid)
-                if not src_ip:
-                    continue
-
-                try:
-                    stats = ctrl.call("session-streams", {"session-id": sid})
-                except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-                    print(f"[BNG] session-streams({sid}) failed: {exc}", file=sys.stderr)
-                    continue
-                pps, bps = _extract_rate(stats)
-                if pps <= 0.0 and bps <= 0.0:
-                    continue
-
-                is_attack_session = attack_started and not attack_stopped
-                rows.append({
-                    "timestamp": f"{now:.6f}",
-                    "session_id": sid,
-                    "device_id": bng_host,
-                    "src_ip": src_ip,
-                    "dst_ip": target_ip,
-                    "dst_port": scn["dst_port"] if is_attack_session else _NORMAL_DST_PORT,
-                    "protocol": scn["protocol"] if is_attack_session else _NORMAL_PROTOCOL,
-                    "pps": f"{pps:.3f}",
-                    "bps": f"{bps:.3f}",
-                    "sessions_established": established,
-                    "sessions_flapped": flapped,
-                })
-
-            _append_csv_rows(csv_path, rows)
+            session.tick()
             time.sleep(tick_s)
             elapsed += tick_s
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        session.stop()
 
 
 def main():
@@ -298,7 +356,7 @@ def main():
     p.add_argument("--attack-start", type=int, default=10, help="seconds into the run")
     p.add_argument("--attack-end", type=int, default=40, help="seconds into the run")
     p.add_argument("--csv-path", default=DEFAULT_CSV_PATH)
-    p.add_argument("--bng-binary", default="/usr/sbin/bngblaster")
+    p.add_argument("--bng-binary", default=DEFAULT_BNG_BINARY)
     p.add_argument("--access-interface", default="veth-a")
     p.add_argument("--network-interface", default="veth-n")
     p.add_argument("--config-path", default=DEFAULT_CONFIG_PATH)
