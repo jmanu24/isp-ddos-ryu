@@ -208,11 +208,29 @@ class DDoSDetectionEngine:
         (hping3 --flood does, by default) looks identical to "many
         distinct connections" otherwise, and would get double-reported
         as LOW_SLOW for the exact same traffic SYN_FLOOD already covers.
+
+        info["age"] (seconds since the pair's first packet) must also
+        clear settings.LOW_SLOW_MIN_AGE before its port count counts at
+        all -- exclude_pairs alone isn't enough, since it only protects a
+        destination AFTER the volumetric check has had a fair shot (at
+        least one full FlowCollector sample pair). A fast hping3 --flood
+        can rack up LOW_SLOW_NEW_FLOWS distinct source ports within the
+        very first fraction of a second (table-miss packet-in bursts
+        before its L3 forwarding rule is even programmed), well before
+        the volumetric path's first valid two-sample pps reading exists
+        to populate exclude_pairs in the first place. Confirmed on a real
+        run: this exact race made a sustained SYN flood get classified as
+        LOW_SLOW on its very first detection almost every time. Real
+        Slowloris-style attacks open their connections slowly over
+        minutes, so requiring this age costs them nothing.
         """
         results = []
 
         for (src_ip, dst_ip), info in port_counts.items():
             if (src_ip, dst_ip) in exclude_pairs:
+                continue
+
+            if info.get("age", 0) < settings.LOW_SLOW_MIN_AGE:
                 continue
 
             distinct_ports = info["count"]

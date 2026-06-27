@@ -92,7 +92,10 @@ class DDoSCollector:
             conn_key = (ip_pkt.src, ip_pkt.dst)
             conn_entry = self._connection_ports.setdefault(
                 conn_key,
-                {"ports": set(), "last_update": now, "dst_port": 0, "protocol": "IP", "new_connections": 0},
+                {
+                    "ports": set(), "last_update": now, "dst_port": 0,
+                    "protocol": "IP", "new_connections": 0, "first_seen": now,
+                },
             )
 
             if src_port not in conn_entry["ports"]:
@@ -169,7 +172,13 @@ class DDoSCollector:
         VALIDATED_FLOW_HARD_TIMEOUT forcing re-classification); an entry
         is forgotten once that pair hasn't been seen at all for
         LOW_SLOW_PORT_IDLE_TTL seconds, so a stale attack from a while
-        ago doesn't linger forever.
+        ago doesn't linger forever. "age": seconds since the first packet
+        ever seen for this pair -- callers gate LOW_SLOW classification on
+        this (settings.LOW_SLOW_MIN_AGE) so a fast flood whose tool
+        randomizes its source port (hping3 --flood does) can't rack up
+        LOW_SLOW_NEW_FLOWS distinct ports in a sub-second burst and get
+        misread as a Slowloris-style attack, which by definition opens its
+        connections slowly over time.
         """
         now = time()
         counts = {}
@@ -186,6 +195,7 @@ class DDoSCollector:
                 "dst_port": entry["dst_port"],
                 "protocol": entry["protocol"],
                 "new_connections": entry["new_connections"],
+                "age": now - entry["first_seen"],
             }
 
         return counts
