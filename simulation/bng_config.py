@@ -106,6 +106,20 @@ def _base_config(
                 # in sync with that script's own MAX_VLAN.
                 "outer-vlan-min": 1,
                 "outer-vlan-max": max(session_count, 1),
+                # BNGBlaster's own PPPoE+streams quickstart example pairs
+                # this with a matching "stream-group-id" on the stream
+                # definition itself -- our access config never set this
+                # at all, and a real run showed exactly the symptom that
+                # would explain (zero traffic on the wire via tcpdump,
+                # "stream-traffic-flows": 0 in session-counters, despite
+                # stream-start succeeding with no error and sessions
+                # being fully established). Matches NORMAL_STREAM_GROUP_ID
+                # -- this field's singular (not list) in every example
+                # seen, so it's unclear yet whether a session can
+                # replicate streams from more than one group; the attack
+                # stream (group 100) may need a second access-interface
+                # entry instead if this alone doesn't unblock it too.
+                "stream-group-id": NORMAL_STREAM_GROUP_ID,
             }],
         },
         "sessions": {
