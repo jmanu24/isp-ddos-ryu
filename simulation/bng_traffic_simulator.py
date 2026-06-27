@@ -236,9 +236,16 @@ class BngScenarioSession:
     def _attack_cmd(self, starting: bool) -> tuple:
         if self.scn["attack_kind"] == "session-traffic":
             return ("session-traffic-start" if starting else "session-traffic-stop"), {}
+        # Confirmed against the real bbl_ctrl.c source (rtbrick/bngblaster):
+        # the commands are "icmp-clients-start"/"-stop" (plural --
+        # "icmp-client-start" got a clean "400 unknown command" on a real
+        # run), and they take a "session-id" argument, not a group-id --
+        # bbl_icmp_client_ctrl_start_stop() starts/stops every icmp-client
+        # attached to that one session. icmp_flood always has exactly one
+        # session, so the first (only) session-id applies.
         return (
-            ("icmp-client-start" if starting else "icmp-client-stop"),
-            {"icmp-client-group-id": self.scn["attack_group_id"]},
+            ("icmp-clients-start" if starting else "icmp-clients-stop"),
+            {"session-id": self.session_ids[0]},
         )
 
     def start_attack(self) -> None:
