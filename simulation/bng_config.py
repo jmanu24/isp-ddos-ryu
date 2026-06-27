@@ -83,8 +83,18 @@ _SCENARIO_PARAMS = {
     "syn_flood":             dict(sessions=1, pps=200.0, kind="session-traffic", protocol="TCP_SYN", dst_port=443),
     # single attacker, well past UDP_THRESHOLD=200
     "udp_flood":             dict(sessions=1, pps=5000.0, kind="session-traffic", protocol="UDP", dst_port=0),
-    # single attacker, icmp-client interval sized for ~300 req/s (well past ICMP_THRESHOLD=150)
-    "icmp_flood":            dict(sessions=1, interval=0.0033, kind="icmp", protocol="ICMP", dst_port=0),
+    # single attacker, icmp-client interval sized for ~3300 req/s.
+    # ~300 req/s (2x ICMP_THRESHOLD=150) was the original choice here,
+    # matching the other scenarios' "comfortably past threshold"
+    # convention only in raw pps terms -- but confirmed on a real run
+    # that's NOT enough to actually get mitigated: DecisionEngine's
+    # confidence is min(score/10, 1.0), so a score of just ~2 (296/150)
+    # caps confidence at ~0.2, and score*confidence*weight(0.8) lands
+    # at ~0.31 -- nowhere near DECISION_THRESHOLD=1.5, so this kept
+    # re-detecting every cycle but never actually triggering a BLOCK.
+    # ~3300 req/s gives score~22 (confidence capped at 1.0, same
+    # headroom syn_flood/udp_flood already have), final_score~17.6.
+    "icmp_flood":            dict(sessions=1, interval=0.0003, kind="icmp", protocol="ICMP", dst_port=0),
     # 8 sessions (>= DIST_MIN_SOURCES=5), 5 pps each -> ~40 pps aggregate
     # (> SYN_THRESHOLD=10), uniform per-session rate -> high entropy
     "distributed_syn_flood": dict(sessions=8, pps=5.0, kind="session-traffic", protocol="TCP_SYN", dst_port=443),
