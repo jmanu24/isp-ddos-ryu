@@ -52,7 +52,20 @@ MITIGATION_DROP_PRIORITY = 100
 # zero dt — dividing a normal packet_delta by that tiny dt produces a
 # physically impossible rate (seen once: ~470M pps). Below this floor the
 # sample is skipped rather than trusted.
-MIN_FLOW_RATE_DT = 0.5
+# Must stay well BELOW COLLECT_INTERVAL (above), not just below it --
+# flow-stats requests go out once per COLLECT_INTERVAL (_monitor's loop),
+# so normal hub.sleep/processing jitter routinely makes the real dt
+# between two polls land slightly under COLLECT_INTERVAL. When this was
+# 0.5 and COLLECT_INTERVAL got lowered to 0.5 too (for mobile-domain
+# sub-second latency), that jitter alone made FlowCollector skip a large
+# fraction of openflow's flow-stats samples every cycle -- starving
+# SYN_FLOOD's volumetric (flow-stats-based) detection while LOW_SLOW's
+# distinct-source-port count (packet-in-based, not subject to this floor
+# at all) kept climbing unimpeded and won the race almost every time.
+# Confirmed on a real run: hping3 --flood, previously classified
+# correctly as SYN_FLOOD, got misclassified as LOW_SLOW with a BLOCK/
+# UNBLOCK oscillation once COLLECT_INTERVAL and this floor collided.
+MIN_FLOW_RATE_DT = 0.1
 
 # Forced lifetime of a *validated* L3 forwarding rule (LearningSwitch),
 # regardless of how continuously it's being used. Without a hard_timeout,
