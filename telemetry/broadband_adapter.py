@@ -62,6 +62,13 @@ class BroadbandAdapter(DomainAdapter):
         self.csv_path = csv_path
         self.sock_path = sock_path
         self._last_offset = 0
+        # One persistent connection, reused across every mitigation
+        # call -- confirmed on a real run that BNGBlaster 0.9.17's
+        # control socket doesn't tolerate connection churn well (see
+        # BngControlSocket's docstring); reconnecting per call isn't
+        # needed here anyway since mitigation calls are infrequent
+        # compared to the telemetry poller's tick loop.
+        self._ctrl = BngControlSocket(self.sock_path)
         # src_ip -> session_id, learned from collect()'s own CSV rows --
         # the only place this adapter ever sees that mapping (BNGBlaster's
         # session-stop/-start commands take a session-id, but
@@ -116,8 +123,7 @@ class BroadbandAdapter(DomainAdapter):
 
         command = "session-stop" if action.action in ("block", "rate_limit") else "session-start"
         try:
-            ctrl = BngControlSocket(self.sock_path)
-            ctrl.call(command, {"session-id": session_id})
+            self._ctrl.call(command, {"session-id": session_id})
         except (OSError, RuntimeError) as exc:
             print(f"[BROADBAND] {command} session-id={session_id} failed: {exc}")
             return False

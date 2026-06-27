@@ -295,6 +295,9 @@ class BngScenarioSession:
         return rows
 
     def stop(self) -> None:
+        if self.ctrl is not None:
+            self.ctrl.close()
+            self.ctrl = None
         if self._proc is None:
             return
         self._proc.terminate()
