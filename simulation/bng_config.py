@@ -102,7 +102,27 @@ def _base_config(
     network_gateway: str,
     session_traffic_pps: float,
     session_traffic_autostart: bool,
+    icmp_client_group_id: int = 0,
 ) -> dict:
+    access_entry = {
+        "interface": access_interface,
+        "type": "ipoe",
+        # N:1 -- see module docstring for why (confirmed real-run
+        # fix for traffic never being generated at all).
+        "outer-vlan": 1,
+        "vlan-mode": "N:1",
+    }
+    if icmp_client_group_id:
+        # Confirmed against the real bbl_config.c source: a session only
+        # gets attached to an "icmp-client" config block if its access
+        # interface declares this SAME group id (access_config->
+        # icmp_client_group_id) -- exactly the same group-id-pairing
+        # pattern the (abandoned) "streams" mechanism needed. Without it,
+        # `icmp-clients session-id 1` returned a real but empty `[]` on
+        # a real run -- the icmp-client config was accepted at load time
+        # but never bound to any session, so icmp-clients-start had
+        # nothing to start (no error, no traffic, silently a no-op).
+        access_entry["icmp-client-group-id"] = icmp_client_group_id
     return {
         "interfaces": {
             # A plain object, NOT wrapped in a list -- the upstream JSON
@@ -117,14 +137,7 @@ def _base_config(
                 "address": network_ip,
                 "gateway": network_gateway,
             },
-            "access": [{
-                "interface": access_interface,
-                "type": "ipoe",
-                # N:1 -- see module docstring for why (confirmed real-run
-                # fix for traffic never being generated at all).
-                "outer-vlan": 1,
-                "vlan-mode": "N:1",
-            }],
+            "access": [access_entry],
         },
         "sessions": {
             "count": session_count,
@@ -220,6 +233,7 @@ def build_scenario(
         cfg = _base_config(
             access_interface, network_interface, session_count, network_ip, network_gateway,
             session_traffic_pps=1, session_traffic_autostart=True,
+            icmp_client_group_id=ATTACK_ICMP_GROUP_ID,
         )
         # icmp-client has no documented "autostart" field -- it starts
         # sending as soon as the session is up. The orchestrator
