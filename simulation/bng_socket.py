@@ -29,56 +29,29 @@ _RECV_TIMEOUT_S = 2.0
 
 class BngControlSocket:
     """
-    Holds ONE persistent connection, reused across calls, instead of
-    reconnecting per call -- confirmed on a real run that reconnecting
-    rapidly (bng_traffic_simulator.py's tick loop makes several calls
-    per second) was the actual cause of a periodic, otherwise
-    unexplained session DHCPRELEASE/re-establish cycle: the exact same
-    config and session-traffic-start command, issued once by hand via
-    bngblaster-cli and then left alone, ran 109s with "Flapped: 0" and
-    0% loss, while this module's old "open a fresh connection every
-    call" approach reliably reproduced the cycle within ~20s. Treat
-    that as this old binary's control-socket implementation not
-    tolerating connection churn well, not a framing requirement -- the
-    underlying request/response exchange itself was always fine.
+    Opens a FRESH connection per call, closed right after -- confirmed
+    on a real run that BNGBlaster's control socket only answers ONE
+    request per accepted connection: the first call() on a persistent
+    connection got a real response, every subsequent call() on that
+    SAME connection then timed out ("no response") forever, even though
+    bngblaster itself kept running fine (its own milestone logs kept
+    printing). A previous version of this module held one persistent
+    connection open across calls to reduce reconnect overhead -- that
+    was based on a theory (rapid reconnects causing a periodic session
+    flap) later disproven by other evidence, and it broke the control
+    socket outright once exercised across a full pipeline cycle instead
+    of a handful of manual bngblaster-cli calls. Back to one connection
+    per call, the originally-confirmed-working design.
     """
 
     def __init__(self, sock_path: str):
         self.sock_path = sock_path
-        self._sock: socket.socket = None
-
-    def _connect(self) -> None:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(_RECV_TIMEOUT_S)
-        s.connect(self.sock_path)
-        self._sock = s
 
     def close(self) -> None:
-        if self._sock is not None:
-            try:
-                self._sock.close()
-            except OSError:
-                pass
-            self._sock = None
-
-    def _recv_response(self, s: socket.socket) -> dict:
-        chunks = []
-        try:
-            while True:
-                chunk = s.recv(65536)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                try:
-                    return json.loads(b"".join(chunks).decode("utf-8"))
-                except json.JSONDecodeError:
-                    continue
-        except socket.timeout:
-            pass
-        raw = b"".join(chunks).decode("utf-8", errors="replace")
-        if not raw:
-            raise RuntimeError(f"no response from {self.sock_path}")
-        return json.loads(raw)
+        """No persistent state to release -- kept as a no-op so
+        existing callers (BngScenarioSession.stop(), BroadbandAdapter)
+        that call ctrl.close() don't need to change."""
+        pass
 
     def call(self, command: str, arguments: dict = None) -> dict:
         """
@@ -94,27 +67,32 @@ class BngControlSocket:
         failures, so raising here routes a bad command/argument through
         the exact same path instead of needing a second kind of check
         at every call site.
-
-        Retries once over a fresh connection if the persistent one was
-        closed/broken since the last call (e.g. bngblaster itself
-        restarted) -- transparent to callers, who already handle
-        OSError/RuntimeError from this method either way.
         """
         req = json.dumps({"command": command, "arguments": arguments or {}}).encode("utf-8")
-        last_exc = None
-        for attempt in (1, 2):
-            if self._sock is None:
-                self._connect()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(_RECV_TIMEOUT_S)
+            s.connect(self.sock_path)
+            s.sendall(req)
+            chunks = []
+            resp = None
             try:
-                self._sock.sendall(req)
-                resp = self._recv_response(self._sock)
-                break
-            except (OSError, json.JSONDecodeError) as exc:
-                last_exc = exc
-                self.close()
-        else:
-            raise RuntimeError(f"{command!r} failed after reconnect: {last_exc}")
-
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    try:
+                        resp = json.loads(b"".join(chunks).decode("utf-8"))
+                        break
+                    except json.JSONDecodeError:
+                        continue
+            except socket.timeout:
+                pass
+        if resp is None:
+            raw = b"".join(chunks).decode("utf-8", errors="replace")
+            if not raw:
+                raise RuntimeError(f"no response from {self.sock_path} for command {command!r}")
+            resp = json.loads(raw)
         if resp.get("status") == "error":
             raise RuntimeError(f"{command!r} {arguments!r} -> {resp.get('code')} {resp.get('message')}")
         return resp
