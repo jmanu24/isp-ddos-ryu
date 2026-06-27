@@ -83,12 +83,9 @@ class BroadbandAdapter(DomainAdapter):
         self.dnsmasq_conf_path = dnsmasq_conf_path
         self.dhcp_blacklist_path = dhcp_blacklist_path
         self._last_offset = 0
-        # One persistent connection, reused across every mitigation
-        # call -- confirmed on a real run that BNGBlaster 0.9.17's
-        # control socket doesn't tolerate connection churn well (see
-        # BngControlSocket's docstring); reconnecting per call isn't
-        # needed here anyway since mitigation calls are infrequent
-        # compared to the telemetry poller's tick loop.
+        # BngControlSocket opens its own fresh connection per call() --
+        # this instance is reused purely to avoid re-constructing it
+        # every apply_mitigation(), it holds no connection state itself.
         self._ctrl = BngControlSocket(self.sock_path)
         # src_ip -> (session_id, mac), learned from collect()'s own CSV
         # rows -- the only place this adapter ever sees that mapping
