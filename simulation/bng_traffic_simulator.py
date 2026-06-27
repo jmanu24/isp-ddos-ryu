@@ -172,6 +172,17 @@ def run(
     proc = subprocess.Popen([bng_binary, "-C", config_path, "-S", sock_path])
     try:
         wait_for_socket(sock_path, timeout_s=10.0)
+        # This script (and bngblaster, which inherits the same user) runs
+        # under sudo for the raw-socket/interface work, so the control
+        # socket file bngblaster creates is root-owned -- but
+        # BroadbandAdapter.apply_mitigation() connects to it from the
+        # controller process, which normally runs as a regular user, not
+        # root. Confirmed on a real run: every session-stop/session-start
+        # call failed with EACCES even though detection/mitigation
+        # dispatch worked correctly end-to-end otherwise. World-writable
+        # is fine here -- this is a throwaway control socket for a local
+        # attack simulation, not a production BNG.
+        os.chmod(sock_path, 0o666)
         ctrl = BngControlSocket(sock_path)
 
         attack_started = scn["autostart"]
