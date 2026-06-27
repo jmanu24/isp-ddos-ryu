@@ -203,6 +203,19 @@ class BngScenarioSession:
         Path(self.config_path).write_text(json.dumps(self.scn["config"], indent=2))
         if os.path.exists(self.sock_path):
             os.remove(self.sock_path)
+        # Confirmed on a real run: leftover rows in the CSV from a
+        # PREVIOUS run's now-dead bngblaster process get replayed the
+        # moment any controller (re)starts and tails this file from
+        # offset 0 -- and since BNGBlaster assigns MACs deterministically
+        # (session 1 is always 02:00:00:00:00:01, etc.), a stale
+        # mitigation against that MAC can DHCP-blacklist a brand new,
+        # otherwise-legitimate session before it ever gets a lease,
+        # purely because it happens to reuse the same session-id/MAC a
+        # past run already used. Starting from an empty CSV every run
+        # avoids replaying state that belongs to a process that no
+        # longer exists.
+        if os.path.exists(self.csv_path):
+            os.remove(self.csv_path)
 
         print(f"[BNG] launching {self.bng_binary} -C {self.config_path} -S {self.sock_path} "
               f"(scenario={self.scenario}, sessions={self.scn['sessions']})")
