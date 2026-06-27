@@ -184,18 +184,17 @@ def run(
 
         elapsed = 0.0
         while elapsed < duration_s:
-            # stream-start/stream-stop filter by "name" (or session-id/
-            # flow-id) -- NOT "stream-group-id" (confirmed on a real run:
-            # that argument got a clean {"status":"error","message":
-            # "invalid argument"} every time, silently, since BngControlSocket
-            # didn't used to raise on an error status -- see its docstring).
-            # icmp-client-start/-stop still use the unverified
-            # icmp-client-group-id (no real run has exercised the icmp_flood
-            # scenario yet).
+            # session-traffic-start/-stop toggles BNGBlaster's own
+            # built-in traffic generator (confirmed working on a real
+            # run -- see bng_config.py's module docstring on why this
+            # replaced the documented but non-functional "streams"
+            # mechanism). icmp-client-start/-stop still use the
+            # unverified icmp-client-group-id (no real run has
+            # exercised the icmp_flood scenario yet).
             if not attack_started and elapsed >= attack_start_s:
-                print(f"[BNG] starting attack ({scn['attack_kind']} {scn['attack_name'] or scn['attack_group_id']}, {scenario})")
-                cmd = "stream-start" if scn["attack_kind"] == "stream" else "icmp-client-start"
-                args = {"name": scn["attack_name"]} if scn["attack_kind"] == "stream" else {"icmp-client-group-id": scn["attack_group_id"]}
+                print(f"[BNG] starting attack ({scn['attack_kind']}, {scenario})")
+                cmd = "session-traffic-start" if scn["attack_kind"] == "session-traffic" else "icmp-client-start"
+                args = {} if scn["attack_kind"] == "session-traffic" else {"icmp-client-group-id": scn["attack_group_id"]}
                 try:
                     ctrl.call(cmd, args)
                 except (OSError, RuntimeError, json.JSONDecodeError) as exc:
@@ -203,9 +202,9 @@ def run(
                 attack_started = True
 
             if attack_started and not attack_stopped and elapsed >= attack_end_s:
-                print(f"[BNG] stopping attack ({scn['attack_kind']} {scn['attack_name'] or scn['attack_group_id']})")
-                cmd = "stream-stop" if scn["attack_kind"] == "stream" else "icmp-client-stop"
-                args = {"name": scn["attack_name"]} if scn["attack_kind"] == "stream" else {"icmp-client-group-id": scn["attack_group_id"]}
+                print(f"[BNG] stopping attack ({scn['attack_kind']})")
+                cmd = "session-traffic-stop" if scn["attack_kind"] == "session-traffic" else "icmp-client-stop"
+                args = {} if scn["attack_kind"] == "session-traffic" else {"icmp-client-group-id": scn["attack_group_id"]}
                 try:
                     ctrl.call(cmd, args)
                 except (OSError, RuntimeError, json.JSONDecodeError) as exc:
