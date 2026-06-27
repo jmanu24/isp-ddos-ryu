@@ -209,15 +209,24 @@ def build_scenario(
             session_traffic_pps=0, session_traffic_autostart=False,
         )
         # icmp-client has no documented "autostart" field -- it starts
-        # sending as soon as the session/network-interface is up. The
-        # orchestrator controls its timing via icmp-client-start/-stop
-        # on the control socket instead (assumed command names -- this
+        # sending as soon as the session is up. The orchestrator
+        # controls its timing via icmp-client-start/-stop on the
+        # control socket instead (assumed command names -- this
         # mechanism, unlike session-traffic, has NOT been confirmed
         # against a real run yet).
+        #
+        # "icmp-client-group-id" (session-scoped, one client per
+        # access session) and "network-interface" (a standalone client
+        # bound to a network interface instead, no session involved)
+        # are mutually exclusive -- confirmed on a real run: specifying
+        # both got a hard config-load error ("At most one
+        # icmp-client-group-id or network-interface must be specified
+        # for icmp-clients."). This scenario wants the per-session
+        # variant (matching syn_flood/udp_flood's model: the attacking
+        # SESSION sends the flood), so network-interface is omitted.
         cfg["icmp-client"] = [{
             "icmp-client-group-id": ATTACK_ICMP_GROUP_ID,
             "destination-address": target_ip,
-            "network-interface": network_interface,
             "interval": p["interval"],
             "count": 0,
         }]
