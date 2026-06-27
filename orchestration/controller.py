@@ -98,6 +98,14 @@ class OrchestrationController:
         # openflow drop-rule-counter-based -- see check_mobile_unblocks).
         self._active_mobile_blocks: Dict[Tuple[str, str, int, str], MitigationAction] = {}
         self._mobile_below_threshold_streak: Dict[Tuple[str, str, int, str], int] = {}
+        # (src_ip, dst_ip, dst_port, protocol) -> time.time() the block was
+        # first dispatched -- only consulted for domains in
+        # settings.PRESENCE_BLIND_DOMAINS (see check_mobile_unblocks's
+        # docstring on why those can't use the presence-streak signal at
+        # all: a real session-stop suppresses every TelemetryEvent for
+        # that source, which is indistinguishable from "the attacker
+        # stopped" if presence is the only signal available).
+        self._mobile_block_started_at: Dict[Tuple[str, str, int, str], float] = {}
 
         # (src_ip, dst_ip, dst_port, protocol) -> MitigationAction currently
         # enforced, only for the openflow domain (the only one with a real
@@ -527,6 +535,7 @@ class OrchestrationController:
             # eventual UNTHROTTLE line report the wrong attack_type).
             self._active_mobile_blocks[key] = action
             self._mobile_below_threshold_streak[key] = 0
+            self._mobile_block_started_at[key] = time.time()
 
             adapter = self._adapters.get(action.domain)
             if adapter:
@@ -908,62 +917,93 @@ class OrchestrationController:
             original = self._active_mobile_blocks[key]
             domain = original.domain
 
-            c = by_dst.get(dst_ip)
-            # Matches on src_ip alone, not protocol -- neither
-            # MobileNetworkAdapter nor BroadbandAdapter's collect() can
-            # produce more than one TelemetryEvent per source per cycle
-            # (one IMSI/session's single current row), so a src_ip can't
-            # be ambiguous between protocols the way an OpenFlow 5-tuple
-            # could be. Matching on protocol too caused real false
-            # unblocks: the stored key's protocol comes from
-            # DetectionResult, which carries either the *normalized* tag
-            # (DDoSDetectionEngine._normalize_protocol turns "TCP_SYN"
-            # into "TCP" for OpenFlow's benefit) or a hardcoded
-            # placeholder ("UDP" for analyze_low_slow_mobile's protocol-
-            # agnostic detections) -- neither of which equals the real
-            # TelemetryEvent.protocol ("TCP_SYN" or whatever the source
-            # actually sends), so the comparison always failed and every
-            # SYN_FLOOD/DDOS_DISTRIBUTED/LOW_SLOW block unblocked itself
-            # after exactly UNBLOCK_CONFIRM_CYCLES regardless of whether
-            # the attack was still running.
-            still_present = c is not None and any(
-                e.domain == domain and e.src_ip == src_ip for e in c.events
-            )
-
-            if still_present:
-                self._mobile_below_threshold_streak[key] = 0
-                continue
-
-            self._mobile_below_threshold_streak[key] = (
-                self._mobile_below_threshold_streak.get(key, 0) + 1
-            )
-
-            if self._mobile_below_threshold_streak[key] >= self.UNBLOCK_CONFIRM_CYCLES:
-                # Carries the original block's attack_type/device_id
-                # through so the dashboard/logger line reads "UNTHROTTLE
-                # ... gNB=1 ..." instead of a blank attack_type or
-                # "gNB=unknown" -- same gNB/BNG the source was throttled
-                # on, since releasing it is the same control-plane
-                # operation, just in reverse.
-                attack_type = original.attack_type
-
-                unblock_action = MitigationAction(
-                    domain=domain,
-                    device_id=original.device_id,
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    dst_port=dst_port,
-                    protocol=protocol,
-                    action="unblock",
-                    attack_type=attack_type,
+            # Domains in PRESENCE_BLIND_DOMAINS can't use the presence
+            # signal below at all -- their block (BroadbandAdapter's
+            # session-stop) doesn't throttle the source, it cuts it off
+            # entirely, so collect() produces literally zero
+            # TelemetryEvents for it while blocked. That's
+            # indistinguishable from "the attacker stopped" under the
+            # presence check, and confirmed on a real run to cause
+            # exactly the oscillation that check was originally written
+            # to prevent: BLOCK at t, telemetry vanishes (because it's
+            # blocked, not because the attack ended), UNBLOCK fires after
+            # UNBLOCK_CONFIRM_CYCLES, the still-active attacker
+            # immediately gets re-detected and re-blocked. Held for a
+            # fixed wall-clock window instead (the block's own `duration`
+            # field, no streak/confirm-cycles gate -- elapsed time is
+            # already a deliberate, complete signal) -- if the attacker
+            # is still flooding once that window ends and gets
+            # re-detected, fine, that's a fresh block with its own fresh
+            # window, not an instant bounce.
+            if domain in settings.PRESENCE_BLIND_DOMAINS:
+                started_at = self._mobile_block_started_at.get(key, time.time())
+                if time.time() - started_at < original.duration:
+                    continue
+            else:
+                c = by_dst.get(dst_ip)
+                # Matches on src_ip alone, not protocol -- neither
+                # MobileNetworkAdapter nor BroadbandAdapter's collect()
+                # can produce more than one TelemetryEvent per source per
+                # cycle (one IMSI/session's single current row), so a
+                # src_ip can't be ambiguous between protocols the way an
+                # OpenFlow 5-tuple could be. Matching on protocol too
+                # caused real false unblocks: the stored key's protocol
+                # comes from DetectionResult, which carries either the
+                # *normalized* tag (DDoSDetectionEngine._normalize_
+                # protocol turns "TCP_SYN" into "TCP" for OpenFlow's
+                # benefit) or a hardcoded placeholder ("UDP" for
+                # analyze_low_slow_mobile's protocol-agnostic detections)
+                # -- neither of which equals the real TelemetryEvent.
+                # protocol ("TCP_SYN" or whatever the source actually
+                # sends), so the comparison always failed and every
+                # SYN_FLOOD/DDOS_DISTRIBUTED/LOW_SLOW block unblocked
+                # itself after exactly UNBLOCK_CONFIRM_CYCLES regardless
+                # of whether the attack was still running.
+                still_present = c is not None and any(
+                    e.domain == domain and e.src_ip == src_ip for e in c.events
                 )
-                adapter = self._adapters.get(domain)
-                if adapter:
-                    adapter.apply_mitigation(unblock_action)
-                unblock_actions.append(unblock_action)
 
-                del self._active_mobile_blocks[key]
-                del self._mobile_below_threshold_streak[key]
-                self._validated_destinations.discard(dst_ip)
+                if still_present:
+                    self._mobile_below_threshold_streak[key] = 0
+                    continue
+
+                self._mobile_below_threshold_streak[key] = (
+                    self._mobile_below_threshold_streak.get(key, 0) + 1
+                )
+
+                if self._mobile_below_threshold_streak[key] < self.UNBLOCK_CONFIRM_CYCLES:
+                    continue
+
+            # Reaching here means either the presence-streak gate above
+            # already confirmed UNBLOCK_CONFIRM_CYCLES of absence, or
+            # (PRESENCE_BLIND_DOMAINS) the fixed wall-clock window already
+            # elapsed -- either way, release it now.
+            #
+            # Carries the original block's attack_type/device_id through
+            # so the dashboard/logger line reads "UNTHROTTLE ... gNB=1
+            # ..." instead of a blank attack_type or "gNB=unknown" -- same
+            # gNB/BNG the source was throttled on, since releasing it is
+            # the same control-plane operation, just in reverse.
+            attack_type = original.attack_type
+
+            unblock_action = MitigationAction(
+                domain=domain,
+                device_id=original.device_id,
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                protocol=protocol,
+                action="unblock",
+                attack_type=attack_type,
+            )
+            adapter = self._adapters.get(domain)
+            if adapter:
+                adapter.apply_mitigation(unblock_action)
+            unblock_actions.append(unblock_action)
+
+            del self._active_mobile_blocks[key]
+            self._mobile_below_threshold_streak.pop(key, None)
+            self._mobile_block_started_at.pop(key, None)
+            self._validated_destinations.discard(dst_ip)
 
         return unblock_actions

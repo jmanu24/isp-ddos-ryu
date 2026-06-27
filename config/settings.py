@@ -99,3 +99,17 @@ LOW_SLOW_MOBILE_MIN_CYCLES = 20    # consecutive cycles that count must hold bef
 # per-session BNGBlaster sessions reuse the exact same machinery
 # MobileNetworkAdapter's per-UE quarantine already validated.
 PER_SOURCE_MITIGATION_DOMAINS = ("mobile", "broadband")
+
+# Domains whose block is a complete cutoff, not a throttle -- mobile's
+# RC quarantine drops a UE's rate near zero but it keeps reporting
+# telemetry every cycle (ul_traffic_simulator.py's UEs always sample),
+# while BroadbandAdapter's session-stop kills the BNGBlaster session
+# entirely, so collect() produces ZERO TelemetryEvents for it until
+# session-start. Confirmed on a real run: feeding that into
+# check_mobile_unblocks's presence-based signal misread "no telemetry
+# because we just blocked it" as "the attacker stopped", unblocking
+# within UNBLOCK_CONFIRM_CYCLES regardless of whether the attack was
+# still running -- a fast, repeating BLOCK/UNBLOCK/re-detect oscillation
+# instead of one stable block for the duration of the attack. Domains
+# here use a fixed wall-clock hold (MitigationAction.duration) instead.
+PRESENCE_BLIND_DOMAINS = ("broadband",)
