@@ -50,7 +50,17 @@ class OrchestrationController:
     # unblocking, so a brief lull in a bursty attack doesn't lift the block
     # only for the next burst to need re-detection from scratch. Shared by
     # both check_unblocks() (openflow) and check_mobile_unblocks() (mobile).
-    UNBLOCK_CONFIRM_CYCLES = 10
+    # Expressed in pipeline CYCLES, not real time -- this implicitly meant
+    # 50s of confirmation back when config.settings.COLLECT_INTERVAL was
+    # 5s. Once COLLECT_INTERVAL got lowered to 0.5s (for mobile-domain
+    # sub-second latency), the same 10-cycle count silently became only 5s
+    # of real confirmation -- confirmed on a real run: openflow would
+    # BLOCK a still-running hping3 SYN flood and then UNBLOCK it ~5s later
+    # because a couple of noisy below-threshold samples off the DROP
+    # rule's own counters (record_block_traffic) were enough to satisfy
+    # 10 cycles, triggering a fast BLOCK/UNBLOCK/re-detect oscillation.
+    # Raised 10x to restore the original 50s of real confirmation time.
+    UNBLOCK_CONFIRM_CYCLES = 100
 
     def __init__(
         self, adapters: List[DomainAdapter], locate_host=None,

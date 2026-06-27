@@ -59,7 +59,17 @@ class DDoSDetectionEngine:
     # classification never gets another chance to set the record straight.
     # A multi-cycle grace period instead of a same-cycle-only check
     # absorbs that gap.
-    _RECENT_FLOOD_GRACE_CYCLES = 6
+    #
+    # Must stay several multiples of PROVISIONAL_TIMEOUT (2s) in REAL
+    # time, not just "a few cycles" -- at config.settings.COLLECT_INTERVAL
+    # =0.5s, 6 cycles is only 3s (1.5x PROVISIONAL_TIMEOUT), barely enough
+    # margin to bridge even one reset gap. Confirmed on a real run: after
+    # the grace period from one SYN_FLOOD detection expired, the very
+    # next data-gap cycle let LOW_SLOW win the classification race again,
+    # making SYN_FLOOD/LOW_SLOW alternate every few cycles for the same
+    # ongoing hping3 flood instead of staying SYN_FLOOD. Raised to give
+    # ~5x margin over PROVISIONAL_TIMEOUT in real time (20 * 0.5s = 10s).
+    _RECENT_FLOOD_GRACE_CYCLES = 20
 
     def __init__(self):
         # dst_ip -> consecutive cycles with >= LOW_SLOW_MOBILE_MIN_SOURCES
