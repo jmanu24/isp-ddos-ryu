@@ -138,6 +138,25 @@ def _extract_session_counters(stats: dict) -> tuple:
     return int(established or 0), int(flapped or 0)
 
 
+def _extract_icmp_send_count(resp: dict) -> int:
+    """Pulls the cumulative "send" counter out of an `icmp-clients`
+    response -- confirmed on a real run this is the ONLY place
+    icmp-client traffic is counted at all: session-streams' tx-pps
+    stays flat at whatever session-traffic alone contributes,
+    completely ignoring icmp-client volume, even while `icmp-clients`
+    itself shows "state": "started" and a real, growing "send". This
+    is a cumulative count, not a rate -- the caller diffs it against
+    the previous tick's value to get pps itself.
+        {"status": "ok", "code": 200, "icmp-clients": [
+            {"session-id": 1, "icmp-client-group-id": 200,
+             "state": "started", "send": 1905, "received": 0, ...}]}
+    """
+    clients = resp.get("icmp-clients", [])
+    if not clients or not isinstance(clients, list):
+        return 0
+    return int(clients[0].get("send", 0) or 0)
+
+
 def _append_csv_rows(csv_path: str, rows: list) -> None:
     if not rows:
         return
@@ -194,6 +213,12 @@ class BngScenarioSession:
         self.session_ips = {}
         self.session_macs = {}
         self.session_confirmed = set()
+        # (send_count, wall-clock time) at the last tick, per session --
+        # only used for attack_kind="icmp", to derive pps from
+        # icmp-clients' cumulative "send" counter (see
+        # _extract_icmp_send_count's docstring on why session-streams
+        # can't be used for this).
+        self._icmp_last_send = {}
         # Mirrors attack_started/attack_stopped's role in the old run()
         # loop -- low_and_slow's session-traffic already autostarts with
         # the process, so it's "attacking" the moment the session is up.
@@ -308,6 +333,22 @@ class BngScenarioSession:
                 print(f"[BNG] session-streams({sid}) failed: {exc}", file=sys.stderr)
                 continue
             pps, bps = _extract_rate(stats)
+
+            if self.scn["attack_kind"] == "icmp" and self.attacking:
+                # session-streams never reflects icmp-client volume (see
+                # _extract_icmp_send_count) -- derive pps ourselves from
+                # the cumulative "send" counter's delta since last tick.
+                try:
+                    icmp_resp = self.ctrl.call("icmp-clients", {"session-id": sid})
+                    send_count = _extract_icmp_send_count(icmp_resp)
+                    prev_count, prev_time = self._icmp_last_send.get(sid, (send_count, now))
+                    dt = now - prev_time
+                    if dt > 0:
+                        pps += max(0.0, (send_count - prev_count) / dt)
+                    self._icmp_last_send[sid] = (send_count, now)
+                except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+                    print(f"[BNG] icmp-clients({sid}) failed: {exc}", file=sys.stderr)
+
             if pps <= 0.0 and bps <= 0.0:
                 continue
 
