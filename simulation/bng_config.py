@@ -204,9 +204,22 @@ def build_scenario(
             session_traffic_pps=p["pps"], session_traffic_autostart=autostart,
         )
     elif p["kind"] == "icmp":
+        # Confirmed against the real bbl_access.c source
+        # (bbl_access_rx_established_ipoe): a session's IPv4 "endpoint"
+        # only flips from ENABLED to ACTIVE once it has both a real IP
+        # AND session->arp_resolved is true -- and icmp-client's own send
+        # job silently no-ops forever if that endpoint isn't ACTIVE
+        # (bbl_icmp_client_send_job_ping: "if (session->endpoint.ipv4 !=
+        # ENDPOINT_ACTIVE) return;"). Confirmed on a real run: with
+        # session-traffic fully disabled, tx-icmp stayed at 0 the entire
+        # time even with icmp-clients-start successfully called -- nothing
+        # ever triggered the session to ARP at all. A small always-on
+        # session-traffic (autostart=true) gives the session a reason to
+        # ARP and activate its endpoint; the actual measured/attack
+        # traffic is still the icmp-client below, not this.
         cfg = _base_config(
             access_interface, network_interface, session_count, network_ip, network_gateway,
-            session_traffic_pps=0, session_traffic_autostart=False,
+            session_traffic_pps=1, session_traffic_autostart=True,
         )
         # icmp-client has no documented "autostart" field -- it starts
         # sending as soon as the session is up. The orchestrator
