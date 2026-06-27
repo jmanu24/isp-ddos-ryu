@@ -124,6 +124,17 @@ def _base_config(
         # flag never flipped, even though the only protocol this attack
         # simulation actually needs (IPv4) was already fully working.
         "dhcpv6": {"enable": False},
+        # Disabling DHCPv6 above wasn't enough on its own -- confirmed on
+        # a real run: with dhcpv6.enable=false, dhcpv6-state correctly
+        # showed "Disabled", but session-substate then got stuck at "Wait
+        # for ICMPv6 RA" instead -- IPoE's own separate IPv6 Router
+        # Solicitation/Advertisement exchange, independent of DHCPv6. No
+        # IPv6 router exists on this setup (veth-a/veth-n have IPv6
+        # disabled entirely -- see setup_bng_netns.sh's disable_ipv6), so
+        # that RA could never arrive either. "ipoe": {"ipv6": false}
+        # turns off RS/RA for IPoE specifically (separate config block
+        # from "dhcp"/"dhcpv6", confirmed via BNGBlaster's own docs).
+        "ipoe": {"ipv6": False, "ipv4": True},
         "streams": [],
     }
 
@@ -226,6 +237,14 @@ def build_scenario(
         "sessions": session_count,
         "attack_kind": p["kind"],
         "attack_group_id": attack_group_id,
+        # The stream's own "name" -- what stream-start/stream-stop
+        # actually filter by (confirmed on a real run: a "stream-group-id"
+        # argument gets a clean {"status":"error","message":"invalid
+        # argument"}; the control socket's real stream-start/-stop
+        # arguments are name/session-id/flow-id/etc, no group-id at all).
+        # Only meaningful for attack_kind="stream" -- icmp-client-start/
+        # -stop still use the (unverified) icmp-client-group-id.
+        "attack_name": f"attack-{scenario}" if p["kind"] == "stream" else None,
         "protocol": p["protocol"],
         "dst_port": p["dst_port"],
         "autostart": autostart,

@@ -184,22 +184,30 @@ def run(
 
         elapsed = 0.0
         while elapsed < duration_s:
+            # stream-start/stream-stop filter by "name" (or session-id/
+            # flow-id) -- NOT "stream-group-id" (confirmed on a real run:
+            # that argument got a clean {"status":"error","message":
+            # "invalid argument"} every time, silently, since BngControlSocket
+            # didn't used to raise on an error status -- see its docstring).
+            # icmp-client-start/-stop still use the unverified
+            # icmp-client-group-id (no real run has exercised the icmp_flood
+            # scenario yet).
             if not attack_started and elapsed >= attack_start_s:
-                print(f"[BNG] starting attack ({scn['attack_kind']} group {scn['attack_group_id']}, {scenario})")
+                print(f"[BNG] starting attack ({scn['attack_kind']} {scn['attack_name'] or scn['attack_group_id']}, {scenario})")
                 cmd = "stream-start" if scn["attack_kind"] == "stream" else "icmp-client-start"
-                arg_key = "stream-group-id" if scn["attack_kind"] == "stream" else "icmp-client-group-id"
+                args = {"name": scn["attack_name"]} if scn["attack_kind"] == "stream" else {"icmp-client-group-id": scn["attack_group_id"]}
                 try:
-                    ctrl.call(cmd, {arg_key: scn["attack_group_id"]})
+                    ctrl.call(cmd, args)
                 except (OSError, RuntimeError, json.JSONDecodeError) as exc:
                     print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
                 attack_started = True
 
             if attack_started and not attack_stopped and elapsed >= attack_end_s:
-                print(f"[BNG] stopping attack ({scn['attack_kind']} group {scn['attack_group_id']})")
+                print(f"[BNG] stopping attack ({scn['attack_kind']} {scn['attack_name'] or scn['attack_group_id']})")
                 cmd = "stream-stop" if scn["attack_kind"] == "stream" else "icmp-client-stop"
-                arg_key = "stream-group-id" if scn["attack_kind"] == "stream" else "icmp-client-group-id"
+                args = {"name": scn["attack_name"]} if scn["attack_kind"] == "stream" else {"icmp-client-group-id": scn["attack_group_id"]}
                 try:
-                    ctrl.call(cmd, {arg_key: scn["attack_group_id"]})
+                    ctrl.call(cmd, args)
                 except (OSError, RuntimeError, json.JSONDecodeError) as exc:
                     print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
                 attack_stopped = True

@@ -41,13 +41,30 @@ class BngControlSocket:
         specify whether responses are newline-delimited or
         end-of-write/close terminated), at the cost of one extra
         connect() per call, negligible against a tick interval measured
-        in whole seconds."""
+        in whole seconds.
+
+        Raises RuntimeError on a {"status": "error", ...} response
+        instead of returning it -- confirmed on a real run that this
+        matters: stream-start/stream-stop with a "stream-group-id"
+        argument (this module's own earlier, wrong guess -- the real
+        arguments are name/session-id/flow-id/etc, no group-id at all)
+        returned a clean {"status": "error", "code": 400, "message":
+        "invalid argument"} every single time, and every call site only
+        ever checked for socket/JSON exceptions, never the response
+        body's own status -- so the attack stream silently never
+        started for an entire debugging session with zero visible
+        errors anywhere. Every call site already has a try/except
+        around ctrl.call() for connection failures, so raising here
+        routes a bad command/argument through the exact same path
+        instead of needing a second kind of check at every call site.
+        """
         req = json.dumps({"command": command, "arguments": arguments or {}})
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(_RECV_TIMEOUT_S)
             s.connect(self.sock_path)
             s.sendall(req.encode("utf-8"))
             chunks = []
+            resp = None
             try:
                 while True:
                     chunk = s.recv(65536)
@@ -55,15 +72,20 @@ class BngControlSocket:
                         break
                     chunks.append(chunk)
                     try:
-                        return json.loads(b"".join(chunks).decode("utf-8"))
+                        resp = json.loads(b"".join(chunks).decode("utf-8"))
+                        break
                     except json.JSONDecodeError:
                         continue
             except socket.timeout:
                 pass
-        raw = b"".join(chunks).decode("utf-8", errors="replace")
-        if not raw:
-            raise RuntimeError(f"no response from {self.sock_path} for command {command!r}")
-        return json.loads(raw)
+        if resp is None:
+            raw = b"".join(chunks).decode("utf-8", errors="replace")
+            if not raw:
+                raise RuntimeError(f"no response from {self.sock_path} for command {command!r}")
+            resp = json.loads(raw)
+        if resp.get("status") == "error":
+            raise RuntimeError(f"{command!r} {arguments!r} -> {resp.get('code')} {resp.get('message')}")
+        return resp
 
 
 def wait_for_socket(sock_path: str, timeout_s: float = 10.0) -> None:
