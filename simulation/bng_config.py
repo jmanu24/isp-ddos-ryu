@@ -83,11 +83,24 @@ def _base_config(
 ) -> dict:
     return {
         "interfaces": {
-            "network": [{
+            # A plain object, NOT wrapped in a list -- the upstream JSON
+            # schema (current main branch) allows either via oneOf, but
+            # BNGBlaster 0.9.17 (the last release with an ubuntu-20.04
+            # build, what's actually installed here -- see deploy/
+            # install_bngblaster.sh) predates that schema; every
+            # confirmed-working example from ITS OWN tag (examples/
+            # dhcp11.json, dhcpn1.json) uses a bare object here, never an
+            # array. The array form never errored, but a real run showed
+            # "Total PPS of all streams: 0.00" and zero session-traffic/
+            # stream-traffic-flows the entire time regardless of which
+            # traffic mechanism or VLAN mode was used -- consistent with
+            # this old binary silently not resolving "network-interface"
+            # references in streams against an array-form network block.
+            "network": {
                 "interface": network_interface,
                 "address": network_ip,
                 "gateway": network_gateway,
-            }],
+            },
             "access": [{
                 "interface": access_interface,
                 "type": "ipoe",
