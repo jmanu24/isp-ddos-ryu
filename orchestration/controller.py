@@ -471,7 +471,7 @@ class OrchestrationController:
         attack stays active.
         """
         metrics.record_mitigation(action.attack_type, action.action, action.domain)
-        metrics.record_mitigation_rate(action.attack_type, action.action, action.pps, action.bps)
+        metrics.record_mitigation_rate(action.attack_type, action.action, action.domain, action.pps, action.bps)
 
         if action.domain == "openflow":
             is_new = True
@@ -550,6 +550,28 @@ class OrchestrationController:
             self._logger.error(log_line(action.domain, "ORCHESTRATION", "ADAPTER_MISSING"))
 
         return True
+
+    def active_block_counts_by_domain(self) -> Dict[str, int]:
+        """For web/metrics.py's ddos_active_blocks_by_domain (per-domain
+        Grafana dashboards' "active blocks" panel) -- both _active_blocks
+        (openflow's own dict) and _active_mobile_blocks (shared by every
+        config.settings.PER_SOURCE_MITIGATION_DOMAINS member) store
+        MitigationActions that carry their own .domain, so this just
+        groups by that instead of needing a separate counter per domain
+        threaded through every block/unblock call site.
+
+        Only includes domains with at least one block active RIGHT NOW
+        -- a domain that just dropped to zero won't have a key here at
+        all. The caller is responsible for explicitly zeroing a domain's
+        gauge once it disappears from this dict (a missing Prometheus
+        label keeps showing its last value forever, it doesn't reset).
+        """
+        counts: Dict[str, int] = defaultdict(int)
+        for action in self._active_blocks.values():
+            counts[action.domain] += 1
+        for action in self._active_mobile_blocks.values():
+            counts[action.domain] += 1
+        return dict(counts)
 
     # ------------------------------------------------------------------
     # Queried by the forwarding layer before caching a new flow

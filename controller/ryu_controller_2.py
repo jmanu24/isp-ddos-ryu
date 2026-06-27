@@ -156,6 +156,13 @@ class FlowStatsIDS(app_manager.RyuApp):
             BGPPeeringAdapter(),         # stub — wire up router_host later
         ]
 
+        # Domains that had at least one active mitigation block as of the
+        # last cycle -- see _run_pipeline's metrics.set_active_blocks_by_domain
+        # call for why this is needed (a domain dropping to zero blocks
+        # needs an explicit 0 sent, or its Grafana gauge just keeps
+        # showing the last nonzero value forever).
+        self._known_active_block_domains = set()
+
         # ── Stages 2-5: Correlation → Detection → Decision → Control ─
         self.correlator  = MultidomainCorrelator()
         self.detector    = DDoSDetectionEngine()
@@ -340,6 +347,35 @@ class FlowStatsIDS(app_manager.RyuApp):
                 all_events.extend(adapter.collect())
             except Exception as e:
                 self.logger.error(log_line(adapter.domain_name, "TELEMETRY", "ERROR", str(e)))
+
+        # Per-domain traffic KPI for Grafana -- every domain's collect()
+        # output, aggregated regardless of whether anything crosses a
+        # detection threshold this cycle, so each domain's dashboard has
+        # a baseline "is telemetry even flowing" panel instead of only
+        # ever showing attack-triggered spikes. Computed for every
+        # adapter (even ones that returned nothing this cycle) so a
+        # domain that goes quiet correctly drops to 0 instead of its
+        # gauge keeping its last nonzero value forever.
+        events_by_domain = defaultdict(list)
+        for e in all_events:
+            events_by_domain[e.domain].append(e)
+        for adapter in self.all_adapters:
+            domain_events = events_by_domain.get(adapter.domain_name, [])
+            metrics.update_domain_traffic(
+                adapter.domain_name,
+                pps=sum(e.pps for e in domain_events),
+                bps=sum(e.bps for e in domain_events),
+                active_sources=len({e.src_ip for e in domain_events}),
+            )
+
+        # Same zero-fill concern for "active blocks by domain" -- a
+        # domain whose last block just got released needs an explicit 0
+        # sent this cycle, not just silently dropping out of the dict
+        # active_block_counts_by_domain() returns.
+        block_counts = self.orchestrator.active_block_counts_by_domain()
+        domains_to_zero = self._known_active_block_domains - block_counts.keys()
+        metrics.set_active_blocks_by_domain({**{d: 0 for d in domains_to_zero}, **block_counts})
+        self._known_active_block_domains = set(block_counts.keys())
 
         # Stage 2 — correlate across domains
         self.correlator.ingest(all_events)

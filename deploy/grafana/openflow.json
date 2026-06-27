@@ -1,0 +1,187 @@
+{
+  "title": "ISP DDoS Controller \u2014 SDN / OpenFlow",
+  "uid": "ddos-openflow",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Tr\u00e1fico \u2014 paquetes/seg",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ddos_domain_traffic_pps{domain=\"openflow\"}",
+          "legendFormat": "pps",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Tr\u00e1fico \u2014 bytes/seg",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ddos_domain_traffic_bps{domain=\"openflow\"}",
+          "legendFormat": "bps",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Fuentes activas",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ddos_domain_active_sources{domain=\"openflow\"}",
+          "legendFormat": "fuentes",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Ataques detectados / seg, por tipo",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(ddos_attacks_detected_total{domain=\"openflow\"}[1m])",
+          "legendFormat": "{{attack_type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Tasa del ataque detectado (pps), por tipo",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ddos_attack_packet_rate{domain=\"openflow\"}",
+          "legendFormat": "{{attack_type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Tasa del ataque detectado (bps), por tipo",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ddos_attack_byte_rate{domain=\"openflow\"}",
+          "legendFormat": "{{attack_type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Bloqueos activos",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ddos_active_blocks_by_domain{domain=\"openflow\"}",
+          "legendFormat": "bloqueos",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Mitigaciones aplicadas / seg, por tipo y acci\u00f3n",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(ddos_mitigations_applied_total{domain=\"openflow\"}[1m])",
+          "legendFormat": "{{attack_type}} / {{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Tasa mitigada (pps), por tipo",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ddos_mitigation_packet_rate{domain=\"openflow\"}",
+          "legendFormat": "{{attack_type}} / {{action}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}
