@@ -165,16 +165,18 @@ def _base_config(
         # turns off RS/RA for IPoE specifically (separate config block
         # from "dhcp"/"dhcpv6", confirmed via BNGBlaster's own docs).
         "ipoe": {"ipv6": False, "ipv4": True},
-        # Confirmed via a real run's diagnostic (BNGBlaster's own
-        # dhcpn1.json example, N:1 mode): session-traffic with
-        # ipv4-pps=1 produced a real, growing tx-packets count and a
-        # nonzero "Total PPS of all streams" at startup -- the access
-        # interface's vlan-mode (now N:1 above) was the actual blocker,
-        # not session-traffic vs streams. Left disabled (0, the schema
-        # default) now that the real fix is applied to "streams" too --
-        # this pipeline's attack shaping (protocol/port/pps per
-        # scenario) needs "streams", session-traffic's flat ipv4-pps
-        # can't express that.
+        # DIAGNOSTIC, temporary (round 2): N:1 vlan-mode AND fixing
+        # interfaces.network from a list to a bare object (both applied
+        # above) STILL left "Total PPS of all streams: 0.00" on a real
+        # run -- neither was the (sole) real fix. The one variable never
+        # actually isolated yet: every confirmed-nonzero-PPS run so far
+        # used session-traffic, never "streams" alone. Re-added here to
+        # settle whether "streams" itself is simply non-functional on
+        # this 0.9.17 binary (in which case this pipeline needs to
+        # rethink attack shaping around session-traffic's flat pps
+        # instead) or whether something else still differs -- remove
+        # once that's settled.
+        "session-traffic": {"autostart": True, "ipv4-pps": 1},
         "streams": [],
     }
 
