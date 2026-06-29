@@ -447,15 +447,28 @@ class FlowStatsIDS(app_manager.RyuApp):
             is_blocked=self.orchestrator.is_mobile_blocked,
         )
 
+        # Drop detections for a (src, dst, port, protocol) already under
+        # an active block BEFORE they reach metrics/validate/process --
+        # not just before the log line. Once a flow is blocked, its real
+        # traffic stops reaching FlowCollector (the drop rule's packets
+        # are filtered out), but DDoSCollector's distinct-port set for
+        # that pair lingers for up to LOW_SLOW_PORT_IDLE_TTL (90s), and
+        # the post-flood grace window (_RECENT_FLOOD_GRACE_CYCLES) is much
+        # shorter than that -- once it expires, analyze_low_slow_single_
+        # source starts "re-detecting" the very same already-mitigated
+        # attack as LOW_SLOW every cycle. The log line was already
+        # silenced for this case, but metrics.record_detection() (in
+        # orchestrator.process()) was not, polluting the LOW_SLOW Grafana
+        # panel with phantom counts for an attack that's already handled.
+        detections = [
+            d for d in detections
+            if not self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol, sources=d.sources)
+        ]
+
         # Surface every NEW detection in the event log, classified — this
         # is the descriptive "what's happening" signal; raw traffic
-        # numbers live in Grafana via /metrics instead. An attack already
-        # under an active block gets re-detected every cycle for as long
-        # as it's ongoing (the underlying traffic is still there), but
-        # that's already being handled — skip the repeat announcement.
+        # numbers live in Grafana via /metrics instead.
         for d in detections:
-            if self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol, sources=d.sources):
-                continue
 
             msg = log_line(
                 d.domain, "DETECTION", "ATTACK_DETECTED",
