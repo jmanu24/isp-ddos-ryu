@@ -415,6 +415,17 @@ class FlowStatsIDS(app_manager.RyuApp):
         flagged_dsts = {d.dst_ip for d in flood_detections} | self.detector.recent_flood_dsts()
         flagged_pairs = {(d.src_ip, d.dst_ip) for d in flood_detections} | self.detector.recent_flood_pairs()
 
+        # Also exclude anything already under an active openflow block,
+        # regardless of which cycle/attack_type put it there -- once the
+        # grace window above expires, a stale DDoSCollector port-count
+        # entry for an already-blocked, now-finished attack would
+        # otherwise get freshly (and wrongly) classified as LOW_SLOW,
+        # replacing the original action with a mislabeled one. See
+        # OrchestrationController.active_block_pairs_and_dsts's docstring.
+        active_pairs, active_dsts = self.orchestrator.active_block_pairs_and_dsts()
+        flagged_dsts |= active_dsts
+        flagged_pairs |= active_pairs
+
         # Fetched once, reused for both detection input and Grafana metrics
         # below — so the "concurrent/new connections" panels show the real
         # value every cycle, not just when LOW_SLOW actually fires.

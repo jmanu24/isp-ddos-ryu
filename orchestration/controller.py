@@ -1,7 +1,7 @@
 import logging
 import time
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 import config.settings as settings
 from core.log_format import log_line
@@ -642,6 +642,34 @@ class OrchestrationController:
                 for source in sources
             )
         return False
+
+    def active_block_pairs_and_dsts(self) -> Tuple[Set[Tuple[str, str]], Set[str]]:
+        """
+        (src_ip, dst_ip) pairs and dst_ips currently covered by an active
+        openflow block (_active_blocks; deliberately excludes
+        _active_mobile_blocks -- the LOW_SLOW callers this feeds are
+        openflow-only). For merging into analyze_low_slow's exclude_dsts
+        / analyze_low_slow_single_source's exclude_pairs alongside the
+        current cycle's own flagged_pairs/flagged_dsts, so a pair already
+        under an active block from an EARLIER cycle's classification
+        can't get a fresh, different classification once its volumetric
+        signal drops out and the post-flood grace window
+        (_RECENT_FLOOD_GRACE_CYCLES) expires.
+
+        Without this, a stale DDoSCollector port-set entry for an already
+        -blocked, now-finished attack (lingering up to
+        LOW_SLOW_PORT_IDLE_TTL=90s with its old distinct-port count still
+        >= LOW_SLOW_NEW_FLOWS) gets misread as a brand new LOW_SLOW
+        attack once the grace window passes -- re-blocking the same
+        attacker under the wrong label and replacing the original
+        SYN_FLOOD action with a LOW_SLOW one. is_active_block() alone
+        only silences the resulting *log line*/metric for that fresh
+        (wrong) classification; this stops the reclassification itself
+        from happening in the first place.
+        """
+        pairs = {(src, dst) for (src, dst, _port, _proto) in self._active_blocks}
+        dsts = {dst for (_src, dst, _port, _proto) in self._active_blocks}
+        return pairs, dsts
 
     def is_mobile_blocked(self, src_ip: str, dst_ip: str) -> bool:
         """
