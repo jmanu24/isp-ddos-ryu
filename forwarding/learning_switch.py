@@ -169,7 +169,7 @@ class LearningSwitch:
         )
 
         self._logger.info(
-            log_line("openflow", "FORWARDING", "TABLE_MISS_INSTALLED", f"switch={datapath.id}")
+            log_line("enterprise", "FORWARDING", "TABLE_MISS_INSTALLED", f"switch={datapath.id}")
         )
 
     def packet_in_handler(self, ev):

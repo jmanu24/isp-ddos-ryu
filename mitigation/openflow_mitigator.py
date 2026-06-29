@@ -150,7 +150,7 @@ class OpenFlowMitigator(MitigationAdapter):
         # py's _run_pipeline) doesn't carry -- which switch/port the drop
         # rule actually landed on.
         self._logger.info(log_line(
-            "openflow", "MITIGATION", "DROP_RULE_INSTALLED",
+            "enterprise", "MITIGATION", "DROP_RULE_INSTALLED",
             f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} scope={scope}",
         ))
 
@@ -212,7 +212,7 @@ class OpenFlowMitigator(MitigationAdapter):
                     self._yield_fn()
 
         self._logger.info(log_line(
-            "openflow", "MITIGATION", "FORWARDING_CLEARED",
+            "enterprise", "MITIGATION", "FORWARDING_CLEARED",
             f"count={len(sources)} destination={dst_ip} switches={len(self._datapaths)}",
         ))
 

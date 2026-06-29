@@ -174,7 +174,7 @@ class DDoSDetectionEngine:
             confidence = min(score / 2.0, 1.0)
 
             results.append(DetectionResult(
-                domain="openflow",
+                domain="enterprise",
                 device_id="",
                 src_ip="*",
                 dst_ip=dst_ip,
@@ -242,7 +242,7 @@ class DDoSDetectionEngine:
             confidence = min(score / 2.0, 1.0)
 
             results.append(DetectionResult(
-                domain="openflow",
+                domain="enterprise",
                 device_id="",
                 src_ip=src_ip,
                 dst_ip=dst_ip,

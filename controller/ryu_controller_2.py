@@ -35,7 +35,6 @@ from forwarding.learning_switch import LearningSwitch
 from telemetry.openflow_adapter import OpenFlowAdapter
 from telemetry.mobile_adapter import MobileNetworkAdapter
 from telemetry.broadband_adapter import BroadbandAdapter
-from telemetry.enterprise_adapter import EnterpriseAdapter
 from telemetry.bgp_adapter import BGPPeeringAdapter
 
 # Stage 2 — Multidomain Correlation
@@ -147,13 +146,15 @@ class FlowStatsIDS(app_manager.RyuApp):
         # E2/KPM pipeline via simulation/parse_xapp_kpm_log.py's CSV for
         # mobile, real BNGBlaster pipeline via simulation/
         # bng_traffic_simulator.py's CSV + control socket for broadband
-        # -- see each module's docstring). The other two remain stubs.
+        # -- see each module's docstring). of_adapter IS the Enterprise
+        # domain (OpenFlow/SDN over the PE-facing topology) -- there is
+        # no separate Enterprise adapter/stub; External Peering (BGP)
+        # remains a stub.
         self.all_adapters = [
             self.of_adapter,
             MobileNetworkAdapter(logger=self.logger),
             BroadbandAdapter(bng_host="bng-blaster-1"),
-            EnterpriseAdapter(),         # stub — wire up pe_host later
-            BGPPeeringAdapter(),         # stub — wire up router_host later
+            BGPPeeringAdapter(),         # stub — wire up router_host later (External Peering domain)
         ]
 
         # Domains that had at least one active mitigation block as of the
@@ -276,7 +277,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         dashboard_state.add_event(f"Switch connected: {datapath.id}")
         emit_update()
 
-        self.logger.info(log_line("openflow", "FORWARDING", "SWITCH_CONNECTED", f"id={datapath.id}"))
+        self.logger.info(log_line("enterprise", "FORWARDING", "SWITCH_CONNECTED", f"id={datapath.id}"))
 
     # ------------------------------------------------------------------
     # PACKET IN
@@ -304,7 +305,7 @@ class FlowStatsIDS(app_manager.RyuApp):
                     self._request_flow_stats(dp)
                     self._request_port_stats(dp)
                 except Exception as e:
-                    self.logger.error(log_line("openflow", "TELEMETRY", "ERROR", str(e)))
+                    self.logger.error(log_line("enterprise", "TELEMETRY", "ERROR", str(e)))
 
             hub.sleep(settings.COLLECT_INTERVAL)
 
@@ -505,7 +506,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             # OpenFlow-domain detections have a real dpid (d.device_id) to
             # report it under; a mobile-domain UE has no switch to attribute
             # the rate to.
-            if d.domain == "openflow" and d.device_id.isdigit():
+            if d.domain == "enterprise" and d.device_id.isdigit():
                 dashboard_state.add_attack(int(d.device_id), d.bps, d.pps)
 
         # Mark destinations seen clean this cycle as validated — only now

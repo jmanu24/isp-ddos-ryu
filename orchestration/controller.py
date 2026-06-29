@@ -235,7 +235,7 @@ class OrchestrationController:
             if (
                 newly_enforced
                 and decision.attack_type == "DDOS_DISTRIBUTED"
-                and newly_enforced[0].domain == "openflow"
+                and newly_enforced[0].domain == "enterprise"
             ):
                 # One cleanup pass per group, after every location's block
                 # in it is already live — not per action, since
@@ -305,7 +305,7 @@ class OrchestrationController:
 
             action_type = self._action_for(decision.attack_type, d.domain)
 
-            if d.domain == "openflow" and decision.attack_type == "DDOS_DISTRIBUTED" and d.sources:
+            if d.domain == "enterprise" and decision.attack_type == "DDOS_DISTRIBUTED" and d.sources:
                 by_location: Dict[Tuple[str, int], List[str]] = defaultdict(list)
                 for source in d.sources:
                     device_id, in_port = self._scoped_ingress_for_source(source, d.dst_ip)
@@ -483,7 +483,7 @@ class OrchestrationController:
         metrics.record_mitigation(action.attack_type, action.action, action.domain)
         metrics.record_mitigation_rate(action.attack_type, action.action, action.domain, action.pps, action.bps)
 
-        if action.domain == "openflow":
+        if action.domain == "enterprise":
             is_new = True
 
             if action.action == "block":
@@ -912,7 +912,7 @@ class OrchestrationController:
 
                 self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
                 unblock_actions.append(MitigationAction(
-                    domain="openflow",
+                    domain="enterprise",
                     device_id="",
                     src_ip=src_ip,
                     dst_ip=dst_ip,

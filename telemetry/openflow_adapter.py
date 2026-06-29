@@ -30,7 +30,12 @@ _FLOW_META_TTL = settings.VALIDATED_FLOW_HARD_TIMEOUT
 
 class OpenFlowAdapter(DomainAdapter):
     """
-    Telemetry adapter for the OpenFlow / SDN domain.
+    Telemetry adapter for the Enterprise Services domain, implemented over
+    an OpenFlow / SDN (Mininet) topology -- "OpenFlow"/"SDN" is the
+    technical mechanism, "Enterprise" is the domain it represents in the
+    controller's 4-domain model (Enterprise, Mobile, Broadband, External
+    Peering). Kept the class/file name "OpenFlow" since that's the real,
+    implemented mechanism a reader of this code will actually see.
 
     Wraps the existing FlowCollector (periodic per-flow stats via
     OFPFlowStatsReply) and DDoSCollector (real-time packet-in analysis)
@@ -48,7 +53,7 @@ class OpenFlowAdapter(DomainAdapter):
     a no-op here.
     """
 
-    domain_name = "openflow"
+    domain_name = "enterprise"
 
     def __init__(self, is_host_port=None):
         self._flow_collector = FlowCollector()

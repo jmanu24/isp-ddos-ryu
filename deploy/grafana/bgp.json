@@ -1,5 +1,5 @@
 {
-  "title": "ISP DDoS Controller \u2014 BGP Peering",
+  "title": "ISP DDoS Controller \u2014 External Peering",
   "uid": "ddos-bgp",
   "schemaVersion": 39,
   "version": 1,

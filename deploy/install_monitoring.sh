@@ -141,7 +141,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GRAFANA_DASHBOARDS_DIR="/var/lib/grafana/dashboards/ddos-controller"
 
 mkdir -p "$GRAFANA_DASHBOARDS_DIR"
-cp "${REPO_DIR}/deploy/grafana_dashboard.json" "${GRAFANA_DASHBOARDS_DIR}/openflow-detailed.json"
+cp "${REPO_DIR}/deploy/grafana_dashboard.json" "${GRAFANA_DASHBOARDS_DIR}/enterprise-detailed.json"
 if [ -d "${REPO_DIR}/deploy/grafana" ]; then
     cp "${REPO_DIR}"/deploy/grafana/*.json "$GRAFANA_DASHBOARDS_DIR"/
 else
@@ -178,6 +178,6 @@ echo "Prometheus : http://<vm-ip>:9090  (scraping ${CONTROLLER_METRICS_TARGET}/m
 echo "Grafana    : http://<vm-ip>:3000  (default login admin/admin, will prompt to change)"
 echo ""
 echo "Prometheus datasource + the 'ISP DDoS Controller' dashboard folder"
-echo "(one dashboard per domain: openflow, mobile, broadband, enterprise, bgp,"
-echo "plus the detailed OpenFlow-specific 'openflow-detailed' one) are already"
+echo "(one dashboard per domain: enterprise, mobile, broadband, bgp (External Peering),"
+echo "plus the detailed Enterprise-specific 'enterprise-detailed' one) are already"
 echo "provisioned -- no manual import needed."

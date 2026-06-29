@@ -13,7 +13,7 @@ class TelemetryEvent:
     Normalized telemetry event produced by any domain adapter.
     Fed into the Multidomain Correlation layer.
 
-    domain    : "openflow" | "mobile" | "broadband" | "enterprise" | "bgp"
+    domain    : "enterprise" | "mobile" | "broadband" | "bgp" (displayed as "External Peering")
     device_id : switch DPID, BNG hostname, router ID, etc.
     protocol  : "TCP" | "UDP" | "ICMP" | "IP"
     pps       : packets per second
@@ -49,7 +49,7 @@ class CorrelatedEvent:
     Output of the Multidomain Correlation layer.
     Groups TelemetryEvents from all domains that target the same destination.
 
-    domains : list of domain names contributing (e.g. ["openflow", "bgp"])
+    domains : list of domain names contributing (e.g. ["enterprise", "bgp"])
     events  : raw TelemetryEvent objects that were aggregated
     """
     dst_ip: str

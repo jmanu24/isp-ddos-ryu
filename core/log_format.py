@@ -9,9 +9,9 @@ Timestamp and level (INFO/WARNING/ERROR) are already supplied by
 logging.basicConfig's own format string (see controller/ryu_controller_2.py),
 so a full line reads e.g.:
 
-    2026-06-26 01:25:48 WARNING FlowStatsIDS [openflow] MITIGATION: BLOCK SYN_FLOOD source=10.0.4.10 destination=10.0.2.10:80/TCP
+    2026-06-26 01:25:48 WARNING FlowStatsIDS [enterprise] MITIGATION: BLOCK SYN_FLOOD source=10.0.4.10 destination=10.0.2.10:80/TCP
 
-DOMAIN is the network domain a line concerns ("openflow", "mobile", ...),
+DOMAIN is the network domain a line concerns ("enterprise", "mobile", "broadband", "bgp" -- displayed elsewhere as "External Peering"),
 or "controller" for domain-agnostic infrastructure events (startup,
 topology). MODULE is the pipeline stage/subsystem that produced the
 line (DETECTION, MITIGATION, TELEMETRY, FORWARDING, TOPOLOGY, STARTUP,

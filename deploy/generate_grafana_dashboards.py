@@ -1,17 +1,24 @@
 """
 generate_grafana_dashboards.py — builds one Grafana dashboard JSON per
-network domain (openflow, mobile, broadband, enterprise, bgp), each with
-the same panel layout: traffic KPIs, detections, and mitigations for
-that domain alone (every PromQL query below is filtered to
-domain="<that domain>").
+network domain (enterprise, mobile, broadband, bgp), each with the same
+panel layout: traffic KPIs, detections, and mitigations for that domain
+alone (every PromQL query below is filtered to domain="<that domain>").
+
+The controller's domain model has exactly 4 domains: Enterprise (the
+domain implemented over the OpenFlow/SDN topology -- "openflow" is the
+underlying mechanism, "enterprise" is the domain label used everywhere
+in telemetry/detection/orchestration), Mobile (O-RAN), Broadband
+(BNGBlaster), and External Peering -- still a stub, kept under its
+technical domain string "bgp" internally, but always displayed to a
+human as "External Peering" (see _DOMAIN_TITLES below).
 
 Generated from web/metrics.py's domain-labeled series -- DOMAIN_TRAFFIC_*
 (every domain, every cycle, regardless of attack state), ATTACKS_DETECTED/
 ATTACK_*_RATE, MITIGATIONS_APPLIED/MITIGATION_*_RATE, and
 ACTIVE_BLOCKS_BY_DOMAIN. The pre-existing deploy/grafana_dashboard.json
-stays as-is -- it's OpenFlow-specific (per-switch/per-port panels that
+stays as-is -- it's Enterprise-specific (per-switch/per-port panels that
 don't generalize to the other domains) and is meant as an additional,
-richer dashboard for that one domain, not replaced by openflow.json here.
+richer dashboard for that one domain, not replaced by enterprise.json here.
 
 Usage:
   python3 deploy/generate_grafana_dashboards.py
@@ -21,15 +28,14 @@ Usage:
 import json
 from pathlib import Path
 
-DOMAINS = ["openflow", "mobile", "broadband", "enterprise", "bgp"]
+DOMAINS = ["enterprise", "mobile", "broadband", "bgp"]
 OUT_DIR = Path(__file__).resolve().parent / "grafana"
 
 _DOMAIN_TITLES = {
-    "openflow": "SDN / OpenFlow",
+    "enterprise": "Enterprise (SDN / OpenFlow)",
     "mobile": "Mobile (O-RAN)",
     "broadband": "Fixed Broadband (BNG)",
-    "enterprise": "Enterprise Services",
-    "bgp": "BGP Peering",
+    "bgp": "External Peering",
 }
 
 
