@@ -159,6 +159,20 @@ class DDoSCollector:
 
         return result
 
+    def clear_connection_ports(self, src_ip: str, dst_ip: str) -> None:
+        """
+        Drop the tracked distinct-port set for this (src_ip, dst_ip) pair
+        outright, instead of waiting up to LOW_SLOW_PORT_IDLE_TTL (90s)
+        for it to age out on its own. Called once a pair stops being
+        actively blocked (orchestration/controller.py's check_unblocks)
+        -- without this, the OLD port count from the attack that just
+        ended lingers and is immediately re-read by
+        analyze_low_slow_single_source as a brand new LOW_SLOW attack,
+        using entirely stale data from traffic that's no longer flowing.
+        Safe to call for a pair with no entry at all (no-op).
+        """
+        self._connection_ports.pop((src_ip, dst_ip), None)
+
     def get_connection_port_counts(self):
         """
         (src_ip, dst_ip) -> {"count": distinct source ports seen toward

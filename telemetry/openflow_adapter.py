@@ -275,6 +275,10 @@ class OpenFlowAdapter(DomainAdapter):
         """
         return self._ddos_collector.get_connection_port_counts()
 
+    def clear_connection_ports(self, src_ip: str, dst_ip: str) -> None:
+        """See DDoSCollector.clear_connection_ports."""
+        self._ddos_collector.clear_connection_ports(src_ip, dst_ip)
+
     # ------------------------------------------------------------------
     # DomainAdapter interface
     # ------------------------------------------------------------------

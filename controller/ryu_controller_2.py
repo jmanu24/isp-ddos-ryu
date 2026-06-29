@@ -389,6 +389,17 @@ class FlowStatsIDS(app_manager.RyuApp):
         # every other domain's actions below.
         openflow_unblock_actions = self.orchestrator.check_unblocks()
 
+        # Reset DDoSCollector's distinct-port tracking for whatever just
+        # got unblocked -- otherwise the OLD port count from the attack
+        # that just ended lingers for up to LOW_SLOW_PORT_IDLE_TTL (90s)
+        # and gets immediately misread as a brand-new LOW_SLOW attack
+        # the very next cycle, using entirely stale data. src_ip="*"
+        # (DDOS_DISTRIBUTED-style network-wide blocks) has no single
+        # pair to clear -- skipped, harmless no-op anyway.
+        for action in openflow_unblock_actions:
+            if action.src_ip != "*":
+                self.of_adapter.clear_connection_ports(action.src_ip, action.dst_ip)
+
         # Mobile-domain blocks unblock off this cycle's own telemetry
         # instead (see check_mobile_unblocks's docstring) -- a RAN-side
         # throttle doesn't make the UE's traffic vanish from `correlated`
