@@ -153,6 +153,14 @@ class OrchestrationController:
         # one of these can't be trusted to scope a block to.
         self._interswitch_ports: set = set()
 
+        # (attack_type, domain) pairs that had live detections in the
+        # previous process() cycle. Used to zero out ATTACK_PACKET/BYTE_RATE
+        # gauges for types that are no longer active — Prometheus Gauges
+        # retain their last value forever otherwise, making Grafana show
+        # a stale non-zero rate long after the attack ended.
+        self._prev_detection_labels: Set[Tuple[str, str]] = set()
+        self._prev_mitigation_labels: Set[Tuple[str, str, str]] = set()
+
     # ------------------------------------------------------------------
     # Datapath lifecycle (called from the Ryu controller)
     # ------------------------------------------------------------------
@@ -191,7 +199,24 @@ class OrchestrationController:
         "winner" slot each cycle and only ever get mitigated one at a
         time, alternating cycle to cycle as their relative scores shift.
         """
+        # Zero out rate gauges for (attack_type, domain) pairs that were
+        # active last cycle but are absent this cycle — Prometheus Gauges
+        # hold their last value forever, so without this Grafana keeps
+        # displaying stale attack rates after an attack ends.
+        current_detection_labels: Set[Tuple[str, str]] = {
+            (d.attack_type, d.domain) for d in detections
+        }
+        for attack_type, domain in self._prev_detection_labels - current_detection_labels:
+            metrics.record_attack_rate(attack_type, domain, 0, 0)
+        self._prev_detection_labels = current_detection_labels
+
         if not detections:
+            # Still need to clear any stale mitigation rate gauges from the
+            # previous cycle — the mitigation reset at the bottom of this
+            # method won't run if we exit early.
+            for attack_type, action_name, domain in self._prev_mitigation_labels:
+                metrics.record_mitigation_rate(attack_type, action_name, domain, 0, 0)
+            self._prev_mitigation_labels = set()
             return []
 
         for d in detections:
@@ -248,6 +273,15 @@ class OrchestrationController:
                     self.of_mitigator.clear_forwarding_rules(
                         newly_enforced[0].dst_ip, list(all_sources)
                     )
+
+        # Zero out mitigation rate gauges for (attack_type, action, domain)
+        # triples that were dispatched last cycle but not this one.
+        current_mitigation_labels: Set[Tuple[str, str, str]] = {
+            (a.attack_type, a.action, a.domain) for a in all_actions
+        }
+        for attack_type, action_name, domain in self._prev_mitigation_labels - current_mitigation_labels:
+            metrics.record_mitigation_rate(attack_type, action_name, domain, 0, 0)
+        self._prev_mitigation_labels = current_mitigation_labels
 
         return all_actions
 
