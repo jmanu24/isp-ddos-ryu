@@ -1,3 +1,5 @@
+import logging
+
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ipv4
@@ -8,6 +10,7 @@ from ryu.lib.packet import udp
 from ryu.lib.packet import icmp
 
 import config.settings as settings
+from core.log_format import log_line
 
 
 class LearningSwitch:
@@ -21,9 +24,15 @@ class LearningSwitch:
     # validation keeps being re-checked on every expiry.
     PROVISIONAL_TIMEOUT = 2
 
-    def __init__(self, is_blocked=None, is_validated=None, is_interswitch_port=None):
+    def __init__(self, is_blocked=None, is_validated=None, is_interswitch_port=None, logger=None):
 
         self.mac_to_port = {}
+
+        # Passed down from the Ryu app (its own self.logger) so every log
+        # line across domains shares the same name/format -- defaults to
+        # a plain logging.Logger so this stays usable standalone (tests,
+        # no Ryu runtime).
+        self._logger = logger or logging.getLogger(__name__)
 
         # Optional Callable[[src_ip, dst_ip, dst_port, protocol], bool],
         # queried before installing a new IP forwarding rule. Lets the
@@ -159,8 +168,8 @@ class LearningSwitch:
             hard_timeout=0
         )
 
-        print(
-            f"INSTALANDO TABLE MISS EN {datapath.id}"
+        self._logger.info(
+            log_line("enterprise", "FORWARDING", "TABLE_MISS_INSTALLED", f"switch={datapath.id}")
         )
 
     def packet_in_handler(self, ev):
