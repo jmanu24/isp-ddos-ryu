@@ -960,6 +960,17 @@ class OrchestrationController:
                 del self._below_threshold_streak[key]
                 self._forget_block_traffic(key)
                 metrics.set_active_blocks(len(self._active_blocks))
+                # Zero out the attack/mitigation rate gauges for this
+                # (attack_type, domain) if no other active block still
+                # carries the same type — the gauge would otherwise stay
+                # at the last attack's pps until the next process() cycle
+                # that happens to see zero detections of this type.
+                still_active_types = {
+                    a.attack_type for a in self._active_blocks.values()
+                }
+                if attack_type not in still_active_types:
+                    metrics.record_attack_rate(attack_type, "enterprise", 0, 0)
+                    metrics.record_mitigation_rate(attack_type, "block", "enterprise", 0, 0)
                 # Force re-validation: a destination that was just under
                 # attack shouldn't get its forwarding rules trusted again
                 # without going through at least one more clean cycle.
@@ -1098,6 +1109,12 @@ class OrchestrationController:
             del self._active_mobile_blocks[key]
             self._mobile_below_threshold_streak.pop(key, None)
             self._mobile_block_started_at.pop(key, None)
+            still_active_types = {
+                a.attack_type for a in self._active_mobile_blocks.values()
+            }
+            if attack_type not in still_active_types:
+                metrics.record_attack_rate(attack_type, domain, 0, 0)
+                metrics.record_mitigation_rate(attack_type, "block", domain, 0, 0)
             self._validated_destinations.discard(dst_ip)
 
         return unblock_actions
