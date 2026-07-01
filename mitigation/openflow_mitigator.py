@@ -211,7 +211,7 @@ class OpenFlowMitigator(MitigationAdapter):
                 if calls % self.YIELD_EVERY == 0:
                     self._yield_fn()
 
-        self._logger.info(log_line(
+        self._logger.debug(log_line(
             "enterprise", "MITIGATION", "FORWARDING_CLEARED",
             f"count={len(sources)} destination={dst_ip} switches={len(self._datapaths)}",
         ))
