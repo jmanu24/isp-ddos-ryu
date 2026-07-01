@@ -39,7 +39,6 @@ _SCENARIO_LABELS = {
     "udp_flood": "UDP Flood (1 sesión, un solo atacante)",
     "icmp_flood": "ICMP Flood (1 sesión, icmp-client real)",
     "distributed_syn_flood": "Distributed TCP SYN Flood (8 sesiones)",
-    "low_and_slow": "Low and Slow (8 sesiones, tasa baja continua)",
 }
 
 # Same pattern as ul_traffic_simulator.py's _CURRENT_PROMPT/_print_async --

@@ -41,7 +41,6 @@ on the bngblaster binary -- see deploy/install_bngblaster.sh):
   sudo python3 simulation/bng_traffic_simulator.py --scenario udp_flood
   sudo python3 simulation/bng_traffic_simulator.py --scenario icmp_flood
   sudo python3 simulation/bng_traffic_simulator.py --scenario distributed_syn_flood
-  sudo python3 simulation/bng_traffic_simulator.py --scenario low_and_slow --duration 120
 """
 
 import argparse
@@ -219,9 +218,6 @@ class BngScenarioSession:
         # _extract_icmp_send_count's docstring on why session-streams
         # can't be used for this).
         self._icmp_last_send = {}
-        # Mirrors attack_started/attack_stopped's role in the old run()
-        # loop -- low_and_slow's session-traffic already autostarts with
-        # the process, so it's "attacking" the moment the session is up.
         self.attacking = self.scn["autostart"]
 
     def start(self) -> None:
@@ -407,7 +403,7 @@ def run(
     try:
         session.start()
         attack_started = session.attacking
-        attack_stopped = attack_started and scenario == "low_and_slow"
+        attack_stopped = False
 
         elapsed = 0.0
         while elapsed < duration_s:

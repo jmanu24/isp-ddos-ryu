@@ -59,7 +59,7 @@ from typing import Optional
 
 ATTACK_ICMP_GROUP_ID = 200
 
-SCENARIOS = ("syn_flood", "udp_flood", "icmp_flood", "distributed_syn_flood", "low_and_slow")
+SCENARIOS = ("syn_flood", "udp_flood", "icmp_flood", "distributed_syn_flood")
 
 # Per-scenario (session_count, per-session pps, kind). pps values are
 # picked the same way ul_traffic_simulator.py's scenario_* functions
@@ -71,13 +71,10 @@ SCENARIOS = ("syn_flood", "udp_flood", "icmp_flood", "distributed_syn_flood", "l
 # config/settings.py thresholds each is tuned against:
 #   SYN_THRESHOLD=10 pps, UDP_THRESHOLD=200 pps, ICMP_THRESHOLD=150 pps
 #   DIST_MIN_SOURCES=5, DIST_ENTROPY_THRESHOLD=0.7 (near-equal per-source rate)
-#   LOW_SLOW_MOBILE_MAX_PPS=8.0 (ceiling), LOW_SLOW_MOBILE_MIN_SOURCES=5
 #
 # pps is rounded to an integer by BNGBlaster's own tx-pps counter
 # (confirmed on a real run: ipv4-pps=1 read back as exactly "tx-pps":
-# 1, never a fractional value) -- low_and_slow's rate is bumped to 1
-# pps (not e.g. 0.05) so it reads as a real nonzero signal at all,
-# still comfortably under LOW_SLOW_MOBILE_MAX_PPS=8.0.
+# 1, never a fractional value).
 _SCENARIO_PARAMS = {
     # single attacker, well past SYN_THRESHOLD=10
     "syn_flood":             dict(sessions=1, pps=200.0, kind="session-traffic", protocol="TCP_SYN", dst_port=443),
@@ -98,9 +95,7 @@ _SCENARIO_PARAMS = {
     # 8 sessions (>= DIST_MIN_SOURCES=5), 5 pps each -> ~40 pps aggregate
     # (> SYN_THRESHOLD=10), uniform per-session rate -> high entropy
     "distributed_syn_flood": dict(sessions=8, pps=5.0, kind="session-traffic", protocol="TCP_SYN", dst_port=443),
-    # 8 sessions (>= LOW_SLOW_MOBILE_MIN_SOURCES=5), each well under
-    # LOW_SLOW_MOBILE_MAX_PPS=8.0 -- deliberately not a flood
-    "low_and_slow":          dict(sessions=8, pps=1.0, kind="session-traffic", protocol="TCP_SYN", dst_port=443),
+
 }
 
 
@@ -185,10 +180,10 @@ def _base_config(
         "ipoe": {"ipv6": False, "ipv4": True},
         # The actual traffic generator this pipeline relies on -- see
         # module docstring for why, not the documented "streams" block.
-        # autostart=false for every scenario except low_and_slow (the
-        # orchestrator starts/stops it explicitly via the control
-        # socket's session-traffic-start/-stop at the configured attack
-        # tick -- mirrors attack_window in ul_traffic_simulator.py).
+        # autostart=false by default; the orchestrator starts/stops it
+        # explicitly via the control socket's session-traffic-start/-stop
+        # at the configured attack tick -- mirrors attack_window in
+        # ul_traffic_simulator.py.
         "session-traffic": {
             "autostart": session_traffic_autostart,
             "ipv4-pps": session_traffic_pps,
@@ -210,16 +205,15 @@ def build_scenario(
     "attack_kind": "session-traffic"|"icmp", "protocol": str,
     "dst_port": int, "autostart": bool}.
 
-    attack_autostart: if None, defaults to True for "low_and_slow"
-    (continuous-from-start by definition) and False for every other
-    scenario (the orchestrator starts it explicitly at the configured
-    attack tick, via the control socket).
+    attack_autostart: if None, defaults to False for every scenario
+    (the orchestrator starts it explicitly at the configured attack
+    tick, via the control socket).
     """
     if scenario not in _SCENARIO_PARAMS:
         raise ValueError(f"unknown scenario {scenario!r}, expected one of {SCENARIOS}")
     p = _SCENARIO_PARAMS[scenario]
     session_count = p["sessions"]
-    autostart = attack_autostart if attack_autostart is not None else (scenario == "low_and_slow")
+    autostart = attack_autostart if attack_autostart is not None else False
 
     if p["kind"] == "session-traffic":
         cfg = _base_config(

@@ -72,7 +72,7 @@ class DetectionResult:
     Output of the DDoS Detection Engine.
     Produced when a CorrelatedEvent exceeds attack thresholds.
 
-    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "LOW_SLOW" | "DDOS_DISTRIBUTED"
+    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "DDOS_DISTRIBUTED"
     score       : raw metric ratio (observed / threshold)
     confidence  : 0.0–1.0, boosted when attack spans multiple domains
     sources     : distinct source IPs contributing — only populated for

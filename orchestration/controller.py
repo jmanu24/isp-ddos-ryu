@@ -314,18 +314,13 @@ class OrchestrationController:
 
         Sources with no confirmed host-port location yet are skipped
         entirely — NEVER blocked network-wide; they'll get caught once a
-        host-port sighting for them arrives in a later cycle. OpenFlow's
-        own LOW_SLOW flow-count variant also uses src_ip="*" but carries
-        no per-source IP list at all (it's a flow-count signature, not a
-        list of attackers), so it's left as a single network-wide action
-        via the normal path below — that one has no per-source location
-        to scope to in the first place, unlike DDOS_DISTRIBUTED.
+        host-port sighting for them arrives in a later cycle.
 
-        Mobile-domain LOW_SLOW and DDOS_DISTRIBUTED are the analogous
-        exception for that domain (see the branch below) — both carry a
-        real per-source UE list, and mobile mitigation has no network-
-        wide lever at all, so each contributing UE gets its own action
-        instead of one with an unresolvable src_ip="*".
+        Mobile-domain DDOS_DISTRIBUTED is the analogous exception for
+        that domain (see the branch below) — it carries a real per-source
+        UE list, and mobile mitigation has no network-wide lever at all,
+        so each contributing UE gets its own action instead of one with
+        an unresolvable src_ip="*".
         """
         actions: List[MitigationAction] = []
         seen_domains = set()
@@ -369,7 +364,7 @@ class OrchestrationController:
 
             if (
                 d.domain in settings.PER_SOURCE_MITIGATION_DOMAINS
-                and decision.attack_type in ("LOW_SLOW", "DDOS_DISTRIBUTED")
+                and decision.attack_type == "DDOS_DISTRIBUTED"
                 and d.sources
             ):
                 # Mirrors the openflow DDOS_DISTRIBUTED branch above, but
@@ -378,10 +373,9 @@ class OrchestrationController:
                 # per-source mitigation -- there's no destination-wide
                 # network lever the way an OpenFlow drop rule is -- so a
                 # "*" src_ip can't be dispatched as a single action the
-                # way it can for OpenFlow. Covers both multi-source attack
-                # types LOW_SLOW and DDOS_DISTRIBUTED -- both carry their
-                # contributing sources in `sources` and both would
-                # otherwise build a MitigationAction with src_ip="*",
+                # way it can for OpenFlow. DDOS_DISTRIBUTED carries its
+                # contributing sources in `sources` and would otherwise
+                # build a MitigationAction with src_ip="*",
                 # which the domain adapter can never resolve to a real
                 # IMSI/session-id (logs "Cannot resolve src_ip * ...",
                 # mitigates nothing) and which check_mobile_unblocks can
@@ -502,7 +496,7 @@ class OrchestrationController:
         """Map attack type + domain to a concrete mitigation action string."""
         if domain == "bgp":
             return "bgp_blackhole"
-        if attack_type in ("SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "DDOS_DISTRIBUTED", "LOW_SLOW"):
+        if attack_type in ("SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "DDOS_DISTRIBUTED"):
             return "block"
         return "rate_limit"
 
@@ -528,10 +522,7 @@ class OrchestrationController:
                     # Only set on first block, not every re-evaluation --
                     # the same flow can flip between classifications cycle
                     # to cycle right at the edge of a threshold/entropy
-                    # boundary (e.g. LOW_SLOW one cycle, SYN_FLOOD the
-                    # next, for the literal same attack -- see
-                    # DDoSDetectionEngine's grace-period comments for why
-                    # this race exists). Overwriting _active_blocks[key]
+                    # boundary. Overwriting _active_blocks[key]
                     # on every re-evaluation made the eventual UNBLOCK
                     # line report whichever attack_type happened to be
                     # classified LAST, not the one that was actually
@@ -628,8 +619,7 @@ class OrchestrationController:
         (dst_ip, dst_port, protocol) — DDOS_DISTRIBUTED blocks are
         always keyed by src_ip="*" (scoped by physical ingress
         switch+port instead, not by which fake IP a packet claims to be
-        from) and LOW_SLOW's flow-count variant has no source at all, so
-        both rely on this fallback. LearningSwitch checks this before
+        from) and rely on this fallback. LearningSwitch checks this before
         installing a new per-source forwarding rule, so a flow already
         covered by an active block doesn't get a pointless one-shot
         permit entry — the drop rule would win on priority anyway, but
@@ -657,7 +647,7 @@ class OrchestrationController:
         than openflow drop-rule-counter-based.
 
         sources: the detection's own per-source UE list, when it has one
-        (DetectionResult.sources, populated for mobile-domain LOW_SLOW/
+        (DetectionResult.sources, populated for mobile-domain
         DDOS_DISTRIBUTED). Those are dispatched as one action per real
         UE IP, not one action keyed by the literal "*" (see _build_
         actions's mobile branch) -- src_ip="*" alone would never match
@@ -676,58 +666,6 @@ class OrchestrationController:
                 for source in sources
             )
         return False
-
-    def active_block_pairs_and_dsts(self) -> Tuple[Set[Tuple[str, str]], Set[str]]:
-        """
-        (src_ip, dst_ip) pairs and dst_ips currently covered by an active
-        openflow block (_active_blocks; deliberately excludes
-        _active_mobile_blocks -- the LOW_SLOW callers this feeds are
-        openflow-only). For merging into analyze_low_slow's exclude_dsts
-        / analyze_low_slow_single_source's exclude_pairs alongside the
-        current cycle's own flagged_pairs/flagged_dsts, so a pair already
-        under an active block from an EARLIER cycle's classification
-        can't get a fresh, different classification once its volumetric
-        signal drops out and the post-flood grace window
-        (_RECENT_FLOOD_GRACE_CYCLES) expires.
-
-        Without this, a stale DDoSCollector port-set entry for an already
-        -blocked, now-finished attack (lingering up to
-        LOW_SLOW_PORT_IDLE_TTL=90s with its old distinct-port count still
-        >= LOW_SLOW_NEW_FLOWS) gets misread as a brand new LOW_SLOW
-        attack once the grace window passes -- re-blocking the same
-        attacker under the wrong label and replacing the original
-        SYN_FLOOD action with a LOW_SLOW one. is_active_block() alone
-        only silences the resulting *log line*/metric for that fresh
-        (wrong) classification; this stops the reclassification itself
-        from happening in the first place.
-        """
-        pairs = {(src, dst) for (src, dst, _port, _proto) in self._active_blocks}
-        dsts = {dst for (_src, dst, _port, _proto) in self._active_blocks}
-        return pairs, dsts
-
-    def is_mobile_blocked(self, src_ip: str, dst_ip: str) -> bool:
-        """
-        True if this source (mobile UE or BNGBlaster session -- see
-        config.settings.PER_SOURCE_MITIGATION_DOMAINS) already has an
-        active per-source block toward this destination, regardless of
-        attack type/protocol/port. Kept its original "_mobile" name (only
-        mobile existed when it was written) -- _active_mobile_blocks is
-        shared by every PER_SOURCE_MITIGATION_DOMAINS member, not mobile-
-        only, despite the name.
-
-        Queried by DDoSDetectionEngine.analyze_low_slow_mobile to exclude
-        already-quarantined sources from its low-rate source count: a
-        successful throttle (from ANY attack type -- UDP/SYN/ICMP flood,
-        DDOS_DISTRIBUTED) drops a source's reported rate to near-zero,
-        which falls squarely inside LOW_SLOW_MOBILE_MAX_PPS's "low rate"
-        band -- without this exclusion, the mitigation's own side effect
-        on a group of sources gets misread as a brand new LOW_SLOW attack
-        forming on top of the one already being handled (observed: a DDOS_
-        DISTRIBUTED block immediately followed by a LOW_SLOW detection
-        for the exact same sources and destination, caused entirely by
-        their own quarantine noise).
-        """
-        return any(key[0] == src_ip and key[1] == dst_ip for key in self._active_mobile_blocks)
 
     def is_validated_destination(self, dst_ip: str) -> bool:
         """
@@ -766,8 +704,7 @@ class OrchestrationController:
         Delete any L3 forwarding rule (priority=FORWARDING_PRIORITY) whose
         (src_ip, dst_ip) is currently under an active block — either that
         exact source individually (DDOS_DISTRIBUTED's per-source blocks)
-        or a destination-wide "*" block (LOW_SLOW's flow-count variant,
-        which has no per-source list to scope to).
+        or a destination-wide "*" block.
 
         clear_forwarding_rules() at block time only knows the sources the
         detection had already seen by then. Sources that slip in during the
@@ -1056,12 +993,10 @@ class OrchestrationController:
                 # comes from DetectionResult, which carries either the
                 # *normalized* tag (DDoSDetectionEngine._normalize_
                 # protocol turns "TCP_SYN" into "TCP" for OpenFlow's
-                # benefit) or a hardcoded placeholder ("UDP" for
-                # analyze_low_slow_mobile's protocol-agnostic detections)
-                # -- neither of which equals the real TelemetryEvent.
+                # benefit) -- which may not equal the real TelemetryEvent.
                 # protocol ("TCP_SYN" or whatever the source actually
                 # sends), so the comparison always failed and every
-                # SYN_FLOOD/DDOS_DISTRIBUTED/LOW_SLOW block unblocked
+                # SYN_FLOOD/DDOS_DISTRIBUTED block unblocked
                 # itself after exactly UNBLOCK_CONFIRM_CYCLES regardless
                 # of whether the attack was still running.
                 still_present = c is not None and any(

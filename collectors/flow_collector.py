@@ -1,5 +1,4 @@
 import time
-from collections import defaultdict
 
 import config.settings as settings
 
@@ -105,39 +104,3 @@ class FlowCollector:
             }
 
         return flows
-
-    @staticmethod
-    def count_low_volume_flows(body):
-        """
-        dst_ip -> number of currently active flows that have lived at
-        least LOW_SLOW_MIN_AGE seconds but still total under
-        LOW_SLOW_MIN_BYTES — the signature of a low-and-slow attack
-        (e.g. Slowloris): many concurrent connections trickling just
-        enough data to stay open, never crossing any pps/bps threshold,
-        unlike a volumetric flood. The age check matters — without it, a
-        brand-new legitimate connection that simply hasn't sent much yet
-        would look identical to a stalled one for the first few seconds.
-        """
-        counts = defaultdict(int)
-
-        for stat in body:
-            if stat.priority >= settings.MITIGATION_DROP_PRIORITY:
-                continue
-
-            match = stat.match
-
-            if match.get("eth_type") != 0x0800:
-                continue
-
-            dst_ip = match.get("ipv4_dst")
-
-            if not dst_ip:
-                continue
-
-            if (
-                stat.duration_sec >= settings.LOW_SLOW_MIN_AGE
-                and stat.byte_count < settings.LOW_SLOW_MIN_BYTES
-            ):
-                counts[dst_ip] += 1
-
-        return counts

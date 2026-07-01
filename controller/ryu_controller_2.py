@@ -390,17 +390,6 @@ class FlowStatsIDS(app_manager.RyuApp):
         # every other domain's actions below.
         openflow_unblock_actions = self.orchestrator.check_unblocks()
 
-        # Reset DDoSCollector's distinct-port tracking for whatever just
-        # got unblocked -- otherwise the OLD port count from the attack
-        # that just ended lingers for up to LOW_SLOW_PORT_IDLE_TTL (90s)
-        # and gets immediately misread as a brand-new LOW_SLOW attack
-        # the very next cycle, using entirely stale data. src_ip="*"
-        # (DDOS_DISTRIBUTED-style network-wide blocks) has no single
-        # pair to clear -- skipped, harmless no-op anyway.
-        for action in openflow_unblock_actions:
-            if action.src_ip != "*":
-                self.of_adapter.clear_connection_ports(action.src_ip, action.dst_ip)
-
         # Mobile-domain blocks unblock off this cycle's own telemetry
         # instead (see check_mobile_unblocks's docstring) -- a RAN-side
         # throttle doesn't make the UE's traffic vanish from `correlated`
@@ -408,81 +397,11 @@ class FlowStatsIDS(app_manager.RyuApp):
         # convention as openflow_unblock_actions above.
         mobile_unblock_actions = self.orchestrator.check_mobile_unblocks(correlated)
 
-        # Stage 3 — detect attack types. Low-and-slow is checked
-        # independently of `correlated`/pps-based detection — it's a flow
-        # *count* signature (many stalled connections), not a volumetric
-        # one, so it can fire even on a cycle with no other traffic. A
-        # destination/pair already flagged by a volumetric flood this
-        # cycle is excluded from the low-and-slow checks — a fast flood
-        # whose tool randomizes its source port per packet (hping3
-        # --flood does) looks just like "many distinct connections"
-        # otherwise, and shouldn't get double-reported as LOW_SLOW too.
-        flood_detections = self.detector.analyze(correlated) if correlated else []
-        # Merges in pairs/dsts that were a volumetric flood within the
-        # last few cycles, not just this exact one -- closes a race where
-        # a flow-stats data gap on the same cycle LOW_SLOW's count first
-        # crosses its threshold would otherwise let it fire uncontested
-        # and permanently lock in the wrong classification (see
-        # DDoSDetectionEngine._RECENT_FLOOD_GRACE_CYCLES's docstring).
-        flagged_dsts = {d.dst_ip for d in flood_detections} | self.detector.recent_flood_dsts()
-        flagged_pairs = {(d.src_ip, d.dst_ip) for d in flood_detections} | self.detector.recent_flood_pairs()
-
-        # Also exclude anything already under an active openflow block,
-        # regardless of which cycle/attack_type put it there -- once the
-        # grace window above expires, a stale DDoSCollector port-count
-        # entry for an already-blocked, now-finished attack would
-        # otherwise get freshly (and wrongly) classified as LOW_SLOW,
-        # replacing the original action with a mislabeled one. See
-        # OrchestrationController.active_block_pairs_and_dsts's docstring.
-        active_pairs, active_dsts = self.orchestrator.active_block_pairs_and_dsts()
-        flagged_dsts |= active_dsts
-        flagged_pairs |= active_pairs
-
-        # Fetched once, reused for both detection input and Grafana metrics
-        # below — so the "concurrent/new connections" panels show the real
-        # value every cycle, not just when LOW_SLOW actually fires.
-        low_volume_flow_counts = self.of_adapter.collect_low_volume_flow_counts()
-        connection_port_counts = self.of_adapter.get_connection_port_counts()
-
-        for dst_ip, count in low_volume_flow_counts.items():
-            metrics.update_stalled_flows(dst_ip, count)
-
-        for (src_ip, dst_ip), info in connection_port_counts.items():
-            metrics.update_connection_counts(src_ip, dst_ip, info["count"], info["new_connections"])
-
-        detections = list(flood_detections)
-        detections += self.detector.analyze_low_slow(
-            low_volume_flow_counts,
-            exclude_dsts=flagged_dsts,
-        )
-        detections += self.detector.analyze_low_slow_single_source(
-            connection_port_counts,
-            exclude_pairs=flagged_pairs,
-        )
-        # Mobile-domain low-and-slow: many distinct UEs simultaneously
-        # holding a low, sub-threshold rate toward the same destination --
-        # see analyze_low_slow_mobile's docstring for why this needs its
-        # own signal instead of reusing the two flow-count-based variants
-        # above (OpenFlow-only telemetry).
-        detections += self.detector.analyze_low_slow_mobile(
-            correlated,
-            exclude_dsts=flagged_dsts,
-            is_blocked=self.orchestrator.is_mobile_blocked,
-        )
+        # Stage 3 — detect attack types.
+        detections = self.detector.analyze(correlated) if correlated else []
 
         # Drop detections for a (src, dst, port, protocol) already under
-        # an active block BEFORE they reach metrics/validate/process --
-        # not just before the log line. Once a flow is blocked, its real
-        # traffic stops reaching FlowCollector (the drop rule's packets
-        # are filtered out), but DDoSCollector's distinct-port set for
-        # that pair lingers for up to LOW_SLOW_PORT_IDLE_TTL (90s), and
-        # the post-flood grace window (_RECENT_FLOOD_GRACE_CYCLES) is much
-        # shorter than that -- once it expires, analyze_low_slow_single_
-        # source starts "re-detecting" the very same already-mitigated
-        # attack as LOW_SLOW every cycle. The log line was already
-        # silenced for this case, but metrics.record_detection() (in
-        # orchestrator.process()) was not, polluting the LOW_SLOW Grafana
-        # panel with phantom counts for an attack that's already handled.
+        # an active block BEFORE they reach metrics/validate/process.
         detections = [
             d for d in detections
             if not self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol, sources=d.sources)

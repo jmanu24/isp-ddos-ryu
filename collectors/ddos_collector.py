@@ -5,8 +5,6 @@ from ryu.lib.packet import ipv4
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
 
-import config.settings as settings
-
 
 class DDoSCollector:
     """
@@ -25,16 +23,6 @@ class DDoSCollector:
 
     def __init__(self):
         self.stats = {}
-        # (src_ip, dst_ip) -> {"ports": {src_port, ...}, "last_update": t}.
-        # Tracks how many distinct source ports one host has used toward
-        # another — a single-source Slowloris-style attack opens many real
-        # connections (each its own src_port) to the same destination, all
-        # of which collapse into ONE L3 forwarding rule (LearningSwitch
-        # matches on ipv4_src/ipv4_dst only), so OpenFlow flow stats can
-        # never show them as separate flows. This is the only place that
-        # ever sees each connection's own src_port — packet-in, on
-        # whichever packets still reach it.
-        self._connection_ports = {}
 
     def process_packet(self, msg):
 
@@ -61,13 +49,7 @@ class DDoSCollector:
 
         if tcp_pkt:
             # Bare SYN (no ACK) is a connection attempt — the actual
-            # signature of a SYN flood. Once the handshake completes,
-            # later packets carry ACK and are just normal (if slow)
-            # traffic on an established connection: e.g. a Slowloris-
-            # style attack opens real connections and then trickles data
-            # for a long time, which should surface as LOW_SLOW (flow
-            # count, low bytes, old age) rather than keep tripping
-            # SYN_FLOOD on every cycle just because it's TCP.
+            # signature of a SYN flood.
             is_bare_syn = (tcp_pkt.bits & tcp.TCP_SYN) and not (tcp_pkt.bits & tcp.TCP_ACK)
             protocol = "TCP_SYN" if is_bare_syn else "TCP"
             dst_port = tcp_pkt.dst_port
@@ -86,39 +68,6 @@ class DDoSCollector:
         )
 
         now = time()
-
-        if tcp_pkt or udp_pkt:
-            src_port = tcp_pkt.src_port if tcp_pkt else udp_pkt.src_port
-            conn_key = (ip_pkt.src, ip_pkt.dst)
-            conn_entry = self._connection_ports.setdefault(
-                conn_key,
-                {
-                    "ports": set(), "last_update": now, "dst_port": 0,
-                    "protocol": "IP", "new_connections": 0, "first_seen": now,
-                },
-            )
-
-            if src_port not in conn_entry["ports"]:
-                # A genuinely new connection (never-seen source port) —
-                # cumulative count, for a "new connections/sec" Grafana
-                # panel via rate(). This is also the closest thing this
-                # L3-only architecture has to "connections per second":
-                # an already-open connection's ongoing packets are
-                # invisible once cached, until the next periodic
-                # VALIDATED_FLOW_HARD_TIMEOUT-forced refresh, so there's
-                # no separate "total connection activity" signal to track.
-                conn_entry["new_connections"] += 1
-
-            conn_entry["ports"].add(src_port)
-            conn_entry["last_update"] = now
-            # Remember the targeted port/protocol too, so a mitigation
-            # block can be scoped to the exact L4 flow instead of every
-            # port this attacker happens to touch. Slowloris-style attacks
-            # target one fixed port — last-seen is fine. "TCP_SYN" is
-            # collapsed to "TCP" here since this is about the established
-            # connection, not the handshake.
-            conn_entry["dst_port"] = dst_port
-            conn_entry["protocol"] = "TCP" if protocol == "TCP_SYN" else protocol
 
         entry = self.stats.get(key)
 
@@ -159,57 +108,3 @@ class DDoSCollector:
 
         return result
 
-    def clear_connection_ports(self, src_ip: str, dst_ip: str) -> None:
-        """
-        Drop the tracked distinct-port set for this (src_ip, dst_ip) pair
-        outright, instead of waiting up to LOW_SLOW_PORT_IDLE_TTL (90s)
-        for it to age out on its own. Called once a pair stops being
-        actively blocked (orchestration/controller.py's check_unblocks)
-        -- without this, the OLD port count from the attack that just
-        ended lingers and is immediately re-read by
-        analyze_low_slow_single_source as a brand new LOW_SLOW attack,
-        using entirely stale data from traffic that's no longer flowing.
-        Safe to call for a pair with no entry at all (no-op).
-        """
-        self._connection_ports.pop((src_ip, dst_ip), None)
-
-    def get_connection_port_counts(self):
-        """
-        (src_ip, dst_ip) -> {"count": distinct source ports seen toward
-        that destination recently (concurrent connections), "dst_port":
-        last-seen targeted port, "protocol": "TCP"|"UDP", "new_connections":
-        cumulative count of distinct ports ever seen for this pair (for a
-        rate()-based "new connections/sec" panel — this value only grows,
-        never resets, for as long as the pair stays alive). Ports
-        accumulate for as long as that pair keeps appearing in packet-in
-        (which it will, periodically, even once cached — see
-        VALIDATED_FLOW_HARD_TIMEOUT forcing re-classification); an entry
-        is forgotten once that pair hasn't been seen at all for
-        LOW_SLOW_PORT_IDLE_TTL seconds, so a stale attack from a while
-        ago doesn't linger forever. "age": seconds since the first packet
-        ever seen for this pair -- callers gate LOW_SLOW classification on
-        this (settings.LOW_SLOW_MIN_AGE) so a fast flood whose tool
-        randomizes its source port (hping3 --flood does) can't rack up
-        LOW_SLOW_NEW_FLOWS distinct ports in a sub-second burst and get
-        misread as a Slowloris-style attack, which by definition opens its
-        connections slowly over time.
-        """
-        now = time()
-        counts = {}
-
-        for conn_key in list(self._connection_ports):
-            entry = self._connection_ports[conn_key]
-
-            if now - entry["last_update"] > settings.LOW_SLOW_PORT_IDLE_TTL:
-                del self._connection_ports[conn_key]
-                continue
-
-            counts[conn_key] = {
-                "count": len(entry["ports"]),
-                "dst_port": entry["dst_port"],
-                "protocol": entry["protocol"],
-                "new_connections": entry["new_connections"],
-                "age": now - entry["first_seen"],
-            }
-
-        return counts

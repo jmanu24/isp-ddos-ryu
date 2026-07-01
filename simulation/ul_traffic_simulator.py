@@ -89,7 +89,7 @@ _CSV_COLUMNS = ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps",
 # them; only this synthetic one, which already knows ul_thr_mbps/dst_ip
 # per tick, can derive them. MobileNetworkAdapter is never updated to
 # read them (nothing in TelemetryEvent models them yet) -- they exist for
-# offline thesis analysis of the LOW_SLOW CSV trail, not the live
+# offline thesis analysis, not the live
 # detection path. See UE.sample()'s connected_ticks/pkt_interval_ms
 # comments for how each is derived.
 _CSV_COLUMNS_EXTENDED_KPMS = ["connected_ticks", "pkt_interval_ms"]
@@ -126,21 +126,12 @@ class UE:
                                  playing, so DDoSDetectionEngine can
                                  actually classify it instead of every
                                  mobile-domain flow defaulting to UDP.
-    low_slow                   : while attacking, models a Slowloris-style
-                                 UE -- connection stays open and active
-                                 but deliberately trickles data, so it
-                                 does NOT saturate radio resources or
-                                 degrade the channel the way a real flood
-                                 does (see sample()'s attack branch).
     ramp_ticks                 : warm-up/cool-down length, in ticks, at
                                  the start/end of attack_window -- a real
                                  flood doesn't jump to full rate in one
                                  sample, and ramping makes the CSV's step
                                  less of a free, trivially-detectable
                                  "the threshold crossed instantly" tell.
-                                 Ignored for low_slow (already starts at
-                                 a deliberately low, flat rate -- see
-                                 _ramp_factor).
     """
 
     def __init__(
@@ -156,7 +147,6 @@ class UE:
         attack_target_ip: str = "10.0.2.10",
         protocol: str = "UDP",
         dst_port: int = 0,
-        low_slow: bool = False,
         benign_protocol: str = "UDP",
         benign_dst_port: int = 0,
         ramp_ticks: int = 3,
@@ -196,7 +186,6 @@ class UE:
         self.attack_target_ip = attack_target_ip
         self.protocol = protocol
         self.dst_port = dst_port
-        self.low_slow = low_slow
         self.ramp_ticks = ramp_ticks
 
         # Benign-traffic burst state (see _sample_benign_mbps) -- last
@@ -206,9 +195,7 @@ class UE:
 
         # connected_ticks state (see sample()'s tail) -- consecutive
         # ACTIVE ticks toward the SAME dst_ip, reset on IDLE or a dst_ip
-        # change. Proxy for "how long has this DRB/connection been held
-        # open", which is exactly what distinguishes a persistent low-
-        # rate LOW_SLOW UE from one that's merely idle between bursts.
+        # change.
         self._connected_ticks = 0
         self._last_active_dst_ip = None
 
@@ -241,14 +228,12 @@ class UE:
         shaping of the rate sample() computes while already inside the
         window.
 
-        Short-circuits to 1.0 (no ramp) for low_slow (already starts at
-        a deliberately low, flat rate -- ramping it would just be a
-        slower version of the same non-event) and when ramp_ticks<=0 or
-        there's no attack_window to ramp against (e.g. interactive
-        mode's "until stopped" window has no known end tick, so only the
-        warm-up half is meaningful there).
+        Short-circuits to 1.0 (no ramp) when ramp_ticks<=0 or there's
+        no attack_window to ramp against (e.g. interactive mode's "until
+        stopped" window has no known end tick, so only the warm-up half
+        is meaningful there).
         """
-        if self.low_slow or self.ramp_ticks <= 0 or self.attack_window is None:
+        if self.ramp_ticks <= 0 or self.attack_window is None:
             return 1.0
         start, end = self.attack_window
         elapsed = tick - start
@@ -257,9 +242,8 @@ class UE:
         cool_down = 1.0 if remaining > self.ramp_ticks else remaining / self.ramp_ticks
         return max(0.0, min(warm_up, cool_down))
 
-    # Per-protocol radio degradation profile applied while attacking (not
-    # low_slow, which never saturates the channel by design -- see the
-    # low_slow branch in sample()). PRB usage and SINR scale with how
+    # Per-protocol radio degradation profile applied while attacking.
+    # PRB usage and SINR scale with how
     # close ul_thr_mbps (itself already shaped by _ramp_factor) is to
     # sat_mbps, instead of a flat 85-100%/2-6dB regardless of actual
     # rate -- a 0.5 Mbps TCP SYN flood's bare-SYN packets occupy a small
@@ -332,21 +316,12 @@ class UE:
             target_mbps = self.attack_mbps * random.uniform(0.9, 1.1)
             ramp = self._ramp_factor(tick)
             ul_thr_mbps = max(0.0, self.baseline_mbps + (target_mbps - self.baseline_mbps) * ramp)
-            if self.low_slow:
-                # Slowloris-style: the connection stays open and active,
-                # but deliberately trickles data -- a single one of these
-                # looks just like ordinary light traffic; what's anomalous
-                # is many of them at once toward the same target (see
-                # DDoSDetectionEngine.analyze_low_slow_mobile).
-                prb_usage_pct = min(100.0, max(0.0, 5.0 + ul_thr_mbps * 3.0))
-                sinr_db = random.uniform(15.0, 25.0)
-            else:
-                profile = self._ATTACK_RADIO_PROFILES.get(self.protocol, self._ATTACK_RADIO_PROFILES["UDP"])
-                saturation = min(ul_thr_mbps / profile["sat_mbps"], 1.0) if profile["sat_mbps"] > 0 else 1.0
-                prb_usage_pct = profile["prb_floor"] + (profile["prb_ceiling"] - profile["prb_floor"]) * saturation
-                prb_usage_pct = min(100.0, max(0.0, prb_usage_pct + random.uniform(-2.0, 2.0)))
-                sinr_db = profile["sinr_ceiling"] - (profile["sinr_ceiling"] - profile["sinr_floor"]) * saturation
-                sinr_db = max(0.1, sinr_db + random.uniform(-1.0, 1.0))
+            profile = self._ATTACK_RADIO_PROFILES.get(self.protocol, self._ATTACK_RADIO_PROFILES["UDP"])
+            saturation = min(ul_thr_mbps / profile["sat_mbps"], 1.0) if profile["sat_mbps"] > 0 else 1.0
+            prb_usage_pct = profile["prb_floor"] + (profile["prb_ceiling"] - profile["prb_floor"]) * saturation
+            prb_usage_pct = min(100.0, max(0.0, prb_usage_pct + random.uniform(-2.0, 2.0)))
+            sinr_db = profile["sinr_ceiling"] - (profile["sinr_ceiling"] - profile["sinr_floor"]) * saturation
+            sinr_db = max(0.1, sinr_db + random.uniform(-1.0, 1.0))
             state = "ACTIVE"
             dst_ip = self.attack_target_ip
             protocol = self.protocol
@@ -378,9 +353,7 @@ class UE:
         # pkt_interval_ms: mean inter-packet gap implied by ul_thr_mbps at
         # the same ASSUMED_AVG_PACKET_SIZE_BYTES the rest of this pipeline
         # already assumes (pps = bps / 512, see mobile_adapter.py) --
-        # 1000/pps, not pps itself. Deliberately HIGH for low_slow's
-        # trickle rate (few packets, far apart) and LOW for a volumetric
-        # flood (many packets, close together) -- the opposite of pps.
+        # 1000/pps, not pps itself.
         pps_est = (ul_thr_mbps * 1e6 / 8.0) / _ASSUMED_AVG_PACKET_SIZE_BYTES
         pkt_interval_ms = (1000.0 / pps_est) if pps_est > 0 else _MAX_PKT_INTERVAL_MS
 
@@ -407,7 +380,6 @@ class UE:
 #   UDP_THRESHOLD=200 pps -> ~0.82 Mbps   (UDP)
 #   ICMP_THRESHOLD=150pps -> ~0.61 Mbps   (ICMP)
 #   DIST_MIN_SOURCES=5, DIST_ENTROPY_THRESHOLD=0.7 (near-equal per-source rate)
-#   LOW_SLOW_MOBILE_MAX_PPS=8.0 -> ~0.033 Mbps ceiling, MIN_SOURCES=5
 # via MobileNetworkAdapter's pps = bps / ASSUMED_AVG_PACKET_SIZE_BYTES(512).
 #
 # Calibración tesis (2026-06-26, fix #5) -- recalibrated attack_mbps
@@ -528,42 +500,11 @@ def scenario_distributed_syn(attack_end_tick: int, gnb_count: int = 1):
     return ues
 
 
-def scenario_low_slow(attack_end_tick: int, gnb_count: int = 1):
-    """
-    settings.LOW_SLOW_MOBILE_MIN_SOURCES UEs, each holding a low, sub-
-    threshold, deliberately steady rate (well under
-    LOW_SLOW_MOBILE_MAX_PPS) toward the same target for many consecutive
-    cycles -- any one of them alone looks like ordinary light traffic;
-    it's the persistence of several at once that
-    analyze_low_slow_mobile() flags (its score formula gives this exact
-    minimum count enough headroom to actually clear DECISION_THRESHOLD
-    once confirmed, not just get detected and never mitigated). Low
-    jitter on purpose: a real Slowloris-style connection trickles a
-    steady drip, not a noisy one. Spread across gnb_count gNBs
-    (round-robin) like scenario_distributed_syn above.
-    """
-    ues = _benign_ues(gnb_count)
-    for i in range(settings.LOW_SLOW_MOBILE_MIN_SOURCES):
-        ues.append(UE(
-            imsi=20 + i, ip=f"10.60.0.{30 + i}",
-            baseline_mbps=0.3, jitter_mbps=0.1, normal_dst_ip=f"203.0.113.{50 + i}",
-            attack_window=(10, attack_end_tick), attack_mbps=0.02,
-            # Plain "TCP" (not "TCP_SYN") -- a real Slowloris connection is
-            # fully established, not a bare SYN, and "TCP" isn't one of
-            # _PROTOCOL_CHECKS' literal tags, so this never competes with
-            # the volumetric SYN_FLOOD path even by coincidence.
-            protocol="TCP", dst_port=80, low_slow=True,
-            gnb_id=_gnb_for(len(ues), gnb_count),
-        ))
-    return ues
-
-
 SCENARIOS = {
     "udp_flood": scenario_udp_flood,
     "syn_flood": scenario_syn_flood,
     "icmp_flood": scenario_icmp_flood,
     "distributed_syn": scenario_distributed_syn,
-    "low_slow": scenario_low_slow,
 }
 
 
@@ -776,8 +717,7 @@ def main():
 
     for ue in ues:
         attack_desc = (
-            f"{ue.protocol} flood from tick {ue.attack_window[0]}" if ue.attack_window and not ue.low_slow
-            else f"low-and-slow ({ue.protocol}) from tick {ue.attack_window[0]}" if ue.attack_window
+            f"{ue.protocol} flood from tick {ue.attack_window[0]}" if ue.attack_window
             else "benign only"
         )
         print(f"  IMSI {ue.imsi} -> {ue.ip} (gNB {ue.gnb_id}) ({attack_desc})")
@@ -883,7 +823,6 @@ _ATTACK_TYPES = {
     "2": ("TCP SYN Flood", "single"),
     "3": ("ICMP Flood", "single"),
     "4": ("Distributed TCP SYN Flood", "distributed"),
-    "5": ("Low and Slow", "low_slow"),
 }
 
 
@@ -897,7 +836,6 @@ def _print_menu(ues: list):
     print("  2) TCP SYN Flood")
     print("  3) ICMP Flood")
     print("  4) Distributed TCP SYN Flood (varios UE como origen)")
-    print("  5) Low and Slow")
     print("  0) Salir")
 
 
@@ -986,7 +924,7 @@ def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] 
             )
             protocol, dst_port = "ICMP", 0
         with ues_lock:
-            ue.protocol, ue.dst_port, ue.low_slow = protocol, dst_port, False
+            ue.protocol, ue.dst_port = protocol, dst_port
             ue.attack_mbps = mbps
             ue.attack_target_ip = target_ip
             ue.attack_window = (0, 10 ** 9)  # "until stopped" -- see is_attacking()
@@ -1000,32 +938,14 @@ def _configure_attack(ues: list, ues_lock: threading.Lock) -> "tuple[str, list] 
         dst_port = _prompt_int("  Puerto TCP objetivo", 443)
         with ues_lock:
             for ue in group:
-                ue.protocol, ue.dst_port, ue.low_slow = "TCP_SYN", dst_port, False
+                ue.protocol, ue.dst_port = "TCP_SYN", dst_port
                 ue.attack_mbps = mbps
                 ue.attack_target_ip = target_ip
                 ue.attack_window = (0, 10 ** 9)
         imsis = ", ".join(f"{u.imsi}(gNB{u.gnb_id})" for u in group)
         return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
 
-    # low_slow
-    group = _choose_group(ues, settings.LOW_SLOW_MOBILE_MIN_SOURCES,
-                           default_count=settings.LOW_SLOW_MOBILE_MIN_SOURCES)
-    if not group:
-        return None
-    max_mbps = settings.LOW_SLOW_MOBILE_MAX_PPS * 512 * 8 / 1e6
-    mbps = _prompt_float(
-        f"  Throughput de ataque por UE en Mbps (techo recomendado ~{max_mbps:.3f})",
-        round(max_mbps * 0.6, 4),
-    )
-    dst_port = _prompt_int("  Puerto TCP objetivo", 80)
-    with ues_lock:
-        for ue in group:
-            ue.protocol, ue.dst_port, ue.low_slow = "TCP", dst_port, True
-            ue.attack_mbps = mbps
-            ue.attack_target_ip = target_ip
-            ue.attack_window = (0, 10 ** 9)
-    imsis = ", ".join(f"{u.imsi}(gNB{u.gnb_id})" for u in group)
-    return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip} ({mbps} Mbps c/u)", group
+    return None
 
 
 def run_interactive(args):

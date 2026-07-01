@@ -74,10 +74,6 @@ class OpenFlowAdapter(DomainAdapter):
         # None means "trust every sighting" (used in tests / when this
         # filtering isn't wired up).
         self._is_host_port = is_host_port
-        # dst_ip -> count of currently-stalled (old, low-byte) flows
-        # toward it, accumulated across all switches this cycle — see
-        # FlowCollector.count_low_volume_flows.
-        self._low_volume_flow_counts: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Push handlers — called from Ryu event callbacks
@@ -88,11 +84,6 @@ class OpenFlowAdapter(DomainAdapter):
         Process an OFPFlowStatsReply body and convert flows to TelemetryEvents.
         Called by the controller's flow_stats_reply_handler.
         """
-        for dst_ip, count in self._flow_collector.count_low_volume_flows(body).items():
-            self._low_volume_flow_counts[dst_ip] = (
-                self._low_volume_flow_counts.get(dst_ip, 0) + count
-            )
-
         flows = self._flow_collector.process_stats(dpid, body)
         events: List[TelemetryEvent] = []
 
@@ -244,13 +235,6 @@ class OpenFlowAdapter(DomainAdapter):
             return meta
         return None
 
-    def collect_low_volume_flow_counts(self) -> Dict[str, int]:
-        """Drain and return this cycle's dst_ip -> stalled-flow-count
-        accumulated across all switches, for low-and-slow detection."""
-        counts = self._low_volume_flow_counts
-        self._low_volume_flow_counts = {}
-        return counts
-
     def get_source_ingress(self, src_ip: str, dst_ip: str) -> Tuple[Optional[int], Optional[int]]:
         """
         (dpid, in_port) of the genuine HOST port this (src_ip, dst_ip)
@@ -269,20 +253,6 @@ class OpenFlowAdapter(DomainAdapter):
         if meta and meta["dpid"] is not None:
             return meta["dpid"], meta["in_port"]
         return None, None
-
-    def get_connection_port_counts(self) -> Dict[Tuple[str, str], dict]:
-        """
-        (src_ip, dst_ip) -> {"count", "dst_port", "protocol"} — for
-        single-source low-and-slow detection (many real connections from
-        one attacker, all collapsed into one L3 forwarding rule, so
-        OpenFlow flow stats alone can't tell them apart; packet-in is the
-        only place each connection's own src_port/dst_port is visible).
-        """
-        return self._ddos_collector.get_connection_port_counts()
-
-    def clear_connection_ports(self, src_ip: str, dst_ip: str) -> None:
-        """See DDoSCollector.clear_connection_ports."""
-        self._ddos_collector.clear_connection_ports(src_ip, dst_ip)
 
     # ------------------------------------------------------------------
     # DomainAdapter interface
