@@ -203,12 +203,22 @@ class OrchestrationController:
         # active last cycle but are absent this cycle — Prometheus Gauges
         # hold their last value forever, so without this Grafana keeps
         # displaying stale attack rates after an attack ends.
+        # Exception: if a block is still active for that (attack_type, domain),
+        # the traffic is being dropped at the switch so the detector won't see
+        # it anymore — don't zero the gauge until the block itself is released.
         current_detection_labels: Set[Tuple[str, str]] = {
             (d.attack_type, d.domain) for d in detections
         }
+        blocked_labels: Set[Tuple[str, str]] = {
+            (a.attack_type, a.domain)
+            for a in list(self._active_blocks.values()) + list(self._active_mobile_blocks.values())
+        }
         for attack_type, domain in self._prev_detection_labels - current_detection_labels:
-            metrics.record_attack_rate(attack_type, domain, 0, 0)
-        self._prev_detection_labels = current_detection_labels
+            if (attack_type, domain) not in blocked_labels:
+                metrics.record_attack_rate(attack_type, domain, 0, 0)
+        self._prev_detection_labels = current_detection_labels | (
+            self._prev_detection_labels & blocked_labels
+        )
 
         if not detections:
             # Still need to clear any stale mitigation rate gauges from the
