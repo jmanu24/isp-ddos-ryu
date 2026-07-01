@@ -42,16 +42,15 @@ from mininet.log import setLogLevel
 # Tráfico de fondo (normal)
 # ---------------------------------------------------------------------------
 
-# Plantillas para los flujos normales.
-# {dst} = IP destino, {port} = puerto aleatorio, {interval} = intervalo en µs.
-# La tasa resultante es 1 000 000 / interval pps (1-5 pps por flujo).
-_NORMAL_TEMPLATES = [
-    ("ICMP", "ping -i 2 -c 99999 {dst}"),                          # ~0.5 pps
-    ("TCP",  "hping3 -p {port} -i u{interval} {dst}"),             # 1-5 pps
-    ("UDP",  "hping3 --udp -p {port} -i u{interval} {dst}"),       # 1-5 pps
-]
-
-_COMMON_PORTS = [80, 443, 53, 8080, 22, 3306, 5432]
+# Tráfico de fondo: solo ICMP (ping) a tasa muy baja.
+#
+# hping3 TCP/UDP RAW envía paquetes SYN/UDP sin handshake completo —
+# idénticos a tráfico de ataque desde la perspectiva del detector OpenFlow.
+# Con SYN_THRESHOLD=10 pps, basta que 3 hosts coincidan en el mismo destino
+# para disparar una falsa alarma. Ping a 0.1 pps mantiene el agregado total
+# (N hosts × 0.1 pps) muy por debajo del umbral ICMP_THRESHOLD=150 pps
+# incluso con 100 hosts y convergencia de destinos.
+_NORMAL_PING_INTERVAL = 10   # segundos entre pings (0.1 pps por host)
 
 
 class NormalTrafficManager:
@@ -133,22 +132,17 @@ class NormalTrafficManager:
         for src in hosts:
             others = [h for h in hosts if h is not src]
             dst    = random.choice(others)
+            dst_ip = dst.IP()
 
-            proto_idx         = random.randrange(len(_NORMAL_TEMPLATES))
-            proto, template   = _NORMAL_TEMPLATES[proto_idx]
-            port              = random.choice(_COMMON_PORTS)
-            interval_us       = random.randint(200_000, 1_000_000)  # 1-5 pps
-            dst_ip            = dst.IP()
-
-            cmd = template.format(dst=dst_ip, port=port, interval=interval_us)
+            cmd  = f"ping -i {_NORMAL_PING_INTERVAL} -c 99999 {dst_ip}"
             proc = src.popen(cmd, shell=True)
 
             new_flows.append({
                 "src":   src.name,
                 "dst":   dst_ip,
-                "proto": proto,
-                "port":  port if proto != "ICMP" else None,
-                "pps":   round(1_000_000 / interval_us, 1) if proto != "ICMP" else 0.5,
+                "proto": "ICMP",
+                "port":  None,
+                "pps":   round(1 / _NORMAL_PING_INTERVAL, 2),
                 "proc":  proc,
             })
 
