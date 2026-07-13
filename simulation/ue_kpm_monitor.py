@@ -112,36 +112,31 @@ def _reset_file(path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# nftables setup -- idempotent, rebuilt whenever ue_ip_map.csv changes.
+# nftables setup -- rebuilt from scratch whenever ue_ip_map.csv changes.
 # ---------------------------------------------------------------------------
 
-def _list_counter_names() -> set:
-    result = _run(["nft", "-j", "list", "counters", "table", "inet", _NFT_TABLE])
-    if result.returncode != 0:
-        return set()
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return set()
-    names = set()
-    for item in data.get("nftables", []):
-        counter = item.get("counter")
-        if counter:
-            names.add(counter.get("name", ""))
-    return names
-
-
 def _ensure_nft_setup(ue_ip_map: Dict[int, str]) -> None:
+    """
+    Deletes and recreates the whole table on every call rather than
+    reconciling against what's already there. An earlier attempt at
+    incremental add-if-missing (checking only whether a same-named
+    counter object already existed) left a real run stuck: a prior
+    invocation that hit the "ip protocol" rule-syntax bug (see below)
+    still created the COUNTER objects successfully before failing on the
+    RULE that references them, so on the next run -- even after fixing
+    the syntax -- every counter "already existed" and rule creation was
+    skipped entirely, leaving 15 orphaned, permanently-zero counters
+    with nothing ever incrementing them. A full delete+rebuild can't
+    end up in that half-wired state.
+    """
+    _run(["nft", "delete", "table", "inet", _NFT_TABLE])
     _run(["nft", "add", "table", "inet", _NFT_TABLE])
     _run(["nft", "add", "chain", "inet", _NFT_TABLE, "pre",
           "{ type filter hook prerouting priority -150; }"])
 
-    existing = _list_counter_names()
     for imsi, ip in ue_ip_map.items():
         for proto in _NFT_PROTOS:
             name = f"ue_{imsi}_{proto}"
-            if name in existing:
-                continue
             _run(["nft", "add", "counter", "inet", _NFT_TABLE, name])
             # "ip protocol <proto>" matches the IP protocol field --
             # a bare "tcp"/"udp"/"icmp" keyword instead starts a payload
