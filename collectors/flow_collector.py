@@ -9,7 +9,7 @@ class FlowCollector:
     def __init__(self):
         self.prev_flows = {}
 
-    def process_stats(self, dpid, body, exclude_src=None):
+    def process_stats(self, dpid, body, exclude_flow=None):
 
         flows = []
         now = time.time()
@@ -32,12 +32,14 @@ class FlowCollector:
             dst_ip = match.get("ipv4_dst")
             proto = match.get("ip_proto", 0)
 
-            # Optional Callable[[str], bool] -- flows whose source this
-            # returns True for belong to another domain's own detection
-            # pipeline (see telemetry/openflow_adapter.py's mobile-UE-
-            # subnet exclusion) and are skipped entirely, without even
-            # touching prev_flows for them.
-            if exclude_src and exclude_src(src_ip):
+            # Optional Callable[[str, str], bool] -- flows whose (src,
+            # dst) this returns True for belong to another domain's own
+            # detection pipeline (see telemetry/openflow_adapter.py's
+            # mobile-UE-subnet exclusion, which checks BOTH ends -- a
+            # real host's reply traffic back toward a UE is just as much
+            # excluded as the UE's own attack traffic) and are skipped
+            # entirely, without even touching prev_flows for them.
+            if exclude_flow and exclude_flow(src_ip, dst_ip):
                 continue
 
             # ---- ONLY destination port ----
@@ -115,7 +117,7 @@ class FlowCollector:
         return flows
 
     @staticmethod
-    def count_low_volume_flows(body, exclude_src=None):
+    def count_low_volume_flows(body, exclude_flow=None):
         """
         dst_ip -> number of currently active flows that have lived at
         least LOW_SLOW_MIN_AGE seconds but still total under
@@ -126,7 +128,7 @@ class FlowCollector:
         brand-new legitimate connection that simply hasn't sent much yet
         would look identical to a stalled one for the first few seconds.
 
-        exclude_src: optional Callable[[str], bool] -- see process_stats.
+        exclude_flow: optional Callable[[str, str], bool] -- see process_stats.
         """
         counts = defaultdict(int)
 
@@ -144,7 +146,7 @@ class FlowCollector:
             if not dst_ip:
                 continue
 
-            if exclude_src and exclude_src(match.get("ipv4_src")):
+            if exclude_flow and exclude_flow(match.get("ipv4_src"), dst_ip):
                 continue
 
             if (

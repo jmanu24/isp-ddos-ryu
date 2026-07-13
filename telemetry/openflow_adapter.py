@@ -36,6 +36,20 @@ def _is_mobile_ue_source(ip: Optional[str]) -> bool:
     except ValueError:
         return False
 
+
+def _is_mobile_ue_flow(src_ip: Optional[str], dst_ip: Optional[str]) -> bool:
+    """
+    True if EITHER end is a simulated UE -- not just the attack
+    direction (UE as source), but also reply/reflection traffic a real
+    host sends back toward a UE it was flooded by (e.g. h2's ICMP echo
+    replies to a UE's spoofed source during an ICMP flood: src=h2's real
+    IP, dst=the UE). That reverse direction is just as much this
+    traffic's own business as the forward one -- excluding only by
+    source left it fully visible to this domain's detection, which is
+    exactly what raced and blocked it instead of the mobile pipeline.
+    """
+    return _is_mobile_ue_source(src_ip) or _is_mobile_ue_source(dst_ip)
+
 # How long a _flow_meta entry is trusted for. Once a (src,dst) pair has a
 # cached L3 forwarding rule, traffic between them never triggers another
 # packet-in — even if a completely different L4 protocol starts flowing
@@ -113,13 +127,13 @@ class OpenFlowAdapter(DomainAdapter):
         Called by the controller's flow_stats_reply_handler.
         """
         for dst_ip, count in self._flow_collector.count_low_volume_flows(
-            body, exclude_src=_is_mobile_ue_source
+            body, exclude_flow=_is_mobile_ue_flow
         ).items():
             self._low_volume_flow_counts[dst_ip] = (
                 self._low_volume_flow_counts.get(dst_ip, 0) + count
             )
 
-        flows = self._flow_collector.process_stats(dpid, body, exclude_src=_is_mobile_ue_source)
+        flows = self._flow_collector.process_stats(dpid, body, exclude_flow=_is_mobile_ue_flow)
         events: List[TelemetryEvent] = []
 
         for flow in flows:
@@ -163,6 +177,16 @@ class OpenFlowAdapter(DomainAdapter):
 
         result = self._ddos_collector.process_packet(msg)
         if not result:
+            return []
+
+        if _is_mobile_ue_source(result["dst_ip"]):
+            # This whole window's destination is a simulated UE -- e.g. a
+            # real host's ICMP echo replies flowing back toward the UE's
+            # spoofed source during a flood. Every src_ip in this result
+            # shares the same dst_ip (DDoSCollector.process_packet
+            # windows per destination), so this excludes the entire
+            # result at once rather than relying only on the per-source
+            # check below. See _is_mobile_ue_flow's docstring.
             return []
 
         # Distribute the window's aggregate bps proportionally across
@@ -226,12 +250,13 @@ class OpenFlowAdapter(DomainAdapter):
         if not ip_pkt:
             return
 
-        if _is_mobile_ue_source(ip_pkt.src):
+        if _is_mobile_ue_flow(ip_pkt.src, ip_pkt.dst):
             # Belongs to MobileNetworkAdapter's own pipeline, not this
-            # domain's -- see _MOBILE_UE_SUBNET's comment. Since
-            # on_packet_in/on_flow_stats never emit events for this
-            # source either, there's nothing downstream that would ever
-            # consult metadata recorded here.
+            # domain's -- see _is_mobile_ue_flow's docstring (covers
+            # reply traffic too, not just the UE's own attack packets).
+            # Since on_packet_in/on_flow_stats never emit events for
+            # this pair either, there's nothing downstream that would
+            # ever consult metadata recorded here.
             return
 
         tcp_pkt = pkt.get_protocol(tcp.tcp)
