@@ -37,18 +37,53 @@ def _is_mobile_ue_source(ip: Optional[str]) -> bool:
         return False
 
 
-def _is_mobile_ue_flow(src_ip: Optional[str], dst_ip: Optional[str]) -> bool:
+# Same exclusion, for the broadband domain -- deploy/setup_bng_netns.sh's
+# --bridge-into-mininet step plugs BNGBlaster's real network-side veth
+# (veth-n-peer) into one of this ring's OVS switches, so its real
+# session-traffic packets now physically transit this domain's switches
+# too. session-traffic's downstream leg carries src=10.50.0.x (the
+# network side), dst=10.61.<vid>.x (the session's own access-side IP) --
+# see that script's own comments -- so both ranges need excluding, not
+# just the network subnet alone, or the downstream leg would still be
+# visible to (and race) this domain's detection exactly like unexcluded
+# mobile UE traffic once did.
+_BNG_NETWORK_SUBNET = ipaddress.ip_network("10.50.0.0/24")
+# Must match deploy/setup_bng_netns.sh's MAX_VLAN.
+_BNG_MAX_VLAN = 8
+_BNG_SESSION_SUBNETS = [
+    ipaddress.ip_network(f"10.61.{vid}.0/24") for vid in range(1, _BNG_MAX_VLAN + 1)
+]
+
+
+def _is_bng_source(ip: Optional[str]) -> bool:
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr in _BNG_NETWORK_SUBNET or any(addr in net for net in _BNG_SESSION_SUBNETS)
+
+
+def _is_simulated_domain_source(ip: Optional[str]) -> bool:
+    """Union of every other domain's simulated-traffic address space that
+    happens to also transit this domain's real OpenFlow switches."""
+    return _is_mobile_ue_source(ip) or _is_bng_source(ip)
+
+
+def _is_simulated_domain_flow(src_ip: Optional[str], dst_ip: Optional[str]) -> bool:
     """
-    True if EITHER end is a simulated UE -- not just the attack
-    direction (UE as source), but also reply/reflection traffic a real
-    host sends back toward a UE it was flooded by (e.g. h2's ICMP echo
-    replies to a UE's spoofed source during an ICMP flood: src=h2's real
-    IP, dst=the UE). That reverse direction is just as much this
-    traffic's own business as the forward one -- excluding only by
-    source left it fully visible to this domain's detection, which is
-    exactly what raced and blocked it instead of the mobile pipeline.
+    True if EITHER end belongs to another simulated domain -- not just
+    the attack direction (that domain's source), but also reply/
+    reflection traffic a real host sends back the other way (e.g. h2's
+    ICMP echo replies to a flooded UE's spoofed source: src=h2's real
+    IP, dst=the UE). That reverse direction is just as much the other
+    domain's own business as the forward one -- excluding only by
+    source left mobile UE traffic fully visible to this domain's
+    detection early on, which is exactly what raced and blocked it
+    instead of the mobile pipeline.
     """
-    return _is_mobile_ue_source(src_ip) or _is_mobile_ue_source(dst_ip)
+    return _is_simulated_domain_source(src_ip) or _is_simulated_domain_source(dst_ip)
 
 # How long a _flow_meta entry is trusted for. Once a (src,dst) pair has a
 # cached L3 forwarding rule, traffic between them never triggers another
@@ -127,13 +162,13 @@ class OpenFlowAdapter(DomainAdapter):
         Called by the controller's flow_stats_reply_handler.
         """
         for dst_ip, count in self._flow_collector.count_low_volume_flows(
-            body, exclude_flow=_is_mobile_ue_flow
+            body, exclude_flow=_is_simulated_domain_flow
         ).items():
             self._low_volume_flow_counts[dst_ip] = (
                 self._low_volume_flow_counts.get(dst_ip, 0) + count
             )
 
-        flows = self._flow_collector.process_stats(dpid, body, exclude_flow=_is_mobile_ue_flow)
+        flows = self._flow_collector.process_stats(dpid, body, exclude_flow=_is_simulated_domain_flow)
         events: List[TelemetryEvent] = []
 
         for flow in flows:
@@ -179,14 +214,17 @@ class OpenFlowAdapter(DomainAdapter):
         if not result:
             return []
 
-        if _is_mobile_ue_source(result["dst_ip"]):
-            # This whole window's destination is a simulated UE -- e.g. a
-            # real host's ICMP echo replies flowing back toward the UE's
-            # spoofed source during a flood. Every src_ip in this result
-            # shares the same dst_ip (DDoSCollector.process_packet
-            # windows per destination), so this excludes the entire
-            # result at once rather than relying only on the per-source
-            # check below. See _is_mobile_ue_flow's docstring.
+        if _is_simulated_domain_source(result["dst_ip"]):
+            # This whole window's destination belongs to another
+            # simulated domain (a mobile UE, or -- once bridged via
+            # deploy/setup_bng_netns.sh's --bridge-into-mininet -- a BNG
+            # session/network address) -- e.g. a real host's ICMP echo
+            # replies flowing back toward a flooded UE's spoofed source.
+            # Every src_ip in this result shares the same dst_ip
+            # (DDoSCollector.process_packet windows per destination), so
+            # this excludes the entire result at once rather than relying
+            # only on the per-source check below. See
+            # _is_simulated_domain_flow's docstring.
             return []
 
         # Distribute the window's aggregate bps proportionally across
@@ -203,10 +241,11 @@ class OpenFlowAdapter(DomainAdapter):
 
         events = []
         for src_ip, pps in result["src_pps"].items():
-            if _is_mobile_ue_source(src_ip):
-                # Real packets from a simulated mobile UE -- belongs to
-                # MobileNetworkAdapter's own KPM pipeline, not this
-                # domain's detection. See _MOBILE_UE_SUBNET's comment.
+            if _is_simulated_domain_source(src_ip):
+                # Real packets from a simulated mobile UE or bridged BNG
+                # session -- belongs to that other domain's own pipeline,
+                # not this one's detection. See _MOBILE_UE_SUBNET's/
+                # _BNG_NETWORK_SUBNET's comments.
                 continue
             meta = self._fresh_meta(src_ip, result["dst_ip"])
             dpid = meta["dpid"] if meta else fallback_dpid
@@ -250,10 +289,10 @@ class OpenFlowAdapter(DomainAdapter):
         if not ip_pkt:
             return
 
-        if _is_mobile_ue_flow(ip_pkt.src, ip_pkt.dst):
-            # Belongs to MobileNetworkAdapter's own pipeline, not this
-            # domain's -- see _is_mobile_ue_flow's docstring (covers
-            # reply traffic too, not just the UE's own attack packets).
+        if _is_simulated_domain_flow(ip_pkt.src, ip_pkt.dst):
+            # Belongs to another simulated domain's own pipeline, not
+            # this one's -- see _is_simulated_domain_flow's docstring
+            # (covers reply traffic too, not just the attack direction).
             # Since on_packet_in/on_flow_stats never emit events for
             # this pair either, there's nothing downstream that would
             # ever consult metadata recorded here.

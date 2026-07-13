@@ -41,6 +41,25 @@
 #   sudo ./deploy/setup_bng_netns.sh
 #   sudo ./deploy/setup_bng_netns.sh --teardown
 #   ./deploy/setup_bng_netns.sh --check-only
+#   sudo ./deploy/setup_bng_netns.sh --bridge-into-mininet          # bridges into s1
+#   sudo ./deploy/setup_bng_netns.sh --bridge-into-mininet s2       # bridges into a chosen switch
+#
+# --bridge-into-mininet [SWITCH]: opt-in, off by default. Plugs
+# veth-n-peer (the network/core side -- where BNGBlaster's real
+# session-traffic pps actually flows) into an already-running Mininet
+# ring topology's OVS switch (topologies/ring_topology.py, default
+# switch "s1"), so that traffic physically transits a real OpenFlow
+# switch and becomes visible to packet-in/OFPFlowStatsReply --
+# telemetry/openflow_adapter.py's _BNG_NETWORK_SUBNET/_BNG_SESSION_
+# SUBNETS then exclude it from the enterprise domain's own detection,
+# same as simulation/ue_traffic_generator.py's mobile UE traffic. A
+# no-op with a warning if that switch doesn't exist yet -- run
+# `sudo python3 topologies/ring_topology.py` in another terminal FIRST.
+# Requires moving NETWORK_PEER_ADDR off veth-n-peer onto the switch's
+# own internal port (an OVS bridge port can't answer ARP/hold an IP
+# directly -- only the bridge's internal port can), so BNGBlaster's
+# gateway ARP now resolves via the switch instead of veth-n-peer
+# directly -- functionally equivalent, one L2 hop either way.
 
 set -euo pipefail
 
@@ -67,12 +86,21 @@ DHCP_BLACKLIST_PATH="/tmp/bng_dhcp_blacklist.hosts"
 
 TEARDOWN=0
 CHECK_ONLY=0
+BRIDGE_SWITCH=""
+BRIDGE_STATE_FILE="/tmp/bng_bridge_switch"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --teardown) TEARDOWN=1; shift ;;
     --check-only) CHECK_ONLY=1; shift ;;
-    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --bridge-into-mininet)
+      if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
+        BRIDGE_SWITCH="$2"; shift 2
+      else
+        BRIDGE_SWITCH="s1"; shift
+      fi
+      ;;
+    -h|--help) sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -97,6 +125,19 @@ if [ "$TEARDOWN" -eq 1 ]; then
   # nothing.
   sudo pkill -f "dnsmasq.*${DNSMASQ_CONF}" 2>/dev/null && ok "dnsmasq de acceso detenido" || ok "dnsmasq de acceso no estaba corriendo"
   sudo rm -f "$DNSMASQ_CONF" "$DHCP_BLACKLIST_PATH"
+
+  # Un-bridge BEFORE deleting the veth pair below -- del-port/if-exists
+  # and the addr-del are no-ops (not errors) if the switch is already
+  # gone (e.g. the Mininet topology terminal was closed first), so this
+  # is safe regardless of teardown order.
+  if [ -f "$BRIDGE_STATE_FILE" ]; then
+    BSW=$(cat "$BRIDGE_STATE_FILE")
+    sudo ovs-vsctl --if-exists del-port "$BSW" "$NETWORK_PEER" 2>/dev/null || true
+    sudo ip addr del "$NETWORK_PEER_ADDR" dev "$BSW" 2>/dev/null || true
+    sudo rm -f "$BRIDGE_STATE_FILE"
+    ok "${NETWORK_PEER} desconectado de ${BSW}"
+  fi
+
   iface_exists "$ACCESS_IF" && sudo ip link del "$ACCESS_IF" && ok "${ACCESS_IF}/${ACCESS_PEER} eliminados"
   iface_exists "$NETWORK_IF" && sudo ip link del "$NETWORK_IF" && ok "${NETWORK_IF}/${NETWORK_PEER} eliminados"
   exit 0
@@ -250,8 +291,42 @@ echo "== 5. IP forwarding (para que el tráfico downstream de session-traffic vu
 sudo sysctl -qw net.ipv4.ip_forward=1
 ok "net.ipv4.ip_forward=1"
 
+if [ -n "$BRIDGE_SWITCH" ] && [ "$CHECK_ONLY" -eq 1 ]; then
+  echo "== 6. (opcional) Conectando ${NETWORK_PEER} al switch OVS ${BRIDGE_SWITCH} =="
+  sudo ovs-vsctl br-exists "$BRIDGE_SWITCH" 2>/dev/null \
+    && ok "switch ${BRIDGE_SWITCH} existe" \
+    || warn "switch ${BRIDGE_SWITCH} no existe -- corre 'sudo python3 topologies/ring_topology.py' primero"
+elif [ -n "$BRIDGE_SWITCH" ]; then
+  echo "== 6. (opcional) Conectando ${NETWORK_PEER} al switch OVS ${BRIDGE_SWITCH} =="
+
+  if ! sudo ovs-vsctl br-exists "$BRIDGE_SWITCH" 2>/dev/null; then
+    warn "'${BRIDGE_SWITCH}' no existe en OVS todavia -- omitiendo bridging (no-op)."
+    warn "Corre 'sudo python3 topologies/ring_topology.py' en otra terminal primero y reintenta."
+  else
+    # An OVS bridge port can't answer ARP/hold an IP directly once
+    # enslaved -- only the bridge's own internal port (same name as the
+    # bridge) can. Move NETWORK_PEER_ADDR there so BNGBlaster's gateway
+    # ARP keeps resolving, just one hop further in (functionally
+    # equivalent -- still a single L2 hop from veth-n's point of view).
+    if ip -4 addr show dev "$NETWORK_PEER" 2>/dev/null | grep -q "${NETWORK_PEER_ADDR%%/*}"; then
+      sudo ip addr del "$NETWORK_PEER_ADDR" dev "$NETWORK_PEER"
+    fi
+    sudo ovs-vsctl --may-exist add-port "$BRIDGE_SWITCH" "$NETWORK_PEER"
+    if ! ip -4 addr show dev "$BRIDGE_SWITCH" 2>/dev/null | grep -q "${NETWORK_PEER_ADDR%%/*}"; then
+      sudo ip addr add "$NETWORK_PEER_ADDR" dev "$BRIDGE_SWITCH"
+    fi
+    sudo ip link set "$BRIDGE_SWITCH" up
+    echo "$BRIDGE_SWITCH" | sudo tee "$BRIDGE_STATE_FILE" >/dev/null
+    ok "${NETWORK_PEER} conectado a ${BRIDGE_SWITCH} (gateway ${NETWORK_PEER_ADDR} movido a su puerto interno)"
+  fi
+fi
+
 echo ""
 echo "*** Red lista para BNGBlaster:"
 echo "    acceso : ${ACCESS_IF} (BNGBlaster) <-> ${ACCESS_PEER} (dnsmasq, ${ACCESS_PEER_ADDR})"
-echo "    red    : ${NETWORK_IF} (BNGBlaster) <-> ${NETWORK_PEER} (gateway, ${NETWORK_PEER_ADDR})"
+if [ -f "$BRIDGE_STATE_FILE" ]; then
+  echo "    red    : ${NETWORK_IF} (BNGBlaster) <-> ${NETWORK_PEER} <-> switch OVS $(cat "$BRIDGE_STATE_FILE") (gateway ${NETWORK_PEER_ADDR})"
+else
+  echo "    red    : ${NETWORK_IF} (BNGBlaster) <-> ${NETWORK_PEER} (gateway, ${NETWORK_PEER_ADDR})"
+fi
 echo "    Siguiente paso: ./deploy/run_bng_scenario.sh <escenario>"

@@ -33,6 +33,18 @@
 #   sudo ./deploy/run_bng_scenario.sh syn_flood --no-controller
 #   sudo ./deploy/run_bng_scenario.sh syn_flood --keep-network
 #   sudo ./deploy/run_bng_scenario.sh --teardown-network
+#   sudo ./deploy/run_bng_scenario.sh syn_flood --bridge-into-mininet
+#   sudo ./deploy/run_bng_scenario.sh syn_flood --bridge-into-mininet s2
+#
+# --bridge-into-mininet [SWITCH]: opt-in, off by default -- passed
+# straight through to deploy/setup_bng_netns.sh (see that script's own
+# header for the full explanation). Plugs BNGBlaster's real network-side
+# traffic into a real OVS switch from an ALREADY-RUNNING Mininet ring
+# topology, so it's observable by the SDN pipeline instead of staying
+# confined to its own veth sandbox. This script does NOT start that
+# topology itself -- run `sudo python3 topologies/ring_topology.py` in
+# another terminal FIRST, or this flag degrades to a harmless no-op
+# (with a warning) if the target switch isn't there yet.
 #
 # Must run as root (or with sudo) -- BNGBlaster needs raw sockets and
 # the netns setup needs to create interfaces.
@@ -49,6 +61,7 @@ TARGET_IP="10.0.2.10"
 START_CONTROLLER=1
 TEARDOWN_NETWORK=0
 KEEP_NETWORK=0
+BRIDGE_SWITCH=""
 EXTRA_SIM_ARGS=()
 
 while [ $# -gt 0 ]; do
@@ -59,7 +72,14 @@ while [ $# -gt 0 ]; do
     --tick) TICK="$2"; shift 2 ;;
     --target-ip) TARGET_IP="$2"; shift 2 ;;
     --no-controller) START_CONTROLLER=0; shift ;;
-    -h|--help) sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --bridge-into-mininet)
+      if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
+        BRIDGE_SWITCH="$2"; shift 2
+      else
+        BRIDGE_SWITCH="s1"; shift
+      fi
+      ;;
+    -h|--help) sed -n '2,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)
       if [ -z "$SCENARIO" ]; then SCENARIO="$1"; shift; else EXTRA_SIM_ARGS+=("$1"); shift; fi
       ;;
@@ -102,7 +122,14 @@ echo "== 2. Configurando red (veth + dnsmasq) =="
 # rerun against interfaces an older run had already created (confirmed:
 # the conflicting-fe80-address warning kept appearing even after that
 # fix landed, because this script's own existence check bypassed it).
-./deploy/setup_bng_netns.sh
+if [ -n "$BRIDGE_SWITCH" ]; then
+  echo "  --bridge-into-mininet ${BRIDGE_SWITCH}: asegurate de que 'sudo python3 topologies/ring_topology.py'"
+  echo "  ya este corriendo en otra terminal -- si '${BRIDGE_SWITCH}' no existe todavia en OVS, este paso"
+  echo "  lo omite con una advertencia en vez de fallar."
+  ./deploy/setup_bng_netns.sh --bridge-into-mininet "$BRIDGE_SWITCH"
+else
+  ./deploy/setup_bng_netns.sh
+fi
 
 CONTROLLER_PID=""
 cleanup() {
