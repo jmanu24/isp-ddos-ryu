@@ -143,8 +143,14 @@ def _ensure_nft_setup(ue_ip_map: Dict[int, str]) -> None:
             if name in existing:
                 continue
             _run(["nft", "add", "counter", "inet", _NFT_TABLE, name])
+            # "ip protocol <proto>" matches the IP protocol field --
+            # a bare "tcp"/"udp"/"icmp" keyword instead starts a payload
+            # expression (nft then expects a field like sport/dport to
+            # follow it, not "counter"), which is NOT the same thing and
+            # fails with "unexpected counter, expecting length or
+            # checksum or sport or dport" (confirmed against a real run).
             result = _run(["nft", "add", "rule", "inet", _NFT_TABLE, "pre",
-                           "ip", "saddr", ip, proto, "counter", "name", name])
+                           "ip", "saddr", ip, "ip", "protocol", proto, "counter", "name", name])
             if result.returncode != 0:
                 print(f"[MOBILE-MON] WARNING: no se pudo instalar el contador nft "
                       f"para imsi={imsi} proto={proto}: {result.stderr.strip()}", file=sys.stderr)
