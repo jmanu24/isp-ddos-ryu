@@ -25,6 +25,7 @@ Usage (root, Linux, with Mininet + hping3 + nft installed):
   sudo python3 simulation/ue_traffic_generator.py --scenario udp_flood
   sudo python3 simulation/ue_traffic_generator.py --scenario distributed_syn --duration 90
   sudo python3 simulation/ue_traffic_generator.py --scenario low_slow --duration 120
+  sudo python3 simulation/ue_traffic_generator.py --interactive
 
 See deploy/run_mobile_scenario.sh for the full controller+topology+
 generator+monitor pipeline in one command.
@@ -431,11 +432,339 @@ def _tick_loop(ues: List[UeSpec], ues_by_imsi: Dict[int, UeSpec], host_map: dict
 
 
 # ---------------------------------------------------------------------------
+# Interactive mode -- menu-driven, mirrors ul_traffic_simulator.py's
+# --interactive (same _print_async/_prompt* pattern so a background
+# thread's status lines never garble whatever the user is mid-typing)
+# and bng_interactive.py's real-process start/stop semantics (a UE
+# "attacking" is a live hping3 process, not just an in-memory flag --
+# "elegir otro ataque" tears down the previous UE(s)' process and starts
+# a fresh one, same as bng_interactive.py's "cambiar").
+# ---------------------------------------------------------------------------
+
+_CURRENT_PROMPT = {"text": None}
+
+
+def _print_async(message: str) -> None:
+    prompt_text = _CURRENT_PROMPT["text"]
+    if prompt_text:
+        print()
+        print(message)
+        print(prompt_text, end="", flush=True)
+    else:
+        print(message)
+
+
+def _prompt(prompt: str, default: str = None) -> str:
+    suffix = f" [{default}]" if default is not None else ""
+    text = f"{prompt}{suffix}: "
+    _CURRENT_PROMPT["text"] = text
+    try:
+        raw = input(text).strip()
+    finally:
+        _CURRENT_PROMPT["text"] = None
+    return raw if raw else (default or "")
+
+
+def _prompt_int(prompt: str, default: int, min_value: int = None) -> int:
+    while True:
+        raw = _prompt(prompt, str(default))
+        try:
+            value = int(raw)
+        except ValueError:
+            print("  Ingresa un numero entero valido.")
+            continue
+        if min_value is not None and value < min_value:
+            print(f"  Debe ser >= {min_value}.")
+            continue
+        return value
+
+
+_ATTACK_TYPES = {
+    "1": ("UDP Flood", "single"),
+    "2": ("TCP SYN Flood", "single"),
+    "3": ("ICMP Flood", "single"),
+    "4": ("Distributed TCP SYN Flood", "distributed"),
+    "5": ("Low and Slow", "low_slow"),
+}
+
+# One ring host per pool UE, round-robin -- and a distinct real ring
+# target per host (never itself) so benign traffic is guaranteed to
+# transit r1 (nft's prerouting hook counts it there regardless of
+# whether r1 can route it any further).
+_POOL_HOSTS = ["h1", "h2", "h3", "h4"]
+_POOL_TARGETS = {"h1": "10.0.2.10", "h2": "10.0.3.10", "h3": "10.0.4.10", "h4": "10.0.1.10"}
+
+
+def _build_interactive_pool(n: int) -> List[UeSpec]:
+    pool = []
+    for i in range(n):
+        host = _POOL_HOSTS[i % len(_POOL_HOSTS)]
+        pool.append(UeSpec(
+            imsi=i + 1, ip=f"10.60.0.{2 + i}", physical_host=host, gnb_id=_GNB_ID,
+            target_ip=_POOL_TARGETS[host], protocol="ICMP", benign=True,
+        ))
+    return pool
+
+
+def _print_pool_menu(pool: List[UeSpec]) -> None:
+    attacking = sum(1 for u in pool if not u.benign)
+    print()
+    print("=== Simulador interactivo de trafico movil (hping3 real) ===")
+    print(f"UEs configuradas: {len(pool)} ({attacking} atacando actualmente)")
+    print("Elige un tipo de ataque:")
+    print("  1) UDP Flood")
+    print("  2) TCP SYN Flood")
+    print("  3) ICMP Flood")
+    print("  4) Distributed TCP SYN Flood (varias UE como origen)")
+    print("  5) Low and Slow")
+    print("  0) Salir")
+
+
+def _free_ues(pool: List[UeSpec]) -> List[UeSpec]:
+    """UEs currently running their benign loop -- available to repurpose
+    as an attacker. Mirrors ul_traffic_simulator.py's _free_ues (there,
+    "free" means attack_window is None; here it means ue.benign is still
+    True, i.e. no attack hping3 process has replaced its benign loop)."""
+    return [ue for ue in pool if ue.benign]
+
+
+def _choose_single_attacker(pool: List[UeSpec]) -> "UeSpec | None":
+    free = _free_ues(pool)
+    if not free:
+        print("  No hay ninguna UE libre (todas atacando ya). Detén un ataque primero.")
+        return None
+    print("  UEs disponibles: " + ", ".join(f"IMSI {u.imsi} ({u.ip}, host {u.physical_host})" for u in free))
+    while True:
+        raw = _prompt("  Que UE ataca? (IMSI)", str(free[0].imsi))
+        matches = [u for u in free if str(u.imsi) == raw]
+        if matches:
+            return matches[0]
+        print("  Esa UE no existe o ya esta ocupada -- elige una de la lista.")
+
+
+def _choose_group(pool: List[UeSpec], min_sources: int, default_count: int) -> "List[UeSpec] | None":
+    free = _free_ues(pool)
+    if len(free) < min_sources:
+        print(f"  Solo hay {len(free)} UE(s) libres y este ataque necesita al menos "
+              f"{min_sources} para que el detector lo clasifique como tal. "
+              f"Detén otro ataque o configura mas UEs al iniciar.")
+        if not free:
+            return None
+    count = _prompt_int(
+        f"  Cuantas UEs participan? (minimo recomendado {min_sources}, libres: {len(free)})",
+        default=min(default_count, len(free)) if free else default_count,
+    )
+    if count > len(free):
+        print(f"  Solo hay {len(free)} libres -- se usaran todas.")
+        count = len(free)
+    if count < min_sources:
+        print(f"  Aviso: con {count} UE(s) es posible que el detector NO lo clasifique "
+              f"como este tipo de ataque (minimo recomendado: {min_sources}).")
+    return free[:count]
+
+
+def _prompt_rate_flags(default) -> List[str]:
+    raw = _prompt("  Tasa (pps por UE, o 'flood' para maxima velocidad)", str(default))
+    if raw.strip().lower() in ("flood", "f"):
+        return ["--flood"]
+    try:
+        pps = max(1.0, float(raw))
+    except ValueError:
+        return ["--flood"]
+    return ["-i", f"u{max(1, round(1e6 / pps))}"]
+
+
+def _start_attack(ue: UeSpec, host, state: _RuntimeState, protocol: str, dst_port: int,
+                   target_ip: str, low_slow: bool, rate_flags: List[str]) -> None:
+    _terminate(state.procs.pop(ue.imsi, None))  # stop its benign loop
+    ue.protocol, ue.dst_port, ue.target_ip = protocol, dst_port, target_ip
+    ue.low_slow, ue.rate_flags, ue.benign = low_slow, rate_flags, False
+    state.procs[ue.imsi] = host.popen(_hping3_argv(ue), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _stop_attack(ue: UeSpec, host, state: _RuntimeState) -> None:
+    _terminate(state.procs.pop(ue.imsi, None))
+    ue.benign = True
+    state.procs[ue.imsi] = host.popen(_benign_loop_argv(ue), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _configure_attack(pool: List[UeSpec], host_map: dict, state: _RuntimeState,
+                       lock: threading.Lock) -> "tuple | None":
+    while True:
+        _print_pool_menu(pool)
+        choice = _prompt("Opcion", "0")
+        if choice == "0":
+            return None
+        if choice not in _ATTACK_TYPES:
+            print("  Opcion no valida.")
+            continue
+        name, kind = _ATTACK_TYPES[choice]
+        break
+
+    target_ip = _prompt("  IP objetivo del ataque", "10.0.2.10")
+
+    if kind == "single":
+        ue = _choose_single_attacker(pool)
+        if ue is None:
+            return None
+        if choice == "1":  # UDP Flood
+            protocol, dst_port = "UDP", 0
+        elif choice == "2":  # TCP SYN Flood
+            dst_port = _prompt_int("  Puerto TCP objetivo", 443)
+            protocol = "TCP_SYN"
+        else:  # ICMP Flood
+            protocol, dst_port = "ICMP", 0
+        rate_flags = _prompt_rate_flags("flood")
+        with lock:
+            _start_attack(ue, host_map[ue.physical_host], state, protocol, dst_port, target_ip, False, rate_flags)
+        return f"{name} desde IMSI {ue.imsi} ({ue.ip}) -> {target_ip}:{dst_port}", [ue]
+
+    if kind == "distributed":
+        group = _choose_group(pool, settings.DIST_MIN_SOURCES, default_count=5)
+        if not group:
+            return None
+        dst_port = _prompt_int("  Puerto TCP objetivo", 443)
+        rate_flags = _prompt_rate_flags(100)  # ~pps/source clearing SYN_THRESHOLD with margin
+        with lock:
+            for ue in group:
+                _start_attack(ue, host_map[ue.physical_host], state, "TCP_SYN", dst_port, target_ip, False, rate_flags)
+        imsis = ", ".join(str(u.imsi) for u in group)
+        return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip}:{dst_port}", group
+
+    # low_slow
+    group = _choose_group(pool, settings.LOW_SLOW_MOBILE_MIN_SOURCES,
+                           default_count=settings.LOW_SLOW_MOBILE_MIN_SOURCES)
+    if not group:
+        return None
+    dst_port = _prompt_int("  Puerto TCP objetivo", 80)
+    rate_flags = _prompt_rate_flags(2)  # stays comfortably under LOW_SLOW_MOBILE_MAX_PPS=8.0
+    with lock:
+        for ue in group:
+            _start_attack(ue, host_map[ue.physical_host], state, "TCP", dst_port, target_ip, True, rate_flags)
+    imsis = ", ".join(str(u.imsi) for u in group)
+    return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip}:{dst_port}", group
+
+
+def _apply_mitigation(ue: UeSpec, host, state: _RuntimeState) -> None:
+    """
+    Reacts to a real block/rate_limit command for an attacking UE by
+    immediately reverting it to its benign loop -- unlike the headless
+    generator (whose _reconcile_ue also has an attack window/duration to
+    respect), here the user is driving attacks manually, so "mitigated"
+    simply means "back to normal now"; there's nothing else scheduling
+    this UE to attack again. The controller's own check_unblocks()/
+    UNBLOCK_CONFIRM_CYCLES still drive the REAL unblock timing on its
+    side -- this script doesn't need to replicate that.
+    """
+    _stop_attack(ue, host, state)
+
+
+def _rc_watch_loop(pool_by_imsi: Dict[int, UeSpec], host_map: dict, state: _RuntimeState,
+                    rc_path: str, tick: float, lock: threading.Lock, stop_event: threading.Event) -> None:
+    offset = 0
+    while not stop_event.is_set():
+        commands, offset = _read_new_commands(rc_path, offset)
+        for command in commands:
+            if command.get("action") == "unblock":
+                continue  # already reverted to benign immediately on block, see _apply_mitigation
+            ue = pool_by_imsi.get(command.get("imsi"))
+            if ue is None or ue.benign:
+                continue
+            with lock:
+                _apply_mitigation(ue, host_map[ue.physical_host], state)
+            _print_async(f"[MOBILE-INT] Mitigado: IMSI {ue.imsi} ({ue.ip}) bloqueado por el "
+                         f"controlador -> vuelve a trafico normal")
+        stop_event.wait(tick)
+
+
+def run_interactive(args) -> None:
+    print("=== Simulador interactivo del dominio Mobile (hping3 real) ===")
+    n = _prompt_int("Cuantas UEs quieres simular?", default=3, min_value=2)
+    pool = _build_interactive_pool(n)
+    pool_by_imsi = {ue.imsi: ue for ue in pool}
+
+    Path(args.rc_command_queue).write_text("")
+    _write_ue_ip_map(pool, Path(args.ue_ip_map))
+    _write_ue_state(pool, args.ue_state_path)
+
+    print(f"*** {n} UE(s) configuradas:")
+    for ue in pool:
+        print(f"  IMSI {ue.imsi} -> {ue.ip} (host {ue.physical_host}, gNB {ue.gnb_id})")
+
+    net, r1, hosts = build_topology()
+    host_map = {h.name: h for h in hosts}
+    state = _RuntimeState()
+    lock = threading.Lock()
+    stop_event = threading.Event()
+    monitor_proc = None
+
+    try:
+        if not args.no_monitor:
+            monitor_argv = [
+                "python3", str(REPO_DIR / "simulation" / "ue_kpm_monitor.py"),
+                "--csv-path", args.csv_path,
+                "--ue-ip-map", args.ue_ip_map,
+                "--ue-state-path", args.ue_state_path,
+                "--tick", str(settings.COLLECT_INTERVAL),
+            ]
+            monitor_proc = r1.popen(monitor_argv)
+            print("*** ue_kpm_monitor.py corriendo en r1")
+
+        with lock:
+            for ue in pool:
+                state.procs[ue.imsi] = host_map[ue.physical_host].popen(
+                    _benign_loop_argv(ue), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("*** Trafico benigno de fondo iniciado para todas las UEs")
+
+        rc_thread = threading.Thread(
+            target=_rc_watch_loop,
+            args=(pool_by_imsi, host_map, state, args.rc_command_queue, args.tick, lock, stop_event),
+            daemon=True,
+        )
+        rc_thread.start()
+
+        while True:
+            result = _configure_attack(pool, host_map, state, lock)
+            if result is None:
+                break
+            description, attacking_ues = result
+            print(f"\n*** Ataque iniciado: {description}")
+            print("Escribe 'stop' y Enter para detenerlo y elegir otro ataque.")
+            while True:
+                _CURRENT_PROMPT["text"] = "> "
+                try:
+                    cmd = input("> ").strip().lower()
+                finally:
+                    _CURRENT_PROMPT["text"] = None
+                if cmd == "":
+                    continue
+                if cmd in ("stop", "s"):
+                    with lock:
+                        for ue in attacking_ues:
+                            if not ue.benign:  # a controller mitigation may have already stopped it
+                                _stop_attack(ue, host_map[ue.physical_host], state)
+                    print("*** Ataque detenido. Las UEs volvieron a trafico normal.")
+                    break
+                print("  Comando no reconocido -- escribe 'stop' para detener el ataque actual.")
+    except (KeyboardInterrupt, EOFError):
+        print()
+    finally:
+        print("*** Cerrando...")
+        stop_event.set()
+        for proc in state.procs.values():
+            _terminate(proc)
+        _terminate(monitor_proc)
+        net.stop()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--interactive", action="store_true",
+                         help="menu-driven mode: choose/stop attacks on demand instead of a fixed scenario")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="udp_flood")
     parser.add_argument("--duration", type=float, default=0.0,
                          help="total seconds to run; 0 = forever, drops into the Mininet CLI (Ctrl-D to stop)")
@@ -454,6 +783,10 @@ def main():
     if os.geteuid() != 0:
         print("ERROR: corre esto como root -- Mininet/hping3 necesitan sockets raw.", file=sys.stderr)
         sys.exit(1)
+
+    if args.interactive:
+        run_interactive(args)
+        return
 
     attack_end_s = args.attack_end_s
     if attack_end_s is None:
