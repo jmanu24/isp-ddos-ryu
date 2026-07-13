@@ -1,3 +1,4 @@
+import ipaddress
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -11,6 +12,29 @@ from collectors.ddos_collector import DDoSCollector
 
 
 _PROTO_NAMES = {1: "ICMP", 6: "TCP", 17: "UDP"}
+
+# Address space simulation/ue_traffic_generator.py spoofs mobile UE
+# source IPs from (10.60.0.x). That traffic is real packets crossing
+# these same OpenFlow switches, but it is NOT this domain's traffic to
+# detect or mitigate -- MobileNetworkAdapter's own KPM CSV pipeline (fed
+# by simulation/ue_kpm_monitor.py's real nftables measurement of that
+# same traffic) is the intended detector/mitigator for it. Without this
+# exclusion, this domain's own packet-in/flow-stats detection races it
+# and virtually always wins (it reacts within one packet-in instead of
+# one KPM-CSV poll cycle), firing a network-wide drop rule before -- or
+# instead of -- the mobile-domain RC command queue ever gets a chance to
+# throttle the UE at the RAN level, defeating the entire point of
+# simulating that path.
+_MOBILE_UE_SUBNET = ipaddress.ip_network("10.60.0.0/24")
+
+
+def _is_mobile_ue_source(ip: Optional[str]) -> bool:
+    if not ip:
+        return False
+    try:
+        return ipaddress.ip_address(ip) in _MOBILE_UE_SUBNET
+    except ValueError:
+        return False
 
 # How long a _flow_meta entry is trusted for. Once a (src,dst) pair has a
 # cached L3 forwarding rule, traffic between them never triggers another
@@ -88,12 +112,14 @@ class OpenFlowAdapter(DomainAdapter):
         Process an OFPFlowStatsReply body and convert flows to TelemetryEvents.
         Called by the controller's flow_stats_reply_handler.
         """
-        for dst_ip, count in self._flow_collector.count_low_volume_flows(body).items():
+        for dst_ip, count in self._flow_collector.count_low_volume_flows(
+            body, exclude_src=_is_mobile_ue_source
+        ).items():
             self._low_volume_flow_counts[dst_ip] = (
                 self._low_volume_flow_counts.get(dst_ip, 0) + count
             )
 
-        flows = self._flow_collector.process_stats(dpid, body)
+        flows = self._flow_collector.process_stats(dpid, body, exclude_src=_is_mobile_ue_source)
         events: List[TelemetryEvent] = []
 
         for flow in flows:
@@ -153,6 +179,11 @@ class OpenFlowAdapter(DomainAdapter):
 
         events = []
         for src_ip, pps in result["src_pps"].items():
+            if _is_mobile_ue_source(src_ip):
+                # Real packets from a simulated mobile UE -- belongs to
+                # MobileNetworkAdapter's own KPM pipeline, not this
+                # domain's detection. See _MOBILE_UE_SUBNET's comment.
+                continue
             meta = self._fresh_meta(src_ip, result["dst_ip"])
             dpid = meta["dpid"] if meta else fallback_dpid
             in_port = meta["in_port"] if meta else fallback_in_port
@@ -193,6 +224,14 @@ class OpenFlowAdapter(DomainAdapter):
         pkt = packet.Packet(msg.data)
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
         if not ip_pkt:
+            return
+
+        if _is_mobile_ue_source(ip_pkt.src):
+            # Belongs to MobileNetworkAdapter's own pipeline, not this
+            # domain's -- see _MOBILE_UE_SUBNET's comment. Since
+            # on_packet_in/on_flow_stats never emit events for this
+            # source either, there's nothing downstream that would ever
+            # consult metadata recorded here.
             return
 
         tcp_pkt = pkt.get_protocol(tcp.tcp)

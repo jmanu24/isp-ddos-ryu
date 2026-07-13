@@ -9,7 +9,7 @@ class FlowCollector:
     def __init__(self):
         self.prev_flows = {}
 
-    def process_stats(self, dpid, body):
+    def process_stats(self, dpid, body, exclude_src=None):
 
         flows = []
         now = time.time()
@@ -31,6 +31,14 @@ class FlowCollector:
             src_ip = match.get("ipv4_src")
             dst_ip = match.get("ipv4_dst")
             proto = match.get("ip_proto", 0)
+
+            # Optional Callable[[str], bool] -- flows whose source this
+            # returns True for belong to another domain's own detection
+            # pipeline (see telemetry/openflow_adapter.py's mobile-UE-
+            # subnet exclusion) and are skipped entirely, without even
+            # touching prev_flows for them.
+            if exclude_src and exclude_src(src_ip):
+                continue
 
             # ---- ONLY destination port ----
             dst_port = None
@@ -107,7 +115,7 @@ class FlowCollector:
         return flows
 
     @staticmethod
-    def count_low_volume_flows(body):
+    def count_low_volume_flows(body, exclude_src=None):
         """
         dst_ip -> number of currently active flows that have lived at
         least LOW_SLOW_MIN_AGE seconds but still total under
@@ -117,6 +125,8 @@ class FlowCollector:
         unlike a volumetric flood. The age check matters — without it, a
         brand-new legitimate connection that simply hasn't sent much yet
         would look identical to a stalled one for the first few seconds.
+
+        exclude_src: optional Callable[[str], bool] -- see process_stats.
         """
         counts = defaultdict(int)
 
@@ -132,6 +142,9 @@ class FlowCollector:
             dst_ip = match.get("ipv4_dst")
 
             if not dst_ip:
+                continue
+
+            if exclude_src and exclude_src(match.get("ipv4_src")):
                 continue
 
             if (
