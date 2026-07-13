@@ -1,0 +1,468 @@
+"""
+bng_traffic_simulator.py — Fixed Broadband Domain (BNG) DDoS simulator.
+
+Linux-only -- BNGBlaster needs raw-socket access (root or
+cap_net_raw,cap_net_admin) and real network interfaces (a veth pair is
+the simplest setup -- see deploy/setup_bng_netns.sh). It does not run
+on macOS, so this is written and reviewed here but only actually
+exercised on the Ubuntu test VM (same split as the rest of this repo's
+O-RAN pipeline -- see oran_e2_pipeline_status memory).
+
+Unlike simulation/ul_traffic_simulator.py (a pure-Python synthetic
+producer standing in for telemetry no real pipeline could deliver),
+this drives the REAL bngblaster binary: real PPPoE/IPoE sessions, real
+packets on the wire, real counters read back over its control socket
+(simulation/bng_socket.py). BNGBlaster has no push/streaming telemetry
+(no gRPC dial-out, no Kafka/Prometheus plugin) -- only a Unix-socket
+JSON-RPC API, so this polls it on a tick loop.
+
+Telemetry is collected PER SESSION (session-info for each session's own
+framed IP, session-streams for its own tx rate) -- BNGBlaster's native
+unit of "one subscriber" -- not pre-aggregated across sessions. This
+matters for two of the five attack types: Distributed TCP SYN Flood and
+Low and Slow are only classifiable as such if DDoSDetectionEngine sees
+DISTINCT source IPs per session (its entropy/source-count checks operate
+on TelemetryEvent.src_ip) -- collapsing all sessions into one row would
+make every scenario look like a single attacker.
+
+Output: appends rows to DEFAULT_CSV_PATH in the column order
+BroadbandAdapter.collect() expects (telemetry/broadband_adapter.py) --
+same role parse_xapp_kpm_log.py's CSV plays for MobileNetworkAdapter.
+
+The core logic lives in BngScenarioSession (start/tick/start_attack/
+stop_attack/stop) so simulation/bng_interactive.py can drive the same
+real BNGBlaster process interactively instead of for a fixed scripted
+duration -- see that module for the menu-driven equivalent of
+ul_traffic_simulator.py's --interactive mode.
+
+Usage (on the Ubuntu VM, as root or with cap_net_raw/cap_net_admin set
+on the bngblaster binary -- see deploy/install_bngblaster.sh):
+  sudo python3 simulation/bng_traffic_simulator.py --scenario syn_flood
+  sudo python3 simulation/bng_traffic_simulator.py --scenario udp_flood
+  sudo python3 simulation/bng_traffic_simulator.py --scenario icmp_flood
+  sudo python3 simulation/bng_traffic_simulator.py --scenario distributed_syn_flood
+  sudo python3 simulation/bng_traffic_simulator.py --scenario low_and_slow --duration 120
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_DIR))
+from simulation.bng_config import SCENARIOS, build_scenario  # noqa: E402
+from simulation.bng_socket import BngControlSocket, wait_for_socket  # noqa: E402
+
+DEFAULT_CSV_PATH = "/tmp/ddos_bng_events.csv"
+# Must match telemetry/broadband_adapter.py's _CSV_COLUMNS exactly.
+# "mac" lets BroadbandAdapter.apply_mitigation() blacklist the
+# attacking session's MAC at the DHCP level (dnsmasq dhcp-hostsfile,
+# "<mac>,ignore"), not just session-stop it -- session-stop alone gets
+# silently undone the moment the session naturally re-DHCPs (BNGBlaster
+# re-establishes it on its own periodically; confirmed on a real run),
+# but dnsmasq will keep refusing that MAC a lease until the block is
+# lifted regardless of how many times BNGBlaster retries.
+CSV_COLUMNS = [
+    "timestamp", "session_id", "device_id", "src_ip", "mac", "dst_ip", "dst_port",
+    "protocol", "pps", "bps", "sessions_established", "sessions_flapped",
+]
+
+DEFAULT_CONFIG_PATH = "/tmp/bng_run_config.json"
+DEFAULT_SOCK_PATH = "/tmp/bng_run.sock"
+DEFAULT_BNG_BINARY = "/usr/sbin/bngblaster"
+_NORMAL_DST_PORT = 80
+_NORMAL_PROTOCOL = "TCP"
+
+
+def _extract_rate(stats: dict) -> tuple:
+    """
+    Pulls (pps, bps) out of a real `session-streams` response, confirmed
+    against a live run:
+        {"status": "ok", "code": 200, "session-streams": {
+            "session-id": 1, "rx-packets": 0, "tx-packets": 6,
+            "rx-pps": 0, "tx-pps": 0, "rx-bps-l2": 0, "tx-bps-l2": 728,
+            "rx-mbps-l2": 0.0, "tx-mbps-l2": 0.000728, "streams": []}}
+    -- "session-streams" is the per-SESSION aggregate (not a list), with
+    an optional nested "streams" list breaking it down per individual
+    stream (empty unless BNGBlaster attaches per-stream detail; this
+    pipeline doesn't need that breakdown, the session-level tx-pps/
+    tx-bps-l2 already covers what one subscriber session sent). Field
+    name is "...-bps-l2" (the actual key), not the "...-bps" this code
+    originally guessed -- that earlier guess silently produced bps=0.0
+    forever (no error, just an always-empty bps column) until a real
+    run surfaced the right name.
+    """
+    node = stats.get("session-streams", stats)
+    if not isinstance(node, dict):
+        return 0.0, 0.0
+    pps = node.get("tx-pps", node.get("rx-pps", 0.0))
+    bps = node.get("tx-bps-l2", node.get("rx-bps-l2", 0.0))
+    return float(pps or 0.0), float(bps or 0.0)
+
+
+def _extract_session_info(info: dict, session_id: int) -> tuple:
+    """Pulls this session's own framed (subscriber-side) IPv4 address and
+    MAC out of a session-info response -- the address is the real
+    per-subscriber source address that makes distinct-source detection
+    (Distributed TCP SYN Flood, Low and Slow) possible; the MAC is what
+    BroadbandAdapter.apply_mitigation() blacklists at the DHCP level
+    (dnsmasq dhcp-hostsfile). Returns (address, mac, confirmed) --
+    confirmed is True only when a real address field was found, so the
+    caller knows not to cache a placeholder permanently.
+
+    Response is wrapped (confirmed on a real run: {"status":...,
+    "session-info": {"session-id":..., "mac": "02:00:00:00:00:01",
+    ...}}), unlike the flat dict this originally assumed. session_id is
+    taken from the caller's own loop variable, not re-read out of the
+    response.
+    """
+    node = info.get("session-info", info)
+    mac = node.get("mac") if isinstance(node, dict) else None
+    if isinstance(node, dict):
+        for key in ("ipv4-address", "framed-ip-address", "ip-address"):
+            addr = node.get(key)
+            if isinstance(addr, str) and addr:
+                return addr.split("/")[0], mac, True
+    placeholder = f"10.50.{(session_id // 254) % 254}.{(session_id % 254) + 1}"
+    return placeholder, mac, False
+
+
+def _extract_session_counters(stats: dict) -> tuple:
+    sc = stats.get("session-counters", stats)
+    established = sc.get("sessions-established", sc.get("sessions", 0))
+    flapped = sc.get("sessions-flapped", 0)
+    return int(established or 0), int(flapped or 0)
+
+
+def _extract_icmp_send_count(resp: dict) -> int:
+    """Pulls the cumulative "send" counter out of an `icmp-clients`
+    response -- confirmed on a real run this is the ONLY place
+    icmp-client traffic is counted at all: session-streams' tx-pps
+    stays flat at whatever session-traffic alone contributes,
+    completely ignoring icmp-client volume, even while `icmp-clients`
+    itself shows "state": "started" and a real, growing "send". This
+    is a cumulative count, not a rate -- the caller diffs it against
+    the previous tick's value to get pps itself.
+        {"status": "ok", "code": 200, "icmp-clients": [
+            {"session-id": 1, "icmp-client-group-id": 200,
+             "state": "started", "send": 1905, "received": 0, ...}]}
+    """
+    clients = resp.get("icmp-clients", [])
+    if not clients or not isinstance(clients, list):
+        return 0
+    return int(clients[0].get("send", 0) or 0)
+
+
+def _append_csv_rows(csv_path: str, rows: list) -> None:
+    if not rows:
+        return
+    is_new = not os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        if is_new:
+            f.write(",".join(CSV_COLUMNS) + "\n")
+        for row in rows:
+            f.write(",".join(str(row[c]) for c in CSV_COLUMNS) + "\n")
+
+
+class BngScenarioSession:
+    """
+    Owns one running bngblaster process for one scenario -- launches it,
+    polls per-session telemetry into the CSV on demand (tick()), and
+    starts/stops the attack traffic via the control socket. Shared by
+    the scripted CLI entry point below and simulation/bng_interactive.py's
+    menu-driven mode.
+
+    Not thread-safe internally -- the interactive script's background
+    polling thread and its main menu thread coordinate via their own
+    lock, the same pattern ul_traffic_simulator.py's ues_lock uses.
+    """
+
+    def __init__(
+        self,
+        scenario: str,
+        target_ip: str,
+        bng_host: str = "bng-blaster-1",
+        csv_path: str = DEFAULT_CSV_PATH,
+        bng_binary: str = DEFAULT_BNG_BINARY,
+        access_interface: str = "veth-a",
+        network_interface: str = "veth-n",
+        config_path: str = DEFAULT_CONFIG_PATH,
+        sock_path: str = DEFAULT_SOCK_PATH,
+    ):
+        self.scenario = scenario
+        self.target_ip = target_ip
+        self.bng_host = bng_host
+        self.csv_path = csv_path
+        self.bng_binary = bng_binary
+        self.config_path = config_path
+        self.sock_path = sock_path
+
+        self.scn = build_scenario(
+            scenario=scenario,
+            target_ip=target_ip,
+            access_interface=access_interface,
+            network_interface=network_interface,
+        )
+        self.ctrl: BngControlSocket = None
+        self._proc: subprocess.Popen = None
+        self.session_ids = list(range(1, self.scn["sessions"] + 1))
+        self.session_ips = {}
+        self.session_macs = {}
+        self.session_confirmed = set()
+        # (send_count, wall-clock time) at the last tick, per session --
+        # only used for attack_kind="icmp", to derive pps from
+        # icmp-clients' cumulative "send" counter (see
+        # _extract_icmp_send_count's docstring on why session-streams
+        # can't be used for this).
+        self._icmp_last_send = {}
+        # Mirrors attack_started/attack_stopped's role in the old run()
+        # loop -- low_and_slow's session-traffic already autostarts with
+        # the process, so it's "attacking" the moment the session is up.
+        self.attacking = self.scn["autostart"]
+
+    def start(self) -> None:
+        Path(self.config_path).write_text(json.dumps(self.scn["config"], indent=2))
+        if os.path.exists(self.sock_path):
+            os.remove(self.sock_path)
+        # Confirmed on a real run: leftover rows in the CSV from a
+        # PREVIOUS run's now-dead bngblaster process get replayed the
+        # moment any controller (re)starts and tails this file from
+        # offset 0 -- and since BNGBlaster assigns MACs deterministically
+        # (session 1 is always 02:00:00:00:00:01, etc.), a stale
+        # mitigation against that MAC can DHCP-blacklist a brand new,
+        # otherwise-legitimate session before it ever gets a lease,
+        # purely because it happens to reuse the same session-id/MAC a
+        # past run already used. Starting from an empty CSV every run
+        # avoids replaying state that belongs to a process that no
+        # longer exists.
+        if os.path.exists(self.csv_path):
+            os.remove(self.csv_path)
+
+        print(f"[BNG] launching {self.bng_binary} -C {self.config_path} -S {self.sock_path} "
+              f"(scenario={self.scenario}, sessions={self.scn['sessions']})")
+        self._proc = subprocess.Popen([self.bng_binary, "-C", self.config_path, "-S", self.sock_path])
+        wait_for_socket(self.sock_path, timeout_s=10.0)
+        # This process (and bngblaster, which inherits the same user)
+        # runs under sudo for the raw-socket/interface work, so the
+        # control socket file bngblaster creates is root-owned -- but
+        # BroadbandAdapter.apply_mitigation() connects to it from the
+        # controller process, which normally runs as a regular user.
+        # Confirmed on a real run: every session-stop/session-start call
+        # failed with EACCES until this was added. World-writable is
+        # fine here -- a throwaway local-simulation socket, not a
+        # production BNG.
+        os.chmod(self.sock_path, 0o666)
+        self.ctrl = BngControlSocket(self.sock_path)
+
+    def _attack_cmd(self, starting: bool) -> tuple:
+        if self.scn["attack_kind"] == "session-traffic":
+            return ("session-traffic-start" if starting else "session-traffic-stop"), {}
+        # Confirmed against the real bbl_ctrl.c source (rtbrick/bngblaster):
+        # the commands are "icmp-clients-start"/"-stop" (plural --
+        # "icmp-client-start" got a clean "400 unknown command" on a real
+        # run), and they take a "session-id" argument, not a group-id --
+        # bbl_icmp_client_ctrl_start_stop() starts/stops every icmp-client
+        # attached to that one session. icmp_flood always has exactly one
+        # session, so the first (only) session-id applies.
+        return (
+            ("icmp-clients-start" if starting else "icmp-clients-stop"),
+            {"session-id": self.session_ids[0]},
+        )
+
+    def start_attack(self) -> None:
+        cmd, args = self._attack_cmd(starting=True)
+        print(f"[BNG] starting attack ({self.scn['attack_kind']}, {self.scenario})")
+        try:
+            self.ctrl.call(cmd, args)
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
+        self.attacking = True
+
+    def stop_attack(self) -> None:
+        cmd, args = self._attack_cmd(starting=False)
+        print(f"[BNG] stopping attack ({self.scn['attack_kind']})")
+        try:
+            self.ctrl.call(cmd, args)
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            print(f"[BNG] {cmd} failed: {exc}", file=sys.stderr)
+        self.attacking = False
+
+    def tick(self) -> list:
+        """One poll cycle: refreshes session addresses, reads each
+        session's current rate, appends new rows to the CSV, and also
+        returns them (so the interactive script can print a live
+        summary without re-reading the file it just wrote)."""
+        now = time.time()
+        rows = []
+
+        try:
+            counters = self.ctrl.call("session-counters")
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            print(f"[BNG] session-counters failed: {exc}", file=sys.stderr)
+            counters = {}
+        established, flapped = _extract_session_counters(counters)
+
+        for sid in self.session_ids:
+            # Re-fetched every tick until a REAL address shows up (i.e.
+            # not yet "confirmed") -- caching the first lookup
+            # unconditionally meant a session still stuck in DHCP at
+            # that point got its placeholder IP locked in forever.
+            if sid not in self.session_confirmed:
+                try:
+                    info = self.ctrl.call("session-info", {"session-id": sid})
+                    addr, mac, confirmed = _extract_session_info(info, sid)
+                    self.session_ips[sid] = addr
+                    if mac:
+                        self.session_macs[sid] = mac
+                    if confirmed:
+                        self.session_confirmed.add(sid)
+                except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+                    print(f"[BNG] session-info({sid}) failed: {exc}", file=sys.stderr)
+                    continue
+            src_ip = self.session_ips.get(sid)
+            if not src_ip:
+                continue
+
+            try:
+                stats = self.ctrl.call("session-streams", {"session-id": sid})
+            except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+                print(f"[BNG] session-streams({sid}) failed: {exc}", file=sys.stderr)
+                continue
+            pps, bps = _extract_rate(stats)
+
+            if self.scn["attack_kind"] == "icmp" and self.attacking:
+                # session-streams never reflects icmp-client volume (see
+                # _extract_icmp_send_count) -- derive pps ourselves from
+                # the cumulative "send" counter's delta since last tick.
+                try:
+                    icmp_resp = self.ctrl.call("icmp-clients", {"session-id": sid})
+                    send_count = _extract_icmp_send_count(icmp_resp)
+                    prev_count, prev_time = self._icmp_last_send.get(sid, (send_count, now))
+                    dt = now - prev_time
+                    if dt > 0:
+                        pps += max(0.0, (send_count - prev_count) / dt)
+                    self._icmp_last_send[sid] = (send_count, now)
+                except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+                    print(f"[BNG] icmp-clients({sid}) failed: {exc}", file=sys.stderr)
+
+            if pps <= 0.0 and bps <= 0.0:
+                continue
+
+            rows.append({
+                "timestamp": f"{now:.6f}",
+                "session_id": sid,
+                "device_id": self.bng_host,
+                "src_ip": src_ip,
+                "mac": self.session_macs.get(sid, ""),
+                "dst_ip": self.target_ip,
+                "dst_port": self.scn["dst_port"] if self.attacking else _NORMAL_DST_PORT,
+                "protocol": self.scn["protocol"] if self.attacking else _NORMAL_PROTOCOL,
+                "pps": f"{pps:.3f}",
+                "bps": f"{bps:.3f}",
+                "sessions_established": established,
+                "sessions_flapped": flapped,
+            })
+
+        _append_csv_rows(self.csv_path, rows)
+        return rows
+
+    def stop(self) -> None:
+        if self.ctrl is not None:
+            self.ctrl.close()
+            self.ctrl = None
+        if self._proc is None:
+            return
+        self._proc.terminate()
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+        self._proc = None
+
+
+def run(
+    scenario: str,
+    target_ip: str,
+    bng_host: str,
+    duration_s: int,
+    tick_s: float,
+    attack_start_s: int,
+    attack_end_s: int,
+    csv_path: str,
+    bng_binary: str,
+    access_interface: str,
+    network_interface: str,
+    config_path: str,
+    sock_path: str,
+) -> None:
+    session = BngScenarioSession(
+        scenario=scenario, target_ip=target_ip, bng_host=bng_host, csv_path=csv_path,
+        bng_binary=bng_binary, access_interface=access_interface, network_interface=network_interface,
+        config_path=config_path, sock_path=sock_path,
+    )
+    try:
+        session.start()
+        attack_started = session.attacking
+        attack_stopped = attack_started and scenario == "low_and_slow"
+
+        elapsed = 0.0
+        while elapsed < duration_s:
+            if not attack_started and elapsed >= attack_start_s:
+                session.start_attack()
+                attack_started = True
+            if attack_started and not attack_stopped and elapsed >= attack_end_s:
+                session.stop_attack()
+                attack_stopped = True
+
+            session.tick()
+            time.sleep(tick_s)
+            elapsed += tick_s
+    finally:
+        session.stop()
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--scenario", choices=SCENARIOS, default="syn_flood")
+    p.add_argument("--target-ip", default="10.0.2.10")
+    p.add_argument("--bng-host", default="bng-blaster-1")
+    p.add_argument("--duration", type=int, default=60, help="total run length, seconds")
+    p.add_argument("--tick", type=float, default=1.0, help="poll interval, seconds")
+    p.add_argument("--attack-start", type=int, default=10, help="seconds into the run")
+    p.add_argument("--attack-end", type=int, default=40, help="seconds into the run")
+    p.add_argument("--csv-path", default=DEFAULT_CSV_PATH)
+    p.add_argument("--bng-binary", default=DEFAULT_BNG_BINARY)
+    p.add_argument("--access-interface", default="veth-a")
+    p.add_argument("--network-interface", default="veth-n")
+    p.add_argument("--config-path", default=DEFAULT_CONFIG_PATH)
+    p.add_argument("--sock-path", default=DEFAULT_SOCK_PATH)
+    args = p.parse_args()
+
+    if sys.platform != "linux":
+        print("ERROR: bngblaster requires Linux (raw sockets) -- run this on the Ubuntu test VM, not here.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    run(
+        scenario=args.scenario,
+        target_ip=args.target_ip,
+        bng_host=args.bng_host,
+        duration_s=args.duration,
+        tick_s=args.tick,
+        attack_start_s=args.attack_start,
+        attack_end_s=args.attack_end,
+        csv_path=args.csv_path,
+        bng_binary=args.bng_binary,
+        access_interface=args.access_interface,
+        network_interface=args.network_interface,
+        config_path=args.config_path,
+        sock_path=args.sock_path,
+    )
+
+
+if __name__ == "__main__":
+    main()

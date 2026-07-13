@@ -51,6 +51,25 @@ SWITCH_PROTOCOL_PACKET_RATE = Gauge(
     ["dpid", "protocol"],
 )
 
+# ── Traffic — generic per-domain, from every TelemetryEvent collect()
+# returns each cycle (not just ones that crossed a detection threshold) —
+# the one KPI every domain (openflow/mobile/broadband/enterprise/bgp) can
+# report regardless of whether anything is actually under attack right
+# now. Per-domain dashboards use this as their "is this domain even
+# producing telemetry" / baseline traffic panel.
+DOMAIN_TRAFFIC_PPS = Gauge(
+    "ddos_domain_traffic_pps", "Aggregate packet rate across all telemetry this cycle, by domain (pkt/s)",
+    ["domain"],
+)
+DOMAIN_TRAFFIC_BPS = Gauge(
+    "ddos_domain_traffic_bps", "Aggregate byte rate across all telemetry this cycle, by domain (B/s)",
+    ["domain"],
+)
+DOMAIN_ACTIVE_SOURCES = Gauge(
+    "ddos_domain_active_sources", "Distinct source IPs reporting telemetry this cycle, by domain",
+    ["domain"],
+)
+
 # ── DDoS pipeline — detections and mitigations ──────────────────────────────
 
 ATTACKS_DETECTED = Counter(
@@ -65,6 +84,16 @@ MITIGATIONS_APPLIED = Counter(
 )
 ACTIVE_BLOCKS = Gauge(
     "ddos_active_blocks", "Currently active mitigation blocks (openflow domain)"
+)
+# Generalizes ACTIVE_BLOCKS across every domain -- openflow's own
+# _active_blocks dict and the per-source _active_mobile_blocks dict
+# shared by config.settings.PER_SOURCE_MITIGATION_DOMAINS (mobile,
+# broadband) both store MitigationActions that carry their own .domain,
+# so OrchestrationController.active_block_counts_by_domain() can group
+# by it directly instead of needing a separate counter per domain.
+ACTIVE_BLOCKS_BY_DOMAIN = Gauge(
+    "ddos_active_blocks_by_domain", "Currently active mitigation blocks, by domain",
+    ["domain"],
 )
 
 # Rate of the traffic that triggered the most recent detection/mitigation
@@ -81,11 +110,11 @@ ATTACK_PACKET_RATE = Gauge(
 )
 MITIGATION_BYTE_RATE = Gauge(
     "ddos_mitigation_byte_rate", "Byte rate of the mitigated traffic, by type (B/s)",
-    ["attack_type", "action"],
+    ["attack_type", "action", "domain"],
 )
 MITIGATION_PACKET_RATE = Gauge(
     "ddos_mitigation_packet_rate", "Packet rate of the mitigated traffic, by type (pkt/s)",
-    ["attack_type", "action"],
+    ["attack_type", "action", "domain"],
 )
 
 # For "top N attacker/victim" panels — only incremented on a NEWLY enforced
@@ -158,9 +187,9 @@ def record_mitigation(attack_type, action, domain):
     MITIGATIONS_APPLIED.labels(attack_type=attack_type, action=action, domain=domain).inc()
 
 
-def record_mitigation_rate(attack_type, action, pps, bps):
-    MITIGATION_BYTE_RATE.labels(attack_type=attack_type, action=action).set(bps)
-    MITIGATION_PACKET_RATE.labels(attack_type=attack_type, action=action).set(pps)
+def record_mitigation_rate(attack_type, action, domain, pps, bps):
+    MITIGATION_BYTE_RATE.labels(attack_type=attack_type, action=action, domain=domain).set(bps)
+    MITIGATION_PACKET_RATE.labels(attack_type=attack_type, action=action, domain=domain).set(pps)
 
 
 def record_block_endpoints(src_ip, dst_ip):
@@ -170,6 +199,21 @@ def record_block_endpoints(src_ip, dst_ip):
 
 def set_active_blocks(count):
     ACTIVE_BLOCKS.set(count)
+
+
+def set_active_blocks_by_domain(counts: dict):
+    """counts: {domain: count} -- only updates domains present in the
+    dict; callers are expected to pass a full snapshot (including 0 for
+    a domain that just lost its last active block) each time, the same
+    way set_active_blocks() always passes the current total."""
+    for domain, count in counts.items():
+        ACTIVE_BLOCKS_BY_DOMAIN.labels(domain=domain).set(count)
+
+
+def update_domain_traffic(domain, pps, bps, active_sources):
+    DOMAIN_TRAFFIC_PPS.labels(domain=domain).set(pps)
+    DOMAIN_TRAFFIC_BPS.labels(domain=domain).set(bps)
+    DOMAIN_ACTIVE_SOURCES.labels(domain=domain).set(active_sources)
 
 
 def update_connection_counts(src_ip, dst_ip, concurrent, new_connections_total):

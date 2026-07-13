@@ -1,16 +1,13 @@
-from datetime import datetime
+import logging
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import config.settings as settings
+from core.log_format import log_line
 from core.models import MitigationAction
 from mitigation.base import MitigationAdapter
 
 
 PROTO_NUMBERS = {"TCP": 6, "UDP": 17, "ICMP": 1}
-
-
-def _log(msg: str) -> None:
-    print(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}")
 
 
 class OpenFlowMitigator(MitigationAdapter):
@@ -55,7 +52,11 @@ class OpenFlowMitigator(MitigationAdapter):
     # service those in between instead.
     YIELD_EVERY = 200
 
-    def __init__(self, yield_fn: Optional[Callable[[], None]] = None):
+    def __init__(
+        self,
+        yield_fn: Optional[Callable[[], None]] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
         # (src_ip, dst_ip, dst_port, protocol, dpid) tuples currently
         # blocked. dpid is part of the key (None for an unscoped/network-
         # wide block) so that two DIFFERENT physical ingress locations for
@@ -68,6 +69,11 @@ class OpenFlowMitigator(MitigationAdapter):
         # Cooperative-yield hook (e.g. ryu.lib.hub.sleep(0)) — optional so
         # this stays testable without a Ryu/eventlet runtime.
         self._yield_fn = yield_fn or (lambda: None)
+        # Passed down from the Ryu app (its own self.logger) so every log
+        # line across domains shares the same name/format -- defaults to
+        # a plain logging.Logger so this stays usable standalone (tests,
+        # no Ryu runtime).
+        self._logger = logger or logging.getLogger(__name__)
 
     # ------------------------------------------------------------------
     # Datapath lifecycle — called from the Ryu controller
@@ -140,10 +146,13 @@ class OpenFlowMitigator(MitigationAdapter):
             if len(targets) == 1 and dpid is not None
             else f"{len(targets)} switch(es) (network-wide)"
         )
-        _log(
-            f"[OF_MITIGATOR] Blocked {src_ip} -> {dst_ip}:{dst_port}/{protocol} "
-            f"on {scope}"
-        )
+        # Supplementary detail the standard MITIGATION line (ryu_controller_2.
+        # py's _run_pipeline) doesn't carry -- which switch/port the drop
+        # rule actually landed on.
+        self._logger.info(log_line(
+            "enterprise", "MITIGATION", "DROP_RULE_INSTALLED",
+            f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} scope={scope}",
+        ))
 
     def unblock(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> None:
         """
@@ -166,7 +175,9 @@ class OpenFlowMitigator(MitigationAdapter):
         for datapath in self._datapaths.values():
             self._delete_drop_rule(datapath, src_ip, dst_ip, dst_port, protocol)
 
-        _log(f"[OF_MITIGATOR] Unblocked {src_ip} -> {dst_ip}:{dst_port}/{protocol}")
+        # No log here -- OrchestrationController.check_unblocks() reports
+        # this through the same MITIGATION dashboard/logger line every
+        # other domain's actions go through.
 
     def _scoped_targets(self, dpid: Optional[int]) -> List[object]:
         """
@@ -200,10 +211,10 @@ class OpenFlowMitigator(MitigationAdapter):
                 if calls % self.YIELD_EVERY == 0:
                     self._yield_fn()
 
-        _log(
-            f"[OF_MITIGATOR] Cleared {len(sources)} forwarding rule(s) "
-            f"toward {dst_ip} on {len(self._datapaths)} switch(es)"
-        )
+        self._logger.info(log_line(
+            "enterprise", "MITIGATION", "FORWARDING_CLEARED",
+            f"count={len(sources)} destination={dst_ip} switches={len(self._datapaths)}",
+        ))
 
     # ------------------------------------------------------------------
     # Internal OpenFlow helpers
