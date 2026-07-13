@@ -85,6 +85,22 @@ class UeSpec:
     # ["-i", "u<micros>"] for a rate-capped multi-source UE (see SCENARIOS'
     # per-scenario comments for the pps math behind each choice).
     rate_flags: List[str] = field(default_factory=lambda: ["--flood"])
+    # Fixed benign-loop target, NEVER mutated by _start_attack/_stop_attack
+    # (interactive mode) -- deliberately kept separate from target_ip
+    # (which _start_attack DOES overwrite to the attack's destination).
+    # orchestration/controller.py's check_mobile_unblocks() releases a
+    # block only once this exact (src_ip, dst_ip) pair stops producing
+    # ANY telemetry -- it doesn't check protocol (see that method's own
+    # comment on why: neither adapter can report more than one protocol
+    # per source per cycle anyway). If the post-throttle benign loop kept
+    # sending toward the SAME dst_ip the attack used, it would look
+    # exactly like "the attacker is still there, just quiet" forever --
+    # confirmed on a real run: the block only ever cleared when the whole
+    # monitor process died with the script, never during normal
+    # operation. A benign_target_ip outside the ring's real host space
+    # (10.0.x.10, the only sensible attack targets) can never collide
+    # with whatever destination an attack just used.
+    benign_target_ip: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -100,11 +116,22 @@ def _benign_ues() -> List[UeSpec]:
     # ICMP on/off shell loop instead (see _benign_loop_argv) -- a cruder
     # approximation of the old formula's bursty traffic, not equivalent
     # fidelity.
+    #
+    # Targets a placeholder outside the ring (203.0.113.0/24, TEST-NET-3)
+    # rather than a real h1-h4 host -- deliberately NEVER the same address
+    # space a scenario's attacker targets (always a real 10.0.x.10 ring
+    # host), so a benign UE's own background traffic can never collide
+    # with check_mobile_unblocks()'s per-(src_ip,dst_ip) presence check
+    # for an unrelated attacker (see UeSpec.benign_target_ip). r1's nft
+    # prerouting hook still counts it regardless of whether the packet is
+    # ultimately routable past r1.
     return [
         UeSpec(imsi=1, ip="10.60.0.2", physical_host="h1", gnb_id=_GNB_ID,
-               target_ip="10.0.2.10", protocol="ICMP", benign=True),
+               target_ip="203.0.113.10", protocol="ICMP", benign=True,
+               benign_target_ip="203.0.113.10"),
         UeSpec(imsi=2, ip="10.60.0.3", physical_host="h2", gnb_id=_GNB_ID,
-               target_ip="10.0.3.10", protocol="ICMP", benign=True),
+               target_ip="203.0.113.20", protocol="ICMP", benign=True,
+               benign_target_ip="203.0.113.20"),
     ]
 
 
@@ -220,7 +247,11 @@ _BENIGN_LOOP_TEMPLATE = (
 
 
 def _benign_loop_argv(ue: UeSpec) -> List[str]:
-    return ["bash", "-c", _BENIGN_LOOP_TEMPLATE.format(ip=ue.ip, target=ue.target_ip)]
+    # ue.benign_target_ip, NEVER ue.target_ip -- the latter gets
+    # overwritten to the attack's destination by _start_attack and is
+    # meaningless for what the benign loop should be sending toward. See
+    # UeSpec.benign_target_ip's docstring.
+    return ["bash", "-c", _BENIGN_LOOP_TEMPLATE.format(ip=ue.ip, target=ue.benign_target_ip)]
 
 
 # ---------------------------------------------------------------------------
@@ -517,21 +548,24 @@ _ATTACK_TYPES = {
     "5": ("Low and Slow", "low_slow"),
 }
 
-# One ring host per pool UE, round-robin -- and a distinct real ring
-# target per host (never itself) so benign traffic is guaranteed to
-# transit r1 (nft's prerouting hook counts it there regardless of
-# whether r1 can route it any further).
+# One ring host per pool UE, round-robin. Benign traffic targets a
+# placeholder OUTSIDE the ring (never one of h1-h4's real 10.0.x.10
+# addresses, which is what an interactive attack would realistically
+# target) -- see UeSpec.benign_target_ip for why that separation matters
+# for check_mobile_unblocks()'s presence-based unblock signal. r1's nft
+# prerouting hook still counts it regardless of onward routability.
 _POOL_HOSTS = ["h1", "h2", "h3", "h4"]
-_POOL_TARGETS = {"h1": "10.0.2.10", "h2": "10.0.3.10", "h3": "10.0.4.10", "h4": "10.0.1.10"}
 
 
 def _build_interactive_pool(n: int) -> List[UeSpec]:
     pool = []
     for i in range(n):
         host = _POOL_HOSTS[i % len(_POOL_HOSTS)]
+        benign_target = f"203.0.113.{10 + i}"
         pool.append(UeSpec(
             imsi=i + 1, ip=f"10.60.0.{2 + i}", physical_host=host, gnb_id=_GNB_ID,
-            target_ip=_POOL_TARGETS[host], protocol="ICMP", benign=True,
+            target_ip=benign_target, protocol="ICMP", benign=True,
+            benign_target_ip=benign_target,
         ))
     return pool
 
@@ -605,21 +639,35 @@ def _prompt_rate_flags(default) -> List[str]:
 
 
 def _start_attack(ue: UeSpec, host, state: _RuntimeState, protocol: str, dst_port: int,
-                   target_ip: str, low_slow: bool, rate_flags: List[str]) -> None:
+                   target_ip: str, low_slow: bool, rate_flags: List[str],
+                   pool: List[UeSpec], ue_state_path: str) -> None:
     _terminate(state.procs.pop(ue.imsi, None))  # stop its benign loop
     ue.protocol, ue.dst_port, ue.target_ip = protocol, dst_port, target_ip
     ue.low_slow, ue.rate_flags, ue.benign = low_slow, rate_flags, False
     state.procs[ue.imsi] = host.popen(_hping3_argv(ue), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # ue_kpm_monitor.py's dst_ip/protocol/dst_port tag for this IMSI comes
+    # entirely from this file (real KPM has no L4 visibility, see that
+    # module's docstring) -- without refreshing it here, the monitor would
+    # keep reporting whatever this UE's PREVIOUS role was (its initial
+    # benign target, on the very first attack) instead of what it's
+    # actually sending now, breaking detection for any target other than
+    # whatever happened to be in ue_state.json already.
+    _write_ue_state(pool, ue_state_path)
 
 
-def _stop_attack(ue: UeSpec, host, state: _RuntimeState) -> None:
+def _stop_attack(ue: UeSpec, host, state: _RuntimeState, pool: List[UeSpec], ue_state_path: str) -> None:
     _terminate(state.procs.pop(ue.imsi, None))
     ue.benign = True
     state.procs[ue.imsi] = host.popen(_benign_loop_argv(ue), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Refresh ue_state.json's dst_ip back to this UE's benign target too --
+    # _write_ue_state always reads ue.target_ip (see its docstring), which
+    # _start_attack left pointed at the just-stopped attack's destination.
+    ue.target_ip = ue.benign_target_ip
+    _write_ue_state(pool, ue_state_path)
 
 
 def _configure_attack(pool: List[UeSpec], host_map: dict, state: _RuntimeState,
-                       lock: threading.Lock) -> "tuple | None":
+                       lock: threading.Lock, ue_state_path: str) -> "tuple | None":
     while True:
         _print_pool_menu(pool)
         choice = _prompt("Opcion", "0")
@@ -646,7 +694,8 @@ def _configure_attack(pool: List[UeSpec], host_map: dict, state: _RuntimeState,
             protocol, dst_port = "ICMP", 0
         rate_flags = _prompt_rate_flags("flood")
         with lock:
-            _start_attack(ue, host_map[ue.physical_host], state, protocol, dst_port, target_ip, False, rate_flags)
+            _start_attack(ue, host_map[ue.physical_host], state, protocol, dst_port, target_ip, False, rate_flags,
+                           pool, ue_state_path)
         return f"{name} desde IMSI {ue.imsi} ({ue.ip}) -> {target_ip}:{dst_port}", [ue]
 
     if kind == "distributed":
@@ -657,7 +706,8 @@ def _configure_attack(pool: List[UeSpec], host_map: dict, state: _RuntimeState,
         rate_flags = _prompt_rate_flags(100)  # ~pps/source clearing SYN_THRESHOLD with margin
         with lock:
             for ue in group:
-                _start_attack(ue, host_map[ue.physical_host], state, "TCP_SYN", dst_port, target_ip, False, rate_flags)
+                _start_attack(ue, host_map[ue.physical_host], state, "TCP_SYN", dst_port, target_ip, False,
+                               rate_flags, pool, ue_state_path)
         imsis = ", ".join(str(u.imsi) for u in group)
         return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip}:{dst_port}", group
 
@@ -670,27 +720,32 @@ def _configure_attack(pool: List[UeSpec], host_map: dict, state: _RuntimeState,
     rate_flags = _prompt_rate_flags(2)  # stays comfortably under LOW_SLOW_MOBILE_MAX_PPS=8.0
     with lock:
         for ue in group:
-            _start_attack(ue, host_map[ue.physical_host], state, "TCP", dst_port, target_ip, True, rate_flags)
+            _start_attack(ue, host_map[ue.physical_host], state, "TCP", dst_port, target_ip, True,
+                           rate_flags, pool, ue_state_path)
     imsis = ", ".join(str(u.imsi) for u in group)
     return f"{name} desde {len(group)} UE(s) (IMSI {imsis}) -> {target_ip}:{dst_port}", group
 
 
-def _apply_mitigation(ue: UeSpec, host, state: _RuntimeState) -> None:
+def _apply_mitigation(ue: UeSpec, host, state: _RuntimeState, pool: List[UeSpec], ue_state_path: str) -> None:
     """
     Reacts to a real block/rate_limit command for an attacking UE by
     immediately reverting it to its benign loop -- unlike the headless
     generator (whose _reconcile_ue also has an attack window/duration to
     respect), here the user is driving attacks manually, so "mitigated"
     simply means "back to normal now"; there's nothing else scheduling
-    this UE to attack again. The controller's own check_unblocks()/
+    this UE to attack again. The controller's own check_mobile_unblocks()/
     UNBLOCK_CONFIRM_CYCLES still drive the REAL unblock timing on its
-    side -- this script doesn't need to replicate that.
+    side, based on this UE's telemetry toward the ORIGINAL attack dst_ip
+    genuinely stopping -- which requires _stop_attack's ue_state.json
+    refresh below to actually happen, or the block would look like it's
+    still "present" against the stale attack dst_ip forever.
     """
-    _stop_attack(ue, host, state)
+    _stop_attack(ue, host, state, pool, ue_state_path)
 
 
 def _rc_watch_loop(pool_by_imsi: Dict[int, UeSpec], host_map: dict, state: _RuntimeState,
-                    rc_path: str, tick: float, lock: threading.Lock, stop_event: threading.Event) -> None:
+                    rc_path: str, tick: float, lock: threading.Lock, stop_event: threading.Event,
+                    pool: List[UeSpec], ue_state_path: str) -> None:
     offset = 0
     while not stop_event.is_set():
         commands, offset = _read_new_commands(rc_path, offset)
@@ -701,7 +756,7 @@ def _rc_watch_loop(pool_by_imsi: Dict[int, UeSpec], host_map: dict, state: _Runt
             if ue is None or ue.benign:
                 continue
             with lock:
-                _apply_mitigation(ue, host_map[ue.physical_host], state)
+                _apply_mitigation(ue, host_map[ue.physical_host], state, pool, ue_state_path)
             _print_async(f"[MOBILE-INT] Mitigado: IMSI {ue.imsi} ({ue.ip}) bloqueado por el "
                          f"controlador -> vuelve a trafico normal")
         stop_event.wait(tick)
@@ -758,13 +813,14 @@ def run_interactive(args) -> None:
 
         rc_thread = threading.Thread(
             target=_rc_watch_loop,
-            args=(pool_by_imsi, host_map, state, args.rc_command_queue, args.tick, lock, stop_event),
+            args=(pool_by_imsi, host_map, state, args.rc_command_queue, args.tick, lock, stop_event,
+                  pool, args.ue_state_path),
             daemon=True,
         )
         rc_thread.start()
 
         while True:
-            result = _configure_attack(pool, host_map, state, lock)
+            result = _configure_attack(pool, host_map, state, lock, args.ue_state_path)
             if result is None:
                 break
             description, attacking_ues = result
@@ -782,7 +838,7 @@ def run_interactive(args) -> None:
                     with lock:
                         for ue in attacking_ues:
                             if not ue.benign:  # a controller mitigation may have already stopped it
-                                _stop_attack(ue, host_map[ue.physical_host], state)
+                                _stop_attack(ue, host_map[ue.physical_host], state, pool, args.ue_state_path)
                     print("*** Ataque detenido. Las UEs volvieron a trafico normal.")
                     break
                 print("  Comando no reconocido -- escribe 'stop' para detener el ataque actual.")
