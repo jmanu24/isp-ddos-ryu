@@ -87,6 +87,30 @@ def _run(argv: list, check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, check=check)
 
 
+def _reset_file(path) -> None:
+    """
+    Removes `path` if it exists, rather than opening it for in-place
+    truncation -- see ue_traffic_generator.py's _reset_file for why:
+    on an NFS-mounted /tmp with root_squash, overwriting a PRE-EXISTING
+    file owned by a different (non-squashed) user gets EACCES/EPERM even
+    though this process's own EUID is 0, while creating a brand-new file
+    only needs write access to the parent directory. Duplicated rather
+    than imported, same no-cross-import convention this file's other
+    constants already follow.
+    """
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise SystemExit(
+            f"ERROR: no se pudo preparar {path} ({exc}).\n"
+            f"Si /tmp esta montado por NFS con root_squash, borra el archivo "
+            f"viejo como tu usuario normal (sin sudo) antes de reintentar:\n"
+            f"  rm -f {path}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # nftables setup -- idempotent, rebuilt whenever ue_ip_map.csv changes.
 # ---------------------------------------------------------------------------
@@ -292,7 +316,8 @@ def main():
 
     # Fresh CSV for this run -- same truncate-on-startup convention
     # ul_traffic_simulator.py's main() already uses.
-    Path(args.csv_path).write_text("")
+    _reset_file(args.csv_path)
+    Path(args.csv_path).touch()
 
     ue_ip_map: Dict[int, str] = {}
     ue_ip_map_mtime = None

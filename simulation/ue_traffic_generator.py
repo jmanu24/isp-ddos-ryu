@@ -281,7 +281,35 @@ def build_topology():
 # Shared state written for ue_kpm_monitor.py
 # ---------------------------------------------------------------------------
 
+def _reset_file(path) -> None:
+    """
+    Ensures `path` starts this run as a fresh, absent file -- removed
+    rather than opened for in-place truncation. Matters when /tmp is a
+    network mount with root squashed to an unprivileged uid server-side:
+    the local os.geteuid()==0 check passes, but the actual write/rename
+    syscall against a PRE-EXISTING file owned by a different (non-
+    squashed) user gets EACCES/EPERM from the server, since the squashed
+    identity is neither that file's owner nor real root as far as the
+    server is concerned. Removing it first and letting the caller create
+    a brand-new one only needs write access to the parent directory
+    (world-writable for /tmp's default 1777 mode), which root-squash
+    still grants -- only *overwriting a file you don't own* is blocked.
+    """
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise SystemExit(
+            f"ERROR: no se pudo preparar {path} ({exc}).\n"
+            f"Si /tmp esta montado por NFS con root_squash, borra el archivo "
+            f"viejo como tu usuario normal (sin sudo) antes de reintentar:\n"
+            f"  rm -f {path}"
+        )
+
+
 def _write_ue_ip_map(ues: List[UeSpec], path: Path) -> None:
+    _reset_file(path)
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["imsi", "ip"])
@@ -312,8 +340,10 @@ def _write_ue_state(ues: List[UeSpec], path: str) -> None:
         for ue in ues
     }
     tmp = f"{path}.tmp"
+    _reset_file(tmp)
     with open(tmp, "w") as f:
         json.dump(state, f)
+    _reset_file(path)
     os.replace(tmp, path)
 
 
@@ -683,7 +713,8 @@ def run_interactive(args) -> None:
     pool = _build_interactive_pool(n)
     pool_by_imsi = {ue.imsi: ue for ue in pool}
 
-    Path(args.rc_command_queue).write_text("")
+    _reset_file(args.rc_command_queue)
+    Path(args.rc_command_queue).touch()
     _write_ue_ip_map(pool, Path(args.ue_ip_map))
     _write_ue_state(pool, args.ue_state_path)
 
@@ -798,7 +829,8 @@ def main():
 
     # Discard stale commands from a previous run so a fresh scenario
     # never starts pre-throttled by leftover mitigation state.
-    Path(args.rc_command_queue).write_text("")
+    _reset_file(args.rc_command_queue)
+    Path(args.rc_command_queue).touch()
     _write_ue_ip_map(ues, Path(args.ue_ip_map))
     _write_ue_state(ues, args.ue_state_path)
 
