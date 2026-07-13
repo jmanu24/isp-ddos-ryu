@@ -715,6 +715,15 @@ def run_interactive(args) -> None:
 
     _reset_file(args.rc_command_queue)
     Path(args.rc_command_queue).touch()
+    # ryu-manager (telemetry/mobile_adapter.py's apply_mitigation, which
+    # appends to this same path) normally runs as a regular user, not
+    # root -- this generator does (Mininet/hping3 need raw sockets). A
+    # file this process creates defaults to root-owned, other=read-only,
+    # so the controller's own append would fail with EACCES the first
+    # time it tries to report a mitigation (confirmed against a real
+    # run). World-writable is fine here: it's an ephemeral /tmp queue
+    # for one local demo run, not a security boundary.
+    os.chmod(args.rc_command_queue, 0o666)
     _write_ue_ip_map(pool, Path(args.ue_ip_map))
     _write_ue_state(pool, args.ue_state_path)
 
@@ -831,6 +840,15 @@ def main():
     # never starts pre-throttled by leftover mitigation state.
     _reset_file(args.rc_command_queue)
     Path(args.rc_command_queue).touch()
+    # ryu-manager (telemetry/mobile_adapter.py's apply_mitigation, which
+    # appends to this same path) normally runs as a regular user, not
+    # root -- this generator does (Mininet/hping3 need raw sockets). A
+    # file this process creates defaults to root-owned, other=read-only,
+    # so the controller's own append would fail with EACCES the first
+    # time it tries to report a mitigation (confirmed against a real
+    # run). World-writable is fine here: it's an ephemeral /tmp queue
+    # for one local demo run, not a security boundary.
+    os.chmod(args.rc_command_queue, 0o666)
     _write_ue_ip_map(ues, Path(args.ue_ip_map))
     _write_ue_state(ues, args.ue_state_path)
 
