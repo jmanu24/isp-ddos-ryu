@@ -211,7 +211,12 @@ class OpenFlowMitigator(MitigationAdapter):
                 if calls % self.YIELD_EVERY == 0:
                     self._yield_fn()
 
-        self._logger.info(log_line(
+        # DEBUG, not INFO -- this fires on every flow_stats_reply cycle
+        # for as long as a wildcard/distributed block stays active (see
+        # OrchestrationController.sweep_blocked_forwarding), which is
+        # routine housekeeping, not something worth surfacing in the
+        # normal MITIGATION log stream the way an actual BLOCK/UNBLOCK is.
+        self._logger.debug(log_line(
             "enterprise", "MITIGATION", "FORWARDING_CLEARED",
             f"count={len(sources)} destination={dst_ip} switches={len(self._datapaths)}",
         ))

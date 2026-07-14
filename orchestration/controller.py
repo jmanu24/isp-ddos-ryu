@@ -883,14 +883,39 @@ class OrchestrationController:
         if not self._active_blocks:
             return
 
-        wildcard_dsts = {
-            dst_ip for (src_ip, dst_ip, _, _) in self._active_blocks if src_ip == "*"
-        }
-        blocked_pairs = {
-            (src_ip, dst_ip) for (src_ip, dst_ip, _, _) in self._active_blocks if src_ip != "*"
-        }
+        # For a wildcard ("*") block, scope the sweep to the SPECIFIC
+        # sources that detection actually flagged as part of THAT attack
+        # (MitigationAction.sources, stored on the block itself) -- not
+        # "any src_ip currently talking to a wildcard-blocked dst_ip".
+        # Confirmed on a real run: once a destination that's ALSO a
+        # legitimate target of ongoing benign traffic (e.g. the star
+        # topology's central server, which every benign host's baseline
+        # targets) gets a wildcard block, the broader match repeatedly
+        # evicted those unrelated benign hosts' own forwarding rules too
+        # -- every cycle, since LearningSwitch reinstalls them for
+        # traffic that's still genuinely flowing, immediately swept away
+        # again next cycle. Beyond the log noise, forcing benign traffic
+        # through table-miss/packet-in instead of a fast-path rule can
+        # itself inflate that traffic's measured pps enough to look like
+        # a fresh attack.
+        wildcard_known_sources: Dict[str, Set[str]] = defaultdict(set)
+        # LOW_SLOW's flow-count-only variant is also a "*"-src block but
+        # carries no per-source list at all (it's a flow-count
+        # signature, not a list of attackers -- see analyze_low_slow),
+        # so scoping to known sources isn't possible for it; the only
+        # sweep it CAN do is "clear every forwarding rule toward this
+        # destination", same as before this fix.
+        wildcard_broad_dsts: Set[str] = set()
+        blocked_pairs = set()
+        for (src_ip, dst_ip, _, _), action in self._active_blocks.items():
+            if src_ip != "*":
+                blocked_pairs.add((src_ip, dst_ip))
+            elif action.sources:
+                wildcard_known_sources[dst_ip].update(action.sources)
+            else:
+                wildcard_broad_dsts.add(dst_ip)
 
-        if not wildcard_dsts and not blocked_pairs:
+        if not wildcard_known_sources and not wildcard_broad_dsts and not blocked_pairs:
             return
 
         stale_sources_by_dst: Dict[str, List[str]] = defaultdict(list)
@@ -910,7 +935,11 @@ class OrchestrationController:
             if not src_ip:
                 continue
 
-            if dst_ip in wildcard_dsts or (src_ip, dst_ip) in blocked_pairs:
+            if (
+                dst_ip in wildcard_broad_dsts
+                or src_ip in wildcard_known_sources.get(dst_ip, ())
+                or (src_ip, dst_ip) in blocked_pairs
+            ):
                 stale_sources_by_dst[dst_ip].append(src_ip)
 
         for dst_ip, sources in stale_sources_by_dst.items():
