@@ -1,6 +1,6 @@
 import os
 import subprocess
-from typing import List
+from typing import Dict, List
 
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
@@ -125,7 +125,24 @@ class BroadbandAdapter(DomainAdapter):
             lines = f.readlines()
             self._last_offset = f.tell()
 
-        events = []
+        # One event per session per collect() call, not per CSV row --
+        # same reasoning/fix as telemetry/mobile_adapter.py's own
+        # latest-sample-per-IMSI dedup (see its collect() docstring):
+        # each row is a RATE sample (pps/bps at that tick), not a byte
+        # count to sum, and MultidomainCorrelator sums every event in a
+        # dst_ip bucket assuming they're concurrent flows. Reading a
+        # large backlog in one collect() call -- e.g. right after this
+        # adapter is (re)constructed against an already-long-running
+        # BngScenarioSession's CSV, as happens whenever the controller
+        # restarts without the BNG process itself restarting -- would
+        # otherwise hand the correlator hundreds of stale samples from
+        # 8 real sessions all at once, which reads as a sudden burst
+        # from 8 distinct sources and falsely triggers a distributed-
+        # flood block against every real session. Confirmed on a real
+        # run: a controller restart against a ~16-minute-old standing
+        # low_and_slow baseline immediately session-stopped all 8 BNG
+        # sessions this way.
+        latest_by_session: Dict[int, TelemetryEvent] = {}
         for line in lines:
             line = line.strip()
             if not line or line.startswith(_CSV_COLUMNS[0]):
@@ -135,10 +152,11 @@ class BroadbandAdapter(DomainAdapter):
                 continue
             row = dict(zip(_CSV_COLUMNS, fields))
             try:
-                self._session_by_ip[row["src_ip"]] = int(row["session_id"])
+                session_id = int(row["session_id"])
+                self._session_by_ip[row["src_ip"]] = session_id
                 if row["mac"]:
                     self._mac_by_ip[row["src_ip"]] = row["mac"]
-                events.append(TelemetryEvent(
+                latest_by_session[session_id] = TelemetryEvent(
                     domain=self.domain_name,
                     device_id=row["device_id"],
                     src_ip=row["src_ip"],
@@ -148,10 +166,10 @@ class BroadbandAdapter(DomainAdapter):
                     pps=float(row["pps"]),
                     bps=float(row["bps"]),
                     timestamp=float(row["timestamp"]),
-                ))
+                )
             except (ValueError, KeyError):
                 continue
-        return events
+        return list(latest_by_session.values())
 
     def _reload_dnsmasq(self) -> bool:
         """SIGHUPs dnsmasq so it re-reads dhcp-hostsfile -- finds the PID
