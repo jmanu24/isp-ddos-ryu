@@ -1,7 +1,9 @@
+import logging
 import os
 import subprocess
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+from core.log_format import log_line
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
 from simulation.bng_socket import BngControlSocket
@@ -76,12 +78,22 @@ class BroadbandAdapter(DomainAdapter):
         sock_path: str = DEFAULT_BNG_SOCK_PATH,
         dnsmasq_conf_path: str = DEFAULT_DNSMASQ_CONF_PATH,
         dhcp_blacklist_path: str = DEFAULT_DHCP_BLACKLIST_PATH,
+        logger: Optional[logging.Logger] = None,
     ):
         self.bng_host = bng_host
         self.csv_path = csv_path
         self.sock_path = sock_path
         self.dnsmasq_conf_path = dnsmasq_conf_path
         self.dhcp_blacklist_path = dhcp_blacklist_path
+        # Passed down from the Ryu app (its own self.logger), same
+        # convention telemetry/mobile_adapter.py already uses -- defaults
+        # to a plain logging.Logger so this stays usable standalone.
+        self._logger = logger or logging.getLogger(__name__)
+        # Tracks the last-logged connection state so collect() logs a
+        # "telemetry source connected/lost" event only on the transition,
+        # same as MobileNetworkAdapter.collect()'s own SOURCE_CONNECTED/
+        # SOURCE_LOST handling.
+        self._was_connected = False
         self._last_offset = 0
         # BngControlSocket opens its own fresh connection per call() --
         # this instance is reused purely to avoid re-constructing it
@@ -99,7 +111,14 @@ class BroadbandAdapter(DomainAdapter):
         return os.path.exists(self.csv_path) and os.path.exists(self.sock_path)
 
     def collect(self) -> List[TelemetryEvent]:
-        if not os.path.exists(self.csv_path):
+        connected = os.path.exists(self.csv_path)
+        if connected and not self._was_connected:
+            self._logger.info(log_line("broadband", "TELEMETRY", "SOURCE_CONNECTED", f"path={self.csv_path}"))
+        elif not connected and self._was_connected:
+            self._logger.warning(log_line("broadband", "TELEMETRY", "SOURCE_LOST", f"path={self.csv_path}"))
+        self._was_connected = connected
+
+        if not connected:
             return []
 
         # simulation/bng_traffic_simulator.py's BngScenarioSession.start()

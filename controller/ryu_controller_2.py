@@ -153,7 +153,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.all_adapters = [
             self.of_adapter,
             MobileNetworkAdapter(logger=self.logger),
-            BroadbandAdapter(bng_host="bng-blaster-1"),
+            BroadbandAdapter(bng_host="bng-blaster-1", logger=self.logger),
             BGPPeeringAdapter(),         # stub — wire up router_host later (External Peering domain)
         ]
 
