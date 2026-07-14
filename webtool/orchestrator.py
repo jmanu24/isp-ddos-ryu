@@ -59,6 +59,28 @@ def _port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _find_ryu_manager() -> str:
+    """
+    This process needs BOTH mininet (only ever installed against the
+    system python3 in this repo's own deploy scripts/docs -- every
+    topology/simulation script here is launched with a plain `sudo
+    python3 ...`, never through a venv) and Flask/ryu (installed inside
+    ./venv per this repo's requirements.txt). Those two dependency sets
+    don't coexist in one interpreter on a typical setup, so webtool/
+    app.py itself is expected to run under the system python3 -- which
+    means venv/bin isn't on PATH here, and a bare "ryu-manager" lookup
+    fails even though the venv has it. Prefer the repo-relative
+    venv/bin/ryu-manager (this repo's own convention) before falling
+    back to PATH, so ryu-manager still runs under the venv's
+    interpreter (where ryu/numpy/Flask are actually installed) without
+    requiring the venv to be activated in webtool/app.py's own shell.
+    """
+    candidate = REPO_DIR / "venv" / "bin" / "ryu-manager"
+    if candidate.exists():
+        return str(candidate)
+    return "ryu-manager"
+
+
 class Orchestrator:
 
     def __init__(self):
@@ -100,7 +122,7 @@ class Orchestrator:
             env["PYTHONPATH"] = str(REPO_DIR)
             log_fh = open(CONTROLLER_LOG_PATH, "a")
             self.controller_proc = subprocess.Popen(
-                ["ryu-manager", "--observe-links", "controller/ryu_controller_2.py"],
+                [_find_ryu_manager(), "--observe-links", "controller/ryu_controller_2.py"],
                 cwd=str(REPO_DIR), env=env, stdout=log_fh, stderr=subprocess.STDOUT,
             )
             self._controller_log_fh = log_fh
