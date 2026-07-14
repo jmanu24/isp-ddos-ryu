@@ -102,6 +102,24 @@ class BroadbandAdapter(DomainAdapter):
         if not os.path.exists(self.csv_path):
             return []
 
+        # simulation/bng_traffic_simulator.py's BngScenarioSession.start()
+        # deletes and recreates this CSV on every launch (its own
+        # documented, intentional behavior -- avoids replaying a dead
+        # process's stale rows). A long-lived controller process that
+        # outlives more than one BngScenarioSession (e.g. webtool/
+        # bng_ops.py's BngLifecycle switching scenarios mid-run) keeps
+        # this same DomainAdapter instance across that switch, so
+        # self._last_offset still points into the OLD, now-deleted
+        # file. Confirmed on a real run: seeking past a freshly
+        # recreated (much shorter) file's end just returns zero lines
+        # forever, never catching back up -- collect() silently stops
+        # reporting any broadband telemetry the moment a second
+        # BngScenarioSession replaces the first. Detect that case by
+        # comparing the file's current size against the stored offset
+        # and rewind to 0 when it shrank.
+        if os.path.getsize(self.csv_path) < self._last_offset:
+            self._last_offset = 0
+
         with open(self.csv_path, "r", newline="") as f:
             f.seek(self._last_offset)
             lines = f.readlines()
