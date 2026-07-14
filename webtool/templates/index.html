@@ -1,18 +1,106 @@
-<!--
-  Placeholder for Phase 3's real frontend (topology graph, node
-  multi-select, attack controls, event log). Kept minimal so
-  webtool/app.py's "/" route doesn't 500 while Phase 2 is verified via
-  curl -- replaced wholesale, not built on top of, once Phase 3 starts.
--->
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <title>DDoS Attack Launcher</title>
+<meta charset="utf-8">
+<title>DDoS Attack Launcher</title>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
-  <h1>Multi-Domain DDoS Attack Launcher</h1>
-  <p>La interfaz web todavia no esta lista (Fase 3 pendiente).</p>
-  <p>API disponible en /api/controller/*, /api/topology/*, /api/attack/*, /api/state.</p>
+
+<h1>Multi-Domain DDoS Attack Launcher</h1>
+
+<div class="card status-bar">
+  <div class="status-item">
+    <span>Controlador:</span>
+    <span id="controller-status" class="pill pill-stopped">stopped</span>
+    <button id="btn-controller-start">Iniciar</button>
+    <button id="btn-controller-stop" class="btn-danger">Detener</button>
+  </div>
+  <div class="status-item">
+    <span>Topologia:</span>
+    <span id="topology-status" class="pill pill-stopped">stopped</span>
+    <button id="btn-topology-start">Iniciar</button>
+    <button id="btn-topology-stop" class="btn-danger">Detener</button>
+  </div>
+</div>
+
+<h2>Topologia (estrella)</h2>
+<div class="card">
+  <div id="topology"></div>
+  <div class="legend">
+    <span class="legend-item"><span class="swatch swatch-enterprise"></span>enterprise</span>
+    <span class="legend-item"><span class="swatch swatch-mobile"></span>mobile</span>
+    <span class="legend-item"><span class="swatch swatch-broadband"></span>broadband</span>
+    <span class="legend-item"><span class="swatch swatch-attacking"></span>atacando</span>
+    <span class="legend-item"><span class="swatch swatch-target"></span>objetivo</span>
+  </div>
+</div>
+
+<h2>Lanzar ataque</h2>
+<div class="card">
+  <form id="attack-form">
+    <div class="form-row">
+      <label>Dominio</label>
+      <select id="attack-domain">
+        <option value="enterprise">Enterprise</option>
+        <option value="mobile">Mobile (gNB)</option>
+        <option value="broadband">Broadband (BNG)</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label>Switches origen</label>
+      <div id="switch-checks" class="switch-checks">
+        <label><input type="checkbox" class="switch-check" value="1"> s1</label>
+        <label><input type="checkbox" class="switch-check" value="2"> s2</label>
+        <label><input type="checkbox" class="switch-check" value="3"> s3</label>
+        <label><input type="checkbox" class="switch-check" value="4"> s4</label>
+      </div>
+    </div>
+
+    <div class="form-row" id="row-count-per-node" style="display:none">
+      <label>UEs por gNB</label>
+      <input type="number" id="attack-count" min="1" value="1">
+    </div>
+
+    <div class="form-row">
+      <label>Tipo de ataque</label>
+      <select id="attack-type">
+        <option value="SYN">TCP SYN Flood</option>
+        <option value="UDP">UDP Flood</option>
+        <option value="ICMP">ICMP Flood</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label>Puerto destino (opcional)</label>
+      <input type="number" id="attack-port" min="0" max="65535" placeholder="443 por defecto en SYN">
+    </div>
+
+    <div class="form-row">
+      <label>Objetivo</label>
+      <select id="attack-target"></select>
+    </div>
+
+    <div class="form-row">
+      <label>Duracion (s)</label>
+      <input type="number" id="attack-duration" min="1" value="30">
+      <label class="inline-label"><input type="checkbox" id="attack-indefinite"> indefinido (hasta detener manualmente)</label>
+    </div>
+
+    <button type="submit">Lanzar ataque</button>
+  </form>
+</div>
+
+<h2>Ataques activos</h2>
+<div class="card" id="attacks"></div>
+
+<h2>Log de eventos</h2>
+<div class="card" id="events"></div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
