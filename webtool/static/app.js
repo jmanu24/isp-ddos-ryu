@@ -57,18 +57,27 @@ function renderTopologyGraph(nodes, activeAttacks) {
         color: { background: "#333333", border: "#000000" }, font: { color: "#ffffff", size: 14 },
     });
 
-    nodesData.push({
-        id: "central_server", label: "servidor central\n10.99.0.1", shape: "database",
-        x: 0, y: 170, fixed: true, color: DOMAIN_COLORS.core,
-    });
-    edgesData.push({ from: "r1", to: "central_server" });
-
     const switchIndices = [...new Set((nodes || [])
         .filter((n) => n.switch_index != null)
         .map((n) => n.switch_index))].sort((a, b) => a - b);
 
     const R_SWITCH = 220;
     const R_HOST = 400;
+    const R_SERVER = 140;
+
+    // Switches sit at evenly-spaced angles starting from north (see the
+    // loop below) -- with 4 of them that's exactly N/E/S/W, so a fixed
+    // "south" position for the central server collides with whichever
+    // switch lands there. Placing it half a step off the first switch's
+    // angle instead keeps it in the gap between two switches regardless
+    // of how many there are.
+    const serverAngle = -Math.PI / 2 + Math.PI / Math.max(switchIndices.length, 1);
+    nodesData.push({
+        id: "central_server", label: "servidor central\n10.99.0.1", shape: "database",
+        x: R_SERVER * Math.cos(serverAngle), y: R_SERVER * Math.sin(serverAngle), fixed: true,
+        color: DOMAIN_COLORS.core,
+    });
+    edgesData.push({ from: "r1", to: "central_server" });
 
     switchIndices.forEach((si, idx) => {
         const angle = (idx / switchIndices.length) * 2 * Math.PI - Math.PI / 2;
