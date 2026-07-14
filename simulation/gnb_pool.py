@@ -52,6 +52,23 @@ def gnb_id_for(switch_index: int) -> str:
     return f"{_TEST_MCC}{_TEST_MNC}-{switch_index}"
 
 
+# Reserved, never-a-real-attack-target placeholder (same TEST-NET-3
+# convention as ue_traffic_generator.py's own UeSpec.benign_target_ip,
+# and for the identical reason -- see that field's docstring). Once a
+# UE's real hping3 process is killed, ue_state.json must stop claiming
+# it's still targeting the real attacked destination: ue_kpm_monitor.py
+# labels every row it writes (even a zero-rate, state="IDLE" one, once
+# the killed process's nftables counters stop incrementing) with
+# whatever dst_ip that JSON file says for this IMSI, regardless of
+# whether traffic is actually flowing. orchestration/controller.py's
+# check_mobile_unblocks() only checks presence (did ANY event for this
+# src_ip+domain show up toward this dst_ip this cycle), never rate --
+# so a stale dst_ip left pointing at the real target after stop_attack()
+# means the UE's own block can never be released, even long after its
+# process is dead.
+_STOPPED_UE_TARGET_IP = "203.0.113.99"
+
+
 @dataclass
 class GnbAttack:
     attack_id: str
@@ -168,21 +185,23 @@ class GnbManager:
         return attack_id
 
     def stop_attack(self, attack_id: str) -> bool:
-        """Terminates every UE process this attack started and removes
-        them from the pool entirely (no revert-to-benign -- attack-only
-        UEs have no prior benign identity to revert to, unlike the
-        interactive CLI's fixed pool)."""
+        """Terminates every UE process this attack started. Not removed
+        from the pool entirely (no revert-to-benign identity swap) -- see
+        _apply_mitigation's comment on why an IMSI's identity must outlive
+        its process once telemetry/mobile_adapter.py has reported it.
+        ue_ip_map.csv doesn't need rewriting (imsi->ip is permanent), but
+        ue_state.json's dst_ip DOES -- see _STOPPED_UE_TARGET_IP."""
         with self._lock:
             attack = self._attacks.pop(attack_id, None)
             if attack is None:
                 return False
             for imsi in attack.imsis:
                 _terminate(self._state.procs.pop(imsi, None))
-                # Deliberately NOT removed from self._pool -- see
-                # _apply_mitigation's comment on why an IMSI's identity
-                # must outlive its process once telemetry/mobile_adapter.py
-                # has reported it. ue_ip_map.csv/ue_state.json don't need
-                # rewriting either, since the pool itself hasn't changed.
+                ue = self._pool.get(imsi)
+                if ue is not None:
+                    ue.target_ip = _STOPPED_UE_TARGET_IP
+                    ue.dst_port = 0
+            self._flush_ue_files()
         return True
 
     def stop_all(self) -> None:
@@ -225,20 +244,33 @@ class GnbManager:
         genuinely went quiet): telemetry/mobile_adapter.py's
         apply_mitigation() resolves imsi from ue_ip_map.csv at the
         moment the unblock fires, and a since-deleted entry logs
-        IMSI_UNRESOLVED, silently dropping that unblock. An orphaned
-        pool entry (process dead, identity still resolvable) is
-        harmless -- MobileNetworkAdapter only ever emits a
-        TelemetryEvent for an IMSI that actually has a fresh CSV row,
-        and a dead process produces none.
+        IMSI_UNRESOLVED, silently dropping that unblock.
+
+        DOES revert target_ip to _STOPPED_UE_TARGET_IP and re-flush
+        ue_state.json, though -- "a dead process produces none [more CSV
+        rows]" turned out to be false on a real run: ue_kpm_monitor.py
+        polls nftables counters for every known IMSI unconditionally each
+        tick, independent of whether that IMSI's process is alive, and
+        keeps emitting a zero-rate ("IDLE") row tagged with whatever
+        dst_ip ue_state.json still says for it. Left pointing at the real
+        attacked destination, that row alone was enough to keep
+        check_mobile_unblocks()'s presence check (rate-blind by design)
+        permanently convinced the UE was "still there, just quiet" --
+        confirmed on a real run: throttled UEs never released even
+        minutes after their process died and the attack that triggered
+        the block had long since ended.
         """
         with self._lock:
             ue = self._pool.get(imsi)
             if ue is None or ue.benign:
                 return
             _terminate(self._state.procs.pop(imsi, None))
+            ue.target_ip = _STOPPED_UE_TARGET_IP
+            ue.dst_port = 0
             for attack in self._attacks.values():
                 if imsi in attack.imsis:
                     attack.imsis.remove(imsi)
+            self._flush_ue_files()
         print(f"[GNB-POOL] Mitigado: IMSI {imsi} bloqueado por el controlador")
 
     # ------------------------------------------------------------------
