@@ -150,15 +150,42 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# True if something is already listening on ryu-manager's OpenFlow port
+# -- launching a second ryu-manager on top of an already-running one
+# (e.g. one started by hand via deploy/start_controller_pinned.sh in
+# another terminal) fails to bind and, before this check existed, failed
+# SILENTLY: this script only ever verified the child PID existed, not
+# that it actually bound the port, so a redundant launch looked like
+# "[OK] ryu-manager corriendo" right up until BNGBlaster's real traffic
+# hit whichever controller genuinely had the port -- confirmed on a real
+# run producing stale session-id state and a "Resolve network
+# interfaces" hang after a few back-to-back scenario runs against a
+# controller that, unlike this script's own, never got restarted.
+OFP_PORT=6653
+port_in_use() {
+  ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${OFP_PORT}\$"
+}
+
+if [ "$START_CONTROLLER" -eq 1 ] && port_in_use; then
+  echo "== 3. Ya hay un controlador escuchando en el puerto ${OFP_PORT} -- usando ese, no se lanza uno nuevo =="
+  START_CONTROLLER=0
+fi
+
 if [ "$START_CONTROLLER" -eq 1 ]; then
   echo "== 3. Levantando el controlador (ryu-manager) =="
   PYTHONPATH="$PWD" ryu-manager --observe-links controller/ryu_controller_2.py \
     > /tmp/bng_scenario_controller.log 2>&1 &
   CONTROLLER_PID=$!
-  echo "  [OK] ryu-manager corriendo (pid ${CONTROLLER_PID}), log en /tmp/bng_scenario_controller.log"
   sleep 3
+  if ! kill -0 "$CONTROLLER_PID" 2>/dev/null || ! port_in_use; then
+    echo "  [FAIL] ryu-manager (pid ${CONTROLLER_PID}) no llego a escuchar en el puerto ${OFP_PORT} -- revisa /tmp/bng_scenario_controller.log" >&2
+    kill "$CONTROLLER_PID" 2>/dev/null || true
+    CONTROLLER_PID=""
+    exit 1
+  fi
+  echo "  [OK] ryu-manager corriendo (pid ${CONTROLLER_PID}), log en /tmp/bng_scenario_controller.log"
 else
-  echo "== 3. Omitido (--no-controller) -- asume que ya hay un controlador corriendo =="
+  echo "== 3. Omitido -- asume que ya hay un controlador corriendo =="
 fi
 
 echo "== 4. Corriendo el escenario '${SCENARIO}' (duración ${DURATION}s) =="
