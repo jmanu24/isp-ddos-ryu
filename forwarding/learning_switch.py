@@ -41,12 +41,17 @@ class LearningSwitch:
         # active destination-wide block.
         self._is_blocked = is_blocked
 
-        # Optional Callable[[dst_ip], bool], queried before installing an IP
-        # forwarding rule. Until the destination has been through at least
-        # one full detection cycle without triggering an attack, no rule —
+        # Optional Callable[[src_ip, dst_ip], bool], queried before
+        # installing an IP forwarding rule. Until this exact (src_ip,
+        # dst_ip) flow has been through at least one full detection cycle
+        # without src_ip triggering an attack toward dst_ip, no rule —
         # permit or block — gets cached for it; packets are still forwarded,
         # just one at a time via packet-out, going through the controller
-        # every time until validation completes.
+        # every time until validation completes. Scoped per-flow, not per-
+        # destination, so one source under attack toward a shared
+        # destination doesn't force every OTHER source's already-clean
+        # traffic toward that same destination back through this
+        # provisional path too.
         self._is_validated = is_validated
 
         # Optional Callable[[dpid, port_no], bool] — True if that port is a
@@ -290,7 +295,7 @@ class LearningSwitch:
                     ipv4_dst=ip_pkt.dst
                 )
 
-                if self._is_validated is None or self._is_validated(ip_pkt.dst):
+                if self._is_validated is None or self._is_validated(ip_pkt.src, ip_pkt.dst):
 
                     # hard_timeout forces this rule to expire — and the
                     # next packet to trigger a fresh packet-in — even

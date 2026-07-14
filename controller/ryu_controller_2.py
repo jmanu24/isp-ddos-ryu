@@ -134,7 +134,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             is_blocked=lambda src_ip, dst_ip, dst_port, proto: self.orchestrator.is_blocked(
                 src_ip, dst_ip, dst_port, proto
             ),
-            is_validated=lambda dst_ip: self.orchestrator.is_validated_destination(dst_ip),
+            is_validated=lambda src_ip, dst_ip: self.orchestrator.is_validated_flow(src_ip, dst_ip),
             is_interswitch_port=lambda dpid, port: self.orchestrator.is_interswitch_port(dpid, port),
             logger=self.logger,
         )

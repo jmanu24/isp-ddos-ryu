@@ -126,12 +126,34 @@ class OrchestrationController:
         # threshold. Reset to 0 whenever traffic rises back above it.
         self._below_threshold_streak: Dict[Tuple[str, str, int, str], int] = {}
 
-        # Destination IPs that have completed at least one full detection
-        # cycle without triggering an attack. LearningSwitch refuses to
-        # cache *any* rule — permit or block — for a destination until it's
-        # in this set, so brand-new traffic always goes through the
-        # detection pipeline before the switch commits to anything.
-        self._validated_destinations: set = set()
+        # (src_ip, dst_ip) flows that have completed at least one full
+        # detection cycle without that specific source being flagged as
+        # part of an attack toward that destination. LearningSwitch refuses
+        # to cache *any* rule — permit or block — for a flow until it's in
+        # this set, so brand-new traffic always goes through the detection
+        # pipeline before the switch commits to anything.
+        #
+        # Scoped per-FLOW, not per-destination: a shared, frequently
+        # -targeted destination (e.g. this topology's central server, which
+        # is both a legitimate attack target and the one destination every
+        # domain's benign baseline also reaches) would otherwise force
+        # EVERY source's traffic toward it through LearningSwitch's short
+        # -lived provisional flow (PROVISIONAL_TIMEOUT=2s) any time even
+        # ONE unrelated source is under active attack against it. Confirmed
+        # on a real run: once the central server became a real, frequently
+        # -attacked-and-unblocked target, innocent hosts' own steady ICMP
+        # baseline toward it started re-triggering packet-in every ~2s
+        # instead of every VALIDATED_FLOW_HARD_TIMEOUT=30s, and
+        # DDoSCollector's per-(dst_ip, dst_port, protocol) aggregation
+        # (deliberately source-blind — see its docstring — to catch
+        # spoofed/distributed floods) summed all of those innocent hosts'
+        # packet-ins into one shared counter, occasionally spiking past
+        # ICMP_THRESHOLD and producing a false ICMP_FLOOD against a host
+        # that was never actually flooding. Per-flow scoping keeps a truly
+        # new (src, dst) pair protected exactly as before, without
+        # punishing every OTHER source that happens to share a popular
+        # destination with an actual attacker.
+        self._validated_flows: Set[Tuple[str, str]] = set()
 
         # (key, dpid) -> last sample of the matching drop rule's counters.
         # Once blocked, an attacker's packets are dropped in the fast path
@@ -828,32 +850,45 @@ class OrchestrationController:
         """
         return any(key[0] == src_ip and key[1] == dst_ip for key in self._active_mobile_blocks)
 
-    def is_validated_destination(self, dst_ip: str) -> bool:
+    def is_validated_flow(self, src_ip: str, dst_ip: str) -> bool:
         """
-        True once dst_ip has completed at least one full detection cycle
-        without being flagged as an attack. LearningSwitch checks this
-        before installing *any* flow rule for a destination — permit or
-        block — so brand-new traffic is always forwarded packet-by-packet
-        (no caching either way) until the pipeline has actually evaluated
-        it at least once.
+        True once this exact (src_ip, dst_ip) flow has completed at least
+        one full detection cycle without src_ip being flagged as part of
+        an attack toward dst_ip. LearningSwitch checks this before
+        installing *any* flow rule — permit or block — so brand-new
+        traffic is always forwarded packet-by-packet (no caching either
+        way) until the pipeline has actually evaluated it at least once.
+
+        Scoped per-flow rather than per-destination on purpose — see
+        _validated_flows' declaration comment for why a shared destination
+        (e.g. this topology's central server) must not drag every OTHER
+        source's already-clean traffic back into the unvalidated state
+        just because one specific source is under attack.
         """
-        return dst_ip in self._validated_destinations
+        return (src_ip, dst_ip) in self._validated_flows
 
     def validate(self, correlated: List[CorrelatedEvent], detections: List[DetectionResult]) -> None:
         """
-        Called once per pipeline cycle, after detection. Any destination
-        that was observed this cycle and did NOT trigger a detection has
-        now been evaluated and found clean — mark it validated so
-        LearningSwitch can start caching forwarding rules for it. A
-        destination that did trigger a detection is left unvalidated; it
-        gets blocked instead, and stays unvalidated until traffic toward
-        it is reassessed clean in some future cycle.
+        Called once per pipeline cycle, after detection. Any (src_ip,
+        dst_ip) flow observed this cycle whose src_ip was NOT part of a
+        detection against that dst_ip has now been evaluated and found
+        clean — mark it validated so LearningSwitch can start caching
+        forwarding rules for it. A flow whose src_ip WAS flagged is left
+        unvalidated; it gets blocked instead, and stays unvalidated until
+        it's reassessed clean in some future cycle. Every OTHER source
+        sharing that same destination is unaffected either way.
         """
-        flagged_dsts = {d.dst_ip for d in detections}
+        attacking_sources_by_dst: Dict[str, Set[str]] = defaultdict(set)
+        for d in detections:
+            if d.src_ip and d.src_ip != "*":
+                attacking_sources_by_dst[d.dst_ip].add(d.src_ip)
+            attacking_sources_by_dst[d.dst_ip].update(d.sources)
 
         for c in correlated:
-            if c.dst_ip not in flagged_dsts:
-                self._validated_destinations.add(c.dst_ip)
+            attackers = attacking_sources_by_dst.get(c.dst_ip, ())
+            for event in c.events:
+                if event.src_ip not in attackers:
+                    self._validated_flows.add((event.src_ip, c.dst_ip))
 
     # ------------------------------------------------------------------
     # Continuous sweep — catches forwarding rules clear_forwarding_rules()
@@ -1070,7 +1105,8 @@ class OrchestrationController:
             self._below_threshold_streak[key] += 1
 
             if self._below_threshold_streak[key] >= self.UNBLOCK_CONFIRM_CYCLES:
-                attack_type = self._active_blocks[key].attack_type
+                original = self._active_blocks[key]
+                attack_type = original.attack_type
 
                 self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
                 unblock_actions.append(MitigationAction(
@@ -1099,10 +1135,20 @@ class OrchestrationController:
                 if attack_type not in still_active_types:
                     metrics.record_attack_rate(attack_type, "enterprise", 0, 0)
                     metrics.record_mitigation_rate(attack_type, "block", "enterprise", 0, 0)
-                # Force re-validation: a destination that was just under
-                # attack shouldn't get its forwarding rules trusted again
-                # without going through at least one more clean cycle.
-                self._validated_destinations.discard(dst_ip)
+                # Force re-validation: a flow that was just under attack
+                # shouldn't get its forwarding rules trusted again without
+                # going through at least one more clean cycle. Scoped to
+                # exactly the source(s) that were actually blocked -- a
+                # wildcard ("*") block has no single real src_ip, so fall
+                # back to the concrete attacker list it was built from
+                # (MitigationAction.sources) instead. Every OTHER source
+                # that shares dst_ip stays validated -- see
+                # _validated_flows' declaration comment.
+                if src_ip == "*":
+                    for attacker in original.sources:
+                        self._validated_flows.discard((attacker, dst_ip))
+                else:
+                    self._validated_flows.discard((src_ip, dst_ip))
 
         return unblock_actions
 
@@ -1243,6 +1289,15 @@ class OrchestrationController:
             if attack_type not in still_active_types:
                 metrics.record_attack_rate(attack_type, domain, 0, 0)
                 metrics.record_mitigation_rate(attack_type, "block", domain, 0, 0)
-            self._validated_destinations.discard(dst_ip)
+            # Same per-flow re-validation as check_unblocks() -- see
+            # _validated_flows' declaration comment. original.sources
+            # covers a wildcard block; src_ip alone covers the normal
+            # per-source case every PER_SOURCE_MITIGATION_DOMAINS block
+            # actually uses.
+            if src_ip == "*":
+                for attacker in original.sources:
+                    self._validated_flows.discard((attacker, dst_ip))
+            else:
+                self._validated_flows.discard((src_ip, dst_ip))
 
         return unblock_actions
