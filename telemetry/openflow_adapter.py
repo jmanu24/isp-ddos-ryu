@@ -14,18 +14,25 @@ from collectors.ddos_collector import DDoSCollector
 _PROTO_NAMES = {1: "ICMP", 6: "TCP", 17: "UDP"}
 
 # Address space simulation/ue_traffic_generator.py spoofs mobile UE
-# source IPs from (10.60.0.x). That traffic is real packets crossing
-# these same OpenFlow switches, but it is NOT this domain's traffic to
-# detect or mitigate -- MobileNetworkAdapter's own KPM CSV pipeline (fed
-# by simulation/ue_kpm_monitor.py's real nftables measurement of that
-# same traffic) is the intended detector/mitigator for it. Without this
-# exclusion, this domain's own packet-in/flow-stats detection races it
-# and virtually always wins (it reacts within one packet-in instead of
-# one KPM-CSV poll cycle), firing a network-wide drop rule before -- or
-# instead of -- the mobile-domain RC command queue ever gets a chance to
-# throttle the UE at the RAN level, defeating the entire point of
-# simulating that path.
-_MOBILE_UE_SUBNET = ipaddress.ip_network("10.60.0.0/24")
+# source IPs from (10.60.0.x in the ring topology). That traffic is real
+# packets crossing these same OpenFlow switches, but it is NOT this
+# domain's traffic to detect or mitigate -- MobileNetworkAdapter's own
+# KPM CSV pipeline (fed by simulation/ue_kpm_monitor.py's real nftables
+# measurement of that same traffic) is the intended detector/mitigator
+# for it. Without this exclusion, this domain's own packet-in/flow-stats
+# detection races it and virtually always wins (it reacts within one
+# packet-in instead of one KPM-CSV poll cycle), firing a network-wide
+# drop rule before -- or instead of -- the mobile-domain RC command
+# queue ever gets a chance to throttle the UE at the RAN level, defeating
+# the entire point of simulating that path.
+#
+# /16, not /24: topologies/star_topology.py's simulation/gnb_pool.py
+# splits UEs per gNB, one /24 per switch (10.60.<i>.0/24, i=1..4) --
+# widened here to cover the whole range with headroom, rather than
+# tracking a growing list of per-gNB /24s. Does not overlap
+# _BNG_NETWORK_SUBNET (10.50.0.0/24) or _BNG_SESSION_SUBNETS
+# (10.61.x.0/24) below.
+_MOBILE_UE_SUBNET = ipaddress.ip_network("10.60.0.0/16")
 
 
 def _is_mobile_ue_source(ip: Optional[str]) -> bool:
