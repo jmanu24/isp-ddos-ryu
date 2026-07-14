@@ -30,7 +30,17 @@ class DecisionEngine:
             "UDP_FLOOD": 0.9,
             "ICMP_FLOOD": 0.8,
             "LOW_SLOW": 1.2,
-            "DDOS_DISTRIBUTED": 1.3
+            "DDOS_DISTRIBUTED": 1.3,
+            # A distributed flood whose sources span multiple domains at
+            # once needs coordinated mitigation across separate control
+            # planes (OpenFlow drop rule, mobile RC-queue UE kill, BNG
+            # session-stop+DHCP blacklist) simultaneously -- strictly
+            # more severe to fully mitigate than a single-domain
+            # DDOS_DISTRIBUTED, one tier up continuing the ~0.1 spacing
+            # above. Independent of (not double-counting) DDoSDetectionEngine.
+            # MULTIDOMAIN_BOOST, which is a confidence multiplier at the
+            # detection layer, not a score weight here.
+            "MULTIDOMAIN_DISTRIBUTED_ATTACK": 1.4,
         }
 
     def evaluate(self, detections):

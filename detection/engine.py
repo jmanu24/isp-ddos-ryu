@@ -27,6 +27,15 @@ class DDoSDetectionEngine:
                          single-source thresholds, jointly flooding one
                          destination with a near-uniform (high-entropy)
                          traffic distribution across source IPs
+    - MULTIDOMAIN_DISTRIBUTED_ATTACK : the DDOS_DISTRIBUTED case above,
+                         but the contributing sources themselves span more
+                         than one network domain (e.g. real enterprise
+                         hosts, spoofed mobile UEs, and BNGBlaster
+                         sessions all flooding the same destination at
+                         once) -- see DetectionResult.source_domains.
+                         orchestration/controller.py routes each source
+                         through its own domain's real mitigation
+                         mechanism for this type, not a single one.
 
     Confidence is boosted when the same destination is targeted from
     multiple network domains simultaneously (multidomain attack pattern).
@@ -375,6 +384,17 @@ class DDoSDetectionEngine:
             source_device_ids = {
                 e.src_ip: e.device_id for e in event.events if e.src_ip in low_rate_sources
             }
+            # See DetectionResult.source_domains. attack_type stays
+            # "LOW_SLOW" regardless of how many domains contribute --
+            # this detector's own docstring above already documents
+            # mixing PER_SOURCE_MITIGATION_DOMAINS members in one streak
+            # as intentional, not something needing its own
+            # MULTIDOMAIN_* label. Populated for orchestration/
+            # controller.py's _build_actions() to route each source
+            # through its own domain's mitigation regardless.
+            source_domains = {
+                e.src_ip: e.domain for e in event.events if e.src_ip in low_rate_sources
+            }
 
             results.append(DetectionResult(
                 domain=representative.domain,
@@ -388,6 +408,7 @@ class DDoSDetectionEngine:
                 confidence=confidence,
                 sources=list(low_rate_sources),
                 source_device_ids=source_device_ids,
+                source_domains=source_domains,
             ))
 
         # Forget destinations that didn't appear in `correlated` at all
@@ -483,6 +504,17 @@ class DDoSDetectionEngine:
             # source's own device_id (e.g. a mobile UE's real gNB), not
             # the single representative event's.
             source_device_ids = {e.src_ip: e.device_id for e in proto_events}
+            # See DetectionResult.source_domains -- each contributing
+            # source's own domain, built from the SAME protocol-filtered
+            # proto_events pps_by_src already came from (not the coarser
+            # event.domains above, which includes unrelated benign
+            # traffic from other domains toward the same dst_ip and
+            # would misclassify a genuinely single-domain flood).
+            source_domains = {e.src_ip: e.domain for e in proto_events}
+            distributed_attack_type = (
+                "MULTIDOMAIN_DISTRIBUTED_ATTACK" if len(set(source_domains.values())) > 1
+                else "DDOS_DISTRIBUTED"
+            )
             return DetectionResult(
                 domain=representative.domain,
                 device_id=representative.device_id,
@@ -490,11 +522,12 @@ class DDoSDetectionEngine:
                 dst_ip=event.dst_ip,
                 dst_port=representative.dst_port,
                 protocol=self._normalize_protocol(representative.protocol),
-                attack_type="DDOS_DISTRIBUTED",
+                attack_type=distributed_attack_type,
                 score=score,
                 confidence=confidence,
                 sources=list(pps_by_src.keys()),
                 source_device_ids=source_device_ids,
+                source_domains=source_domains,
                 pps=total_pps,
                 bps=total_bps,
             )
@@ -591,6 +624,14 @@ class DDoSDetectionEngine:
         # source's own device_id (e.g. a mobile UE's real gNB), not the
         # single representative event's.
         source_device_ids = {e.src_ip: e.device_id for e in candidate_events}
+        # See DetectionResult.source_domains -- built from the same
+        # candidate_events pps_by_src came from, not the coarser
+        # event.domains (see _build_result's matching comment).
+        source_domains = {e.src_ip: e.domain for e in candidate_events}
+        distributed_attack_type = (
+            "MULTIDOMAIN_DISTRIBUTED_ATTACK" if len(set(source_domains.values())) > 1
+            else "DDOS_DISTRIBUTED"
+        )
 
         return DetectionResult(
             domain=representative.domain,
@@ -599,11 +640,12 @@ class DDoSDetectionEngine:
             dst_ip=event.dst_ip,
             dst_port=representative.dst_port,
             protocol=self._normalize_protocol(representative.protocol),
-            attack_type="DDOS_DISTRIBUTED",
+            attack_type=distributed_attack_type,
             score=score,
             confidence=confidence,
             sources=list(pps_by_src.keys()),
             source_device_ids=source_device_ids,
+            source_domains=source_domains,
             pps=total_pps,
             bps=total_bps,
         )

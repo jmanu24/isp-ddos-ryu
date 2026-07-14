@@ -371,5 +371,15 @@ class Orchestrator:
         return CENTRAL_SERVER_IP
 
     def valid_targets(self) -> List[str]:
+        # Includes the central server -- it's a valid attack target (see
+        # webtool/app.py's /api/attack/start), not just a benign-traffic
+        # sink; attacking it from multiple domains at once is exactly how
+        # MULTIDOMAIN_DISTRIBUTED_ATTACK gets exercised. Only appended
+        # when the topology is actually up (self.host_map non-empty) --
+        # otherwise the central server IP would validate even with no
+        # real topology to attack from at all, same "empty means nothing
+        # is valid yet" invariant valid_targets() already had.
         with self._lock:
-            return [host.IP() for roles in self.host_map.values() for host in roles.values()]
+            if not self.host_map:
+                return []
+            return [host.IP() for roles in self.host_map.values() for host in roles.values()] + [CENTRAL_SERVER_IP]

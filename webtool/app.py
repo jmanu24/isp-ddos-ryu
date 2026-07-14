@@ -111,10 +111,17 @@ def attack_start():
         return jsonify({"ok": False, "error": f"attack_type invalido para {domain}: {attack_type}"}), 400
     if not target_ip:
         return jsonify({"ok": False, "error": "target_ip requerido"}), 400
-    if target_ip == orchestrator.central_server_ip():
-        return jsonify({"ok": False, "error": "el servidor central no puede ser objetivo de un ataque"}), 400
+    # The central server IS a valid target -- it's the one destination
+    # every domain's benign baseline already reaches, so attacking it
+    # (individually or from all 3 domains at once) is exactly how a
+    # MULTIDOMAIN_DISTRIBUTED_ATTACK gets exercised. Previously excluded
+    # here over a presence-based-unblock collision concern that doesn't
+    # actually apply to this topology's per-attack-fresh-source design
+    # (simulation/gnb_pool.py's GnbManager never reuses/mutates the
+    # benign baseline UE's own identity for an attack -- see
+    # orchestrator.py's valid_targets(), which already includes it).
     if target_ip not in orchestrator.valid_targets():
-        return jsonify({"ok": False, "error": f"target_ip debe ser uno de los hosts reales de la topologia: {target_ip}"}), 400
+        return jsonify({"ok": False, "error": f"target_ip debe ser uno de los hosts reales de la topologia (o el servidor central): {target_ip}"}), 400
 
     if dst_port is None:
         dst_port = 443 if attack_type == "SYN" else 0

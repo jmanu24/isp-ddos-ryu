@@ -72,11 +72,12 @@ class DetectionResult:
     Output of the DDoS Detection Engine.
     Produced when a CorrelatedEvent exceeds attack thresholds.
 
-    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "LOW_SLOW" | "DDOS_DISTRIBUTED"
+    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "LOW_SLOW" | "DDOS_DISTRIBUTED" | "MULTIDOMAIN_DISTRIBUTED_ATTACK"
     score       : raw metric ratio (observed / threshold)
     confidence  : 0.0–1.0, boosted when attack spans multiple domains
     sources     : distinct source IPs contributing — only populated for
-                  DDOS_DISTRIBUTED, where src_ip is "*" (no single attacker)
+                  DDOS_DISTRIBUTED/MULTIDOMAIN_DISTRIBUTED_ATTACK, where
+                  src_ip is "*" (no single attacker)
     source_device_ids : src_ip -> that source's own device_id (e.g. real
                   gNB id for a mobile UE) — only populated alongside
                   `sources`. A mobile multi-source attack's contributing
@@ -87,6 +88,18 @@ class DetectionResult:
                   for dst_port/protocol, which the simulator's attack
                   config genuinely does apply identically to the whole
                   group.
+    source_domains : src_ip -> that source's own domain ("enterprise"|
+                  "mobile"|"broadband") — only populated alongside
+                  `sources`, same shape as source_device_ids. Lets
+                  orchestration/controller.py's _build_actions() route
+                  each contributing source through ITS OWN domain's real
+                  mitigation mechanism instead of assuming every source
+                  shares this DetectionResult's single representative
+                  `domain` (correlation/correlator.py already aggregates
+                  telemetry across domains toward one dst_ip, so a
+                  distributed detection's sources can genuinely span
+                  more than one domain -- see MULTIDOMAIN_DISTRIBUTED_
+                  ATTACK).
     in_port     : ingress switch port of the representative event, when
                   known — lets mitigation scope a block to the exact
                   switch+port closest to the attacker instead of the
@@ -106,6 +119,7 @@ class DetectionResult:
     confidence: float
     sources: List[str] = field(default_factory=list)
     source_device_ids: Dict[str, str] = field(default_factory=dict)
+    source_domains: Dict[str, str] = field(default_factory=dict)
     in_port: int = 0
     pps: float = 0.0
     bps: float = 0.0

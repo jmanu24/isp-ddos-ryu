@@ -259,19 +259,27 @@ class OrchestrationController:
 
             if (
                 newly_enforced
-                and decision.attack_type == "DDOS_DISTRIBUTED"
-                and newly_enforced[0].domain == "enterprise"
+                and decision.attack_type in ("DDOS_DISTRIBUTED", "MULTIDOMAIN_DISTRIBUTED_ATTACK")
+                and any(a.domain == "enterprise" for a in newly_enforced)
             ):
                 # One cleanup pass per group, after every location's block
                 # in it is already live — not per action, since
                 # _build_actions can split one distributed detection into
-                # several actions (one per distinct ingress location),
-                # each carrying only the sources seen at ITS location; the
-                # union covers every source in the whole detection.
-                all_sources = {s for action in newly_enforced for s in action.sources}
+                # several actions (one per distinct ingress location, or
+                # for MULTIDOMAIN_DISTRIBUTED_ATTACK also one per
+                # contributing domain), each carrying only the sources
+                # seen at ITS location; the union covers every source in
+                # the whole detection. Restricted to enterprise-domain
+                # actions -- of_mitigator.clear_forwarding_rules only
+                # means anything for OpenFlow's own forwarding-rule
+                # table; a mobile/broadband source in the same
+                # MULTIDOMAIN_DISTRIBUTED_ATTACK never had an L3
+                # forwarding rule there to begin with.
+                enterprise_actions = [a for a in newly_enforced if a.domain == "enterprise"]
+                all_sources = {s for action in enterprise_actions for s in action.sources}
                 if all_sources:
                     self.of_mitigator.clear_forwarding_rules(
-                        newly_enforced[0].dst_ip, list(all_sources)
+                        enterprise_actions[0].dst_ip, list(all_sources)
                     )
 
         # Zero out mitigation rate gauges for (attack_type, action, domain)
@@ -298,34 +306,45 @@ class OrchestrationController:
         Build one MitigationAction per affected domain.
         Chooses the mitigation action type based on attack type and domain.
 
-        DDOS_DISTRIBUTED on the openflow domain is the one exception:
-        instead of one destination-wide action with no location at all,
-        every source IP the detection saw is first resolved to the
-        physical HOST port its packets were actually confirmed entering
-        on (see _scoped_ingress_for_source — packet-in-derived and
-        host-port-filtered, works even for a spoofed src_ip, since it
-        reflects where the packet arrived, not an ARP-learned identity a
-        fake IP could never produce), then grouped by that location. One
-        action per *distinct location* is built — not per source —
-        matching only (in_port, dst_ip, dst_port, protocol), no src_ip:
-        a real spoofed flood is virtually always many fake IPs funneled
-        through ONE real attacker port, so this normally collapses to a
-        single precise block instead of one rule per fake IP.
+        DDOS_DISTRIBUTED, MULTIDOMAIN_DISTRIBUTED_ATTACK, and mobile-
+        domain LOW_SLOW are the exception to "one action per detection":
+        each carries a real per-source list (`DetectionResult.sources`),
+        which is first partitioned by each source's OWN real domain
+        (`DetectionResult.source_domains`) rather than assumed to all
+        share `d.domain` (just the representative contributing event's
+        domain — correlation/correlator.py already aggregates telemetry
+        across domains toward one dst_ip, so one detection's sources can
+        genuinely span more than one domain, which is exactly what
+        MULTIDOMAIN_DISTRIBUTED_ATTACK means). Each per-domain partition
+        is then dispatched through that domain's own real mitigation
+        shape:
+        - enterprise sources: every source IP is first resolved to the
+          physical HOST port its packets were actually confirmed
+          entering on (see _scoped_ingress_for_source — packet-in-derived
+          and host-port-filtered, works even for a spoofed src_ip, since
+          it reflects where the packet arrived, not an ARP-learned
+          identity a fake IP could never produce), then grouped by that
+          location. One action per *distinct location* — not per source —
+          matching only (in_port, dst_ip, dst_port, protocol), no src_ip:
+          a real spoofed flood is virtually always many fake IPs funneled
+          through ONE real attacker port, so this normally collapses to a
+          single precise block instead of one rule per fake IP. Sources
+          with no confirmed host-port location yet are skipped entirely —
+          NEVER blocked network-wide; they'll get caught once a host-port
+          sighting for them arrives in a later cycle.
+        - PER_SOURCE_MITIGATION_DOMAINS sources (mobile UEs, BNGBlaster
+          subscriber sessions): no destination-wide network lever the way
+          an OpenFlow drop rule is, so a "*" src_ip can't be dispatched as
+          a single action the way it can for OpenFlow — one action per
+          contributing source instead, each quarantined individually
+          through the existing per-source block/unblock machinery.
 
-        Sources with no confirmed host-port location yet are skipped
-        entirely — NEVER blocked network-wide; they'll get caught once a
-        host-port sighting for them arrives in a later cycle. OpenFlow's
-        own LOW_SLOW flow-count variant also uses src_ip="*" but carries
-        no per-source IP list at all (it's a flow-count signature, not a
-        list of attackers), so it's left as a single network-wide action
-        via the normal path below — that one has no per-source location
-        to scope to in the first place, unlike DDOS_DISTRIBUTED.
-
-        Mobile-domain LOW_SLOW and DDOS_DISTRIBUTED are the analogous
-        exception for that domain (see the branch below) — both carry a
-        real per-source UE list, and mobile mitigation has no network-
-        wide lever at all, so each contributing UE gets its own action
-        instead of one with an unresolvable src_ip="*".
+        OpenFlow's own LOW_SLOW flow-count variant also uses src_ip="*"
+        but carries no per-source IP list at all (it's a flow-count
+        signature, not a list of attackers), so it's left as a single
+        network-wide action via the normal path below — that one has no
+        per-source location to scope to in the first place, unlike
+        DDOS_DISTRIBUTED/MULTIDOMAIN_DISTRIBUTED_ATTACK.
         """
         actions: List[MitigationAction] = []
         seen_domains = set()
@@ -339,88 +358,128 @@ class OrchestrationController:
 
             action_type = self._action_for(decision.attack_type, d.domain)
 
-            if d.domain == "enterprise" and decision.attack_type == "DDOS_DISTRIBUTED" and d.sources:
-                by_location: Dict[Tuple[str, int], List[str]] = defaultdict(list)
-                for source in d.sources:
-                    device_id, in_port = self._scoped_ingress_for_source(source, d.dst_ip)
-                    if not device_id:
-                        # No confirmed host-port sighting for this source
-                        # yet — skip it rather than fall back to a
-                        # network-wide block.
-                        continue
-                    by_location[(device_id, in_port)].append(source)
-
-                for (device_id, in_port), sources_at_location in by_location.items():
-                    actions.append(MitigationAction(
-                        domain=d.domain,
-                        device_id=device_id,
-                        src_ip="*",
-                        dst_ip=d.dst_ip,
-                        dst_port=d.dst_port,
-                        protocol=d.protocol,
-                        action=action_type,
-                        sources=sources_at_location,
-                        attack_type=decision.attack_type,
-                        in_port=in_port,
-                        pps=d.pps,
-                        bps=d.bps,
-                    ))
-                continue
-
             if (
-                d.domain in settings.PER_SOURCE_MITIGATION_DOMAINS
-                and decision.attack_type in ("LOW_SLOW", "DDOS_DISTRIBUTED")
+                decision.attack_type in ("DDOS_DISTRIBUTED", "MULTIDOMAIN_DISTRIBUTED_ATTACK", "LOW_SLOW")
                 and d.sources
             ):
-                # Mirrors the openflow DDOS_DISTRIBUTED branch above, but
-                # simpler: domains in PER_SOURCE_MITIGATION_DOMAINS (mobile
-                # UEs, BNGBlaster subscriber sessions) have inherently
-                # per-source mitigation -- there's no destination-wide
-                # network lever the way an OpenFlow drop rule is -- so a
-                # "*" src_ip can't be dispatched as a single action the
-                # way it can for OpenFlow. Covers both multi-source attack
-                # types LOW_SLOW and DDOS_DISTRIBUTED -- both carry their
-                # contributing sources in `sources` and both would
-                # otherwise build a MitigationAction with src_ip="*",
-                # which the domain adapter can never resolve to a real
-                # IMSI/session-id (logs "Cannot resolve src_ip * ...",
-                # mitigates nothing) and which check_mobile_unblocks can
-                # never confirm "still present" either -- no real
-                # TelemetryEvent ever has src_ip=="*" literally, so that
-                # bogus block would unblock itself again after exactly
-                # UNBLOCK_CONFIRM_CYCLES regardless of whether the attack
-                # was still ongoing (observed: a real distributed attack
-                # being detected once, "blocked" as a no-op, automatically
-                # "unblocked" a few seconds later, and the same traffic
-                # then re-surfacing as several individual SYN_FLOOD
-                # detections instead). One action per contributing source
-                # instead, each quarantined individually through the
-                # existing per-source block/unblock machinery, which
-                # already works correctly per real source IP.
+                # Partition this detection's contributing sources by their
+                # OWN real domain (DetectionResult.source_domains) instead
+                # of assuming every source shares d.domain -- which is
+                # just the representative contributing event's domain,
+                # picked by whichever source had the most pps (see
+                # detection/engine.py's _build_result/_classify_
+                # distributed). correlation/correlator.py already
+                # aggregates telemetry across domains toward one dst_ip,
+                # so one detection's sources can genuinely span more than
+                # one domain (that's exactly what
+                # MULTIDOMAIN_DISTRIBUTED_ATTACK means, and
+                # analyze_low_slow_mobile's LOW_SLOW can mix
+                # PER_SOURCE_MITIGATION_DOMAINS members too). Routing ALL
+                # of them through one domain's mitigation either silently
+                # drops the others (enterprise's OpenFlow location lookup
+                # never resolves spoofed mobile/BNG sources) or misroutes
+                # real enterprise IPs to an adapter that can never resolve
+                # them (mobile/broadband's apply_mitigation looks them up
+                # in its own IMSI/session table and no-ops).
+                sources_by_domain: Dict[str, List[str]] = defaultdict(list)
                 for source in d.sources:
-                    actions.append(MitigationAction(
-                        domain=d.domain,
-                        # This UE's OWN gNB (DetectionResult.source_device_ids),
-                        # not d.device_id (just one representative
-                        # contributing event's gNB) -- contributing UEs can
-                        # each be attached to a different simulated gNB
-                        # (see ul_traffic_simulator.py's --gnb-count), so
-                        # using d.device_id for all of them mislabeled
-                        # every UE except the representative's with the
-                        # wrong gNB. Falls back to d.device_id only if a
-                        # source is somehow missing from the map (shouldn't
-                        # happen -- every source in d.sources came from the
-                        # same event.events this map was built from).
-                        device_id=d.source_device_ids.get(source, d.device_id),
-                        src_ip=source,
-                        dst_ip=d.dst_ip,
-                        dst_port=d.dst_port,
-                        protocol=d.protocol,
-                        action=action_type,
-                        attack_type=decision.attack_type,
-                        pps=d.pps,
-                        bps=d.bps,
-                    ))
+                    sources_by_domain[d.source_domains.get(source, d.domain)].append(source)
+
+                for src_domain, sources_subset in sources_by_domain.items():
+                    per_domain_action_type = self._action_for(decision.attack_type, src_domain)
+
+                    if src_domain == "enterprise":
+                        # Every source IP is first resolved to the
+                        # physical HOST port its packets were actually
+                        # confirmed entering on (see
+                        # _scoped_ingress_for_source -- packet-in-derived
+                        # and host-port-filtered, works even for a
+                        # spoofed src_ip, since it reflects where the
+                        # packet arrived, not an ARP-learned identity a
+                        # fake IP could never produce), then grouped by
+                        # that location. One action per *distinct
+                        # location* -- not per source -- matching only
+                        # (in_port, dst_ip, dst_port, protocol), no
+                        # src_ip: a real spoofed flood is virtually always
+                        # many fake IPs funneled through ONE real attacker
+                        # port, so this normally collapses to a single
+                        # precise block instead of one rule per fake IP.
+                        # Sources with no confirmed host-port location yet
+                        # are skipped entirely -- NEVER blocked
+                        # network-wide; they'll get caught once a
+                        # host-port sighting for them arrives in a later
+                        # cycle.
+                        by_location: Dict[Tuple[str, int], List[str]] = defaultdict(list)
+                        for source in sources_subset:
+                            device_id, in_port = self._scoped_ingress_for_source(source, d.dst_ip)
+                            if not device_id:
+                                continue
+                            by_location[(device_id, in_port)].append(source)
+
+                        for (device_id, in_port), sources_at_location in by_location.items():
+                            actions.append(MitigationAction(
+                                domain=src_domain,
+                                device_id=device_id,
+                                src_ip="*",
+                                dst_ip=d.dst_ip,
+                                dst_port=d.dst_port,
+                                protocol=d.protocol,
+                                action=per_domain_action_type,
+                                sources=sources_at_location,
+                                attack_type=decision.attack_type,
+                                in_port=in_port,
+                                pps=d.pps,
+                                bps=d.bps,
+                            ))
+
+                    elif src_domain in settings.PER_SOURCE_MITIGATION_DOMAINS:
+                        # domains in PER_SOURCE_MITIGATION_DOMAINS (mobile
+                        # UEs, BNGBlaster subscriber sessions) have
+                        # inherently per-source mitigation -- there's no
+                        # destination-wide network lever the way an
+                        # OpenFlow drop rule is -- so a "*" src_ip can't
+                        # be dispatched as a single action the way it can
+                        # for OpenFlow. One action per contributing
+                        # source, each quarantined individually through
+                        # the existing per-source block/unblock machinery,
+                        # which already works correctly per real source
+                        # IP (see check_mobile_unblocks).
+                        for source in sources_subset:
+                            actions.append(MitigationAction(
+                                domain=src_domain,
+                                # This source's OWN gNB/BNG id
+                                # (DetectionResult.source_device_ids), not
+                                # d.device_id (just one representative
+                                # contributing event's) -- contributing
+                                # sources can each be attached to a
+                                # different simulated gNB (see
+                                # ul_traffic_simulator.py's --gnb-count),
+                                # so using d.device_id for all of them
+                                # mislabeled every one except the
+                                # representative's with the wrong gNB.
+                                device_id=d.source_device_ids.get(source, d.device_id),
+                                src_ip=source,
+                                dst_ip=d.dst_ip,
+                                dst_port=d.dst_port,
+                                protocol=d.protocol,
+                                action=per_domain_action_type,
+                                attack_type=decision.attack_type,
+                                pps=d.pps,
+                                bps=d.bps,
+                            ))
+
+                    else:
+                        # No recognized mitigation lever for this domain
+                        # (shouldn't happen given how source_domains is
+                        # populated today -- every TelemetryEvent.domain
+                        # is one of enterprise/mobile/broadband) -- log
+                        # and skip, never force it through the wrong
+                        # adapter.
+                        self._logger.warning(log_line(
+                            src_domain, "MITIGATION", "NO_MITIGATION_LEVER",
+                            f"sources={sources_subset} destination={d.dst_ip} "
+                            f"(unrecognized domain, skipped)",
+                        ))
                 continue
 
             if d.domain in settings.PER_SOURCE_MITIGATION_DOMAINS:
@@ -502,7 +561,10 @@ class OrchestrationController:
         """Map attack type + domain to a concrete mitigation action string."""
         if domain == "bgp":
             return "bgp_blackhole"
-        if attack_type in ("SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "DDOS_DISTRIBUTED", "LOW_SLOW"):
+        if attack_type in (
+            "SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "DDOS_DISTRIBUTED",
+            "MULTIDOMAIN_DISTRIBUTED_ATTACK", "LOW_SLOW",
+        ):
             return "block"
         return "rate_limit"
 
