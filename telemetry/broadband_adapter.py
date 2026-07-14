@@ -218,10 +218,25 @@ class BroadbandAdapter(DomainAdapter):
     def _reload_dnsmasq(self) -> bool:
         """SIGHUPs dnsmasq so it re-reads dhcp-hostsfile -- finds the PID
         via pgrep (unprivileged) and signals it via `sudo -n` (fails
-        immediately rather than blocking on a password prompt)."""
+        immediately rather than blocking on a password prompt).
+
+        Anchored with ^dnsmasq -- deploy/setup_bng_netns.sh launches it as
+        `sudo dnsmasq --conf-file=... --no-daemon`, and sudo's own monitor
+        process keeps that full command line (including "dnsmasq" and the
+        conf path) as ITS cmdline too, so an unanchored `dnsmasq.*<path>`
+        pattern matches both processes. Confirmed on a real run: pgrep
+        returned sudo's PID first (lower, since it started first) and
+        every reload was silently sent to sudo instead of the actual
+        dnsmasq -- sudo doesn't reliably forward SIGHUP to its child, so
+        the dhcp-hostsfile was never actually re-read, no matter how many
+        times block/unblock rewrote the file underneath it. Anchoring to
+        "the command line starts with dnsmasq" excludes sudo's own
+        ("...starts with sudo dnsmasq...") while still matching on the
+        real conf-file path.
+        """
         try:
             pid_out = subprocess.run(
-                ["pgrep", "-f", f"dnsmasq.*{self.dnsmasq_conf_path}"],
+                ["pgrep", "-f", f"^dnsmasq .*{self.dnsmasq_conf_path}"],
                 capture_output=True, text=True, timeout=5,
             )
             pid = pid_out.stdout.strip().splitlines()[0] if pid_out.stdout.strip() else None
