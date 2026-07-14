@@ -178,8 +178,11 @@ class GnbManager:
                 return False
             for imsi in attack.imsis:
                 _terminate(self._state.procs.pop(imsi, None))
-                self._pool.pop(imsi, None)
-            self._flush_ue_files()
+                # Deliberately NOT removed from self._pool -- see
+                # _apply_mitigation's comment on why an IMSI's identity
+                # must outlive its process once telemetry/mobile_adapter.py
+                # has reported it. ue_ip_map.csv/ue_state.json don't need
+                # rewriting either, since the pool itself hasn't changed.
         return True
 
     def stop_all(self) -> None:
@@ -214,16 +217,28 @@ class GnbManager:
         self._rc_thread.start()
 
     def _apply_mitigation(self, imsi) -> None:
+        """
+        Kills the real process for a controller-throttled UE. Does NOT
+        remove it from self._pool -- confirmed on a real run that doing
+        so raced the controller's own later UNTHROTTLE (its presence-
+        based unblock check can take tens of seconds to confirm the UE
+        genuinely went quiet): telemetry/mobile_adapter.py's
+        apply_mitigation() resolves imsi from ue_ip_map.csv at the
+        moment the unblock fires, and a since-deleted entry logs
+        IMSI_UNRESOLVED, silently dropping that unblock. An orphaned
+        pool entry (process dead, identity still resolvable) is
+        harmless -- MobileNetworkAdapter only ever emits a
+        TelemetryEvent for an IMSI that actually has a fresh CSV row,
+        and a dead process produces none.
+        """
         with self._lock:
             ue = self._pool.get(imsi)
             if ue is None or ue.benign:
                 return
             _terminate(self._state.procs.pop(imsi, None))
-            del self._pool[imsi]
             for attack in self._attacks.values():
                 if imsi in attack.imsis:
                     attack.imsis.remove(imsi)
-            self._flush_ue_files()
         print(f"[GNB-POOL] Mitigado: IMSI {imsi} bloqueado por el controlador")
 
     # ------------------------------------------------------------------
