@@ -16,6 +16,7 @@ Usage:
 
 import json
 import os
+import signal
 import sys
 import urllib.error
 import urllib.request
@@ -179,10 +180,37 @@ def on_connect():
     socketio.emit("state_update", webtool_state.to_dict())
 
 
+def _graceful_shutdown(signum, frame):
+    """
+    Confirmed on a real run: killing this process (Ctrl-C, or any other
+    SIGINT/SIGTERM) with no handler at all leaves the live Mininet net,
+    its veth pairs, and every hping3/bngblaster/dnsmasq process it
+    started completely orphaned -- orchestrator.stop_topology() never
+    runs, so nothing tears any of it down. The NEXT start of this app
+    then fails outright the moment build_topology() tries to recreate
+    an interface pair that still exists ("RTNETLINK answers: File
+    exists"), and needs a manual `sudo mn -c` before it can recover.
+    Tearing down the topology (and the controller, if this process
+    itself launched it) here avoids that.
+    """
+    print("\n[webtool] apagando -- deteniendo topologia y controlador...")
+    try:
+        orchestrator.stop_topology()
+    except Exception as exc:
+        print(f"[webtool] error al detener la topologia: {exc}", file=sys.stderr)
+    try:
+        orchestrator.stop_controller()
+    except Exception as exc:
+        print(f"[webtool] error al detener el controlador: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+
 def main():
     if os.geteuid() != 0:
         print("ERROR: corre esto como root -- Mininet/hping3/bngblaster necesitan sockets raw.", file=sys.stderr)
         sys.exit(1)
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
     socketio.start_background_task(_reconciliation_loop)
     socketio.run(app, host="0.0.0.0", port=WEBTOOL_PORT)
 
