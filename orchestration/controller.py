@@ -345,6 +345,19 @@ class OrchestrationController:
         network-wide action via the normal path below — that one has no
         per-source location to scope to in the first place, unlike
         DDOS_DISTRIBUTED/MULTIDOMAIN_DISTRIBUTED_ATTACK.
+
+        A detection whose OWN live sources are all one domain still gets
+        relabeled MULTIDOMAIN_DISTRIBUTED_ATTACK if another domain
+        already has an active mitigation against this SAME destination
+        (see _active_domains_for) -- correlation/detection only ever see
+        ONE cycle's live telemetry, and a domain that's already blocked
+        produces none at all (that's the point of blocking it), so two
+        domains attacking the same target minutes apart, one still under
+        an active block when the other starts, would otherwise never
+        share a correlation window and never combine. Matched on dst_ip
+        alone, not the full 4-tuple -- a coordinated attack can use a
+        different protocol per domain (enterprise SYN, mobile ICMP,
+        etc.), which a narrower match would miss entirely.
         """
         actions: List[MitigationAction] = []
         seen_domains = set()
@@ -356,10 +369,16 @@ class OrchestrationController:
 
             seen_domains.add(d.domain)
 
-            action_type = self._action_for(decision.attack_type, d.domain)
+            contributing_domains = set(d.source_domains.values()) if d.source_domains else {d.domain}
+            already_active_domains = self._active_domains_for(d.dst_ip) - contributing_domains
+            effective_attack_type = (
+                "MULTIDOMAIN_DISTRIBUTED_ATTACK" if already_active_domains else decision.attack_type
+            )
+
+            action_type = self._action_for(effective_attack_type, d.domain)
 
             if (
-                decision.attack_type in ("DDOS_DISTRIBUTED", "MULTIDOMAIN_DISTRIBUTED_ATTACK", "LOW_SLOW")
+                effective_attack_type in ("DDOS_DISTRIBUTED", "MULTIDOMAIN_DISTRIBUTED_ATTACK", "LOW_SLOW")
                 and d.sources
             ):
                 # Partition this detection's contributing sources by their
@@ -386,7 +405,7 @@ class OrchestrationController:
                     sources_by_domain[d.source_domains.get(source, d.domain)].append(source)
 
                 for src_domain, sources_subset in sources_by_domain.items():
-                    per_domain_action_type = self._action_for(decision.attack_type, src_domain)
+                    per_domain_action_type = self._action_for(effective_attack_type, src_domain)
 
                     if src_domain == "enterprise":
                         # Every source IP is first resolved to the
@@ -426,7 +445,7 @@ class OrchestrationController:
                                 protocol=d.protocol,
                                 action=per_domain_action_type,
                                 sources=sources_at_location,
-                                attack_type=decision.attack_type,
+                                attack_type=effective_attack_type,
                                 in_port=in_port,
                                 pps=d.pps,
                                 bps=d.bps,
@@ -463,7 +482,7 @@ class OrchestrationController:
                                 dst_port=d.dst_port,
                                 protocol=d.protocol,
                                 action=per_domain_action_type,
-                                attack_type=decision.attack_type,
+                                attack_type=effective_attack_type,
                                 pps=d.pps,
                                 bps=d.bps,
                             ))
@@ -503,13 +522,31 @@ class OrchestrationController:
                 protocol=d.protocol,
                 action=action_type,
                 sources=d.sources,
-                attack_type=decision.attack_type,
+                attack_type=effective_attack_type,
                 in_port=in_port,
                 pps=d.pps,
                 bps=d.bps,
             ))
 
         return actions
+
+    def _active_domains_for(self, dst_ip: str) -> Set[str]:
+        """
+        Every domain currently holding an active mitigation (OpenFlow
+        block or per-source throttle/block) against this destination,
+        regardless of dst_port/protocol -- a coordinated multidomain
+        attack can use a different protocol per domain (enterprise SYN,
+        mobile ICMP, ...), and correlation/correlator.py's own grouping
+        is per-protocol within one cycle, so a narrower match would miss
+        exactly the case this exists to catch. Scans both _active_blocks
+        (enterprise) and _active_mobile_blocks (mobile/broadband) --
+        every stored MitigationAction already carries its own accurate
+        `.domain` and `.dst_ip` (see _dispatch), so this is a plain
+        lookup, no new state to maintain.
+        """
+        domains = {a.domain for a in self._active_blocks.values() if a.dst_ip == dst_ip}
+        domains |= {a.domain for a in self._active_mobile_blocks.values() if a.dst_ip == dst_ip}
+        return domains
 
     def _scoped_ingress(self, d: DetectionResult) -> Tuple[str, int]:
         """

@@ -300,16 +300,33 @@ pasa, probar reduciendo la cantidad de fuentes enterprise/mobile (p.ej.
 2 switches enterprise + `count_per_node:1` en 2 switches mobile) antes
 de asumir que la lógica de clasificación está mal.
 
-**Criterio de éxito**: **una sola** línea `DETECTION: ATTACK_DETECTED
-MULTIDOMAIN_DISTRIBUTED_ATTACK source=* destination=10.99.0.1:443/TCP`
-(no tres detecciones separadas), seguida de líneas `MITIGATION: BLOCK
-MULTIDOMAIN_DISTRIBUTED_ATTACK` con `source=` reales de **cada uno**
-de los 3 dominios (`10.0.x.10` enterprise, `10.60.x.x` mobile,
-`10.61.1.14x` broadband) — ninguna fuente real queda sin mitigar ni
-mal enrutada a un adaptador que no le corresponde. Repetir el
-escenario 5a después de este para confirmar que un ataque distribuido
-de un solo dominio sigue clasificando como `DDOS_DISTRIBUTED` (sin
-regresión).
+**Criterio de éxito**: en la práctica, la telemetría de enterprise
+(basada en flow-stats de OpenFlow) suele tardar 1-2 ciclos más en
+volverse visible que la de mobile/broadband (basada en archivos CSV
+leídos cada `COLLECT_INTERVAL`), así que lo esperable NO es
+necesariamente una única línea `DETECTION` combinando los 3 dominios
+en el mismo instante, sino dos etapas:
+
+1. Una primera `DETECTION: ATTACK_DETECTED MULTIDOMAIN_DISTRIBUTED_ATTACK
+   source=* destination=10.99.0.1:443/TCP` combinando las fuentes que sí
+   coincidieron en la misma ventana de correlación (típicamente mobile +
+   broadband), con `MITIGATION` para cada una de ellas por su mecanismo
+   real (THROTTLE para las UEs, BLOCK+blacklist para las sesiones BNG).
+2. Cuando la telemetría de enterprise se vuelve visible (unos segundos
+   después), sus detecciones individuales por host **también** deben
+   aparecer etiquetadas `MULTIDOMAIN_DISTRIBUTED_ATTACK` (no `SYN_FLOOD`
+   plano) — esto es lo que verifica el mecanismo de "dominio que se suma
+   a un ataque ya activo" (`OrchestrationController._active_domains_for`,
+   matched por `dst_ip` solamente): como mobile/broadband siguen
+   bloqueados en ese momento, cualquier detección nueva contra el mismo
+   `10.99.0.1` se reclasifica aunque no haya coincidido en el mismo ciclo
+   de correlación.
+
+En ningún caso una fuente real debe quedar sin mitigar ni mal enrutada a
+un adaptador que no le corresponde. Repetir el escenario 5a después de
+este para confirmar que un ataque distribuido de un solo dominio (sin
+ningún otro dominio con bloqueo activo hacia ese mismo destino) sigue
+clasificando como `DDOS_DISTRIBUTED` normal (sin regresión).
 
 ---
 
