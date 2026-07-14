@@ -197,16 +197,12 @@ ambos sentidos terminan con `UNBLOCK`.
   `DDOS_DISTRIBUTED`; lo esperable es ver hasta 4 `SYN_FLOOD`
   individuales (uno por atacante) en vez de una única detección
   distribuida. Documentado como comportamiento esperado, no como falla.
-- **Broadband**: el webtool solo expone `syn_flood`/`udp_flood`/
-  `icmp_flood` (1 sesión real) vía `/api/attack/start` — el escenario
-  `distributed_syn_flood` de `simulation/bng_config.py` (8 sesiones) NO
-  está mapeado en `orchestrator.py`'s `_BROADBAND_ATTACK_SCENARIO`.
-  Para probar broadband distribuido hay que ir por fuera del webtool:
-  ```bash
-  sudo python3 simulation/bng_interactive.py   # elegir "Distributed TCP SYN Flood (8 sesiones)"
-  ```
-  o pedirme que agregue `"SYN_DISTRIBUTED"` al mapeo si querés que quede
-  cubierto directamente por la API del webtool.
+- **Broadband**: soportado vía `attack_type: "SYN_DISTRIBUTED"` (mapea a
+  `distributed_syn_flood` en `simulation/bng_config.py`, 8 sesiones,
+  ~5 pps cada una). Sigue siendo **una sola instancia real de
+  bngblaster** -- `switch_indices` en la petición es solo una etiqueta
+  cosmética (ver `webtool/bng_ops.py`'s `session_switch_label()`), no
+  separa las 8 sesiones por switch de verdad.
 - **Mobile**: sin esta limitación — `count_per_node` permite superar
   `DIST_MIN_SOURCES=5` fácilmente desde un solo gNB o repartido entre
   varios.
@@ -240,8 +236,20 @@ detección) con al menos 5 fuentes distintas `10.60.{1,3}.x`, seguido de
 una acción por fuente para `DDOS_DISTRIBUTED` en dominios
 `PER_SOURCE_MITIGATION_DOMAINS`).
 
-**Broadband**: ver limitación arriba — usar `bng_interactive.py` por
-separado, o solicitar la extensión de la API.
+**Broadband (8 sesiones reales, distributed_syn_flood):**
+```bash
+curl -s -X POST localhost:5050/api/attack/start -H 'Content-Type: application/json' \
+  -d '{"domain":"broadband","switch_indices":[4],"attack_type":"SYN_DISTRIBUTED","target_ip":"10.0.3.30","duration":30}'
+```
+```bash
+grep '\[broadband\]' /tmp/webtool_controller.log | tail -20
+```
+Esperado: `DETECTION: ATTACK_DETECTED DDOS_DISTRIBUTED` con 8 fuentes
+`10.61.1.14x` (una por sesión BNG), seguido de `MITIGATION: BLOCK` por
+sesión contribuyente. Al terminar, el `BngLifecycle` vuelve solo al
+baseline `low_and_slow` (confirmar con `tail -f` en la terminal de
+`webtool/app.py`: debería verse un nuevo `[BNG] launching ...
+scenario=low_and_slow`).
 
 ### 5b. Distribuido entre dominios (simultáneo, mismo objetivo)
 
@@ -295,5 +303,5 @@ Ctrl-C en la terminal de `webtool/app.py` (confirmar el mensaje
 | 4a/4b/4c | ídem con `ICMP_FLOOD` (enterprise puede mostrar 2 detecciones, ida y vuelta) |
 | 5a enterprise | ≤4 `SYN_FLOOD` individuales, NO `DDOS_DISTRIBUTED` (limitación estructural) |
 | 5a mobile | `DDOS_DISTRIBUTED` con ≥5 fuentes, mitigación por UE |
-| 5a broadband | fuera del webtool (ver limitación) |
+| 5a broadband | `DDOS_DISTRIBUTED` con 8 fuentes (`attack_type=SYN_DISTRIBUTED`), switch_indices solo cosmético |
 | 5b | los 3 dominios detectan/mitigan en paralelo sin interferencia cruzada |

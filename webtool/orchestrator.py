@@ -51,7 +51,18 @@ CONTROLLER_LOG_PATH = "/tmp/webtool_controller.log"
 # strings ("UDP"/"TCP_SYN"/"ICMP") -- the web UI only ever exposes the
 # 3 requirement-8 attack types, mapped here once for both domains.
 ATTACK_TYPE_TO_PROTOCOL = {"SYN": "TCP_SYN", "UDP": "UDP", "ICMP": "ICMP"}
-_BROADBAND_ATTACK_SCENARIO = {"SYN": "syn_flood", "UDP": "udp_flood", "ICMP": "icmp_flood"}
+# SYN_DISTRIBUTED is broadband-only (see webtool/app.py's ATTACK_TYPES_BY_DOMAIN)
+# -- enterprise/mobile already get a distributed attack "for free" by
+# selecting multiple switch_indices/count_per_node with the plain "SYN"
+# type, since each of their sources is a real independent process. A
+# single bngblaster instance has no such per-request flexibility -- the
+# 8-session distributed_syn_flood scenario is a structurally different
+# BNGBlaster config (bng_config.py's own _SCENARIO_PARAMS), not a
+# parameter of syn_flood, so it needs its own selectable attack_type.
+_BROADBAND_ATTACK_SCENARIO = {
+    "SYN": "syn_flood", "UDP": "udp_flood", "ICMP": "icmp_flood",
+    "SYN_DISTRIBUTED": "distributed_syn_flood",
+}
 
 
 def _port_in_use(port: int) -> bool:

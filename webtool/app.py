@@ -40,8 +40,18 @@ app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 orchestrator = Orchestrator()
 
-_VALID_DOMAINS = ("enterprise", "mobile", "broadband")
-_VALID_ATTACK_TYPES = ("SYN", "UDP", "ICMP")
+# SYN_DISTRIBUTED only exists for broadband -- enterprise/mobile reach a
+# distributed attack "for free" by picking multiple switch_indices/
+# count_per_node with the plain SYN type (each source is its own real
+# process), but a single shared bngblaster instance needs a structurally
+# different 8-session scenario (bng_config.py's distributed_syn_flood),
+# not a parameter of syn_flood -- see orchestrator.py's
+# _BROADBAND_ATTACK_SCENARIO.
+_ATTACK_TYPES_BY_DOMAIN = {
+    "enterprise": ("SYN", "UDP", "ICMP"),
+    "mobile": ("SYN", "UDP", "ICMP"),
+    "broadband": ("SYN", "UDP", "ICMP", "SYN_DISTRIBUTED"),
+}
 
 
 @app.route("/")
@@ -93,12 +103,12 @@ def attack_start():
     dst_port = body.get("dst_port")
     count_per_node = body.get("count_per_node", 1)
 
-    if domain not in _VALID_DOMAINS:
+    if domain not in _ATTACK_TYPES_BY_DOMAIN:
         return jsonify({"ok": False, "error": f"domain invalido: {domain}"}), 400
     if not isinstance(switch_indices, list) or not switch_indices:
         return jsonify({"ok": False, "error": "switch_indices debe ser una lista no vacia"}), 400
-    if attack_type not in _VALID_ATTACK_TYPES:
-        return jsonify({"ok": False, "error": f"attack_type invalido: {attack_type}"}), 400
+    if attack_type not in _ATTACK_TYPES_BY_DOMAIN[domain]:
+        return jsonify({"ok": False, "error": f"attack_type invalido para {domain}: {attack_type}"}), 400
     if not target_ip:
         return jsonify({"ok": False, "error": "target_ip requerido"}), 400
     if target_ip == orchestrator.central_server_ip():

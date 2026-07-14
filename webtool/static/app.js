@@ -150,7 +150,18 @@ el("btn-topology-stop").onclick = () => postJSON("/api/topology/stop");
 // ---------------------------------------------------------------------
 
 el("attack-domain").onchange = () => {
-    el("row-count-per-node").style.display = el("attack-domain").value === "mobile" ? "" : "none";
+    const domain = el("attack-domain").value;
+    el("row-count-per-node").style.display = domain === "mobile" ? "" : "none";
+
+    // SYN_DISTRIBUTED (8-session BNGBlaster scenario) only makes sense
+    // for broadband -- enterprise/mobile already reach a distributed
+    // attack via multiple switch_indices/count_per_node with plain SYN.
+    const typeSelect = el("attack-type");
+    const distributedOption = typeSelect.querySelector('option[value="SYN_DISTRIBUTED"]');
+    distributedOption.hidden = domain !== "broadband";
+    if (domain !== "broadband" && typeSelect.value === "SYN_DISTRIBUTED") {
+        typeSelect.value = "SYN";
+    }
 };
 
 function renderTargetOptions(nodes) {
