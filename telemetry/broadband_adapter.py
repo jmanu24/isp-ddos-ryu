@@ -99,6 +99,31 @@ class BroadbandAdapter(DomainAdapter):
         # this instance is reused purely to avoid re-constructing it
         # every apply_mitigation(), it holds no connection state itself.
         self._ctrl = BngControlSocket(self.sock_path)
+
+        # A block's DHCP blacklist entry (apply_mitigation's
+        # _set_mac_blacklisted) is external, persistent state -- a plain
+        # file dnsmasq reads, completely independent of this process.
+        # orchestration/controller.py's own tracking of "this block
+        # should expire after `duration` seconds" (_active_mobile_blocks/
+        # _mobile_block_started_at) is pure in-memory state that a
+        # controller restart wipes -- so a block issued in a PREVIOUS
+        # controller run, if the controller restarts before that block's
+        # wall-clock duration elapses, becomes permanent: nothing in the
+        # new process's memory even knows the block exists, so
+        # check_mobile_unblocks() never gets a chance to release it.
+        # Confirmed on a real run: a single ICMP flood block against
+        # BNGBlaster's session-id 1 (always MAC 02:00:00:00:00:01)
+        # survived across half a dozen subsequent controller restarts,
+        # silently preventing that MAC's session from EVER establishing
+        # again in any later single-session scenario (icmp_flood/
+        # syn_flood/udp_flood all reuse session-id 1) -- no error
+        # anywhere, just an endlessly-ignored DHCPDISCOVER. Every new
+        # controller process starts with a clean mitigation slate, so
+        # any blacklist entry left over from a previous process is by
+        # definition orphaned -- clear it here, the same way
+        # BngScenarioSession.start() already discards its own previous
+        # run's stale CSV.
+        self._clear_dhcp_blacklist()
         # src_ip -> (session_id, mac), learned from collect()'s own CSV
         # rows -- the only place this adapter ever sees that mapping
         # (BNGBlaster's session-stop/-start take a session-id and the
@@ -214,6 +239,20 @@ class BroadbandAdapter(DomainAdapter):
         except (OSError, subprocess.TimeoutExpired) as exc:
             print(f"[BROADBAND] dnsmasq reload failed: {exc}")
             return False
+
+    def _clear_dhcp_blacklist(self) -> None:
+        """Best-effort, same posture as every other BNGBlaster-adjacent
+        failure here: a missing blacklist file (deploy/setup_bng_netns.sh
+        never ran yet) or a dnsmasq that isn't up yet are both silent
+        no-ops, not errors -- this only matters once a topology/dnsmasq
+        actually exists."""
+        try:
+            if os.path.exists(self.dhcp_blacklist_path) and os.path.getsize(self.dhcp_blacklist_path) > 0:
+                with open(self.dhcp_blacklist_path, "w"):
+                    pass
+                self._reload_dnsmasq()
+        except OSError as exc:
+            print(f"[BROADBAND] cannot clear DHCP blacklist {self.dhcp_blacklist_path}: {exc}")
 
     def _set_mac_blacklisted(self, mac: str, blacklisted: bool) -> bool:
         """Adds/removes "<mac>,ignore" in dnsmasq's dhcp-hostsfile, then
