@@ -6,6 +6,17 @@ hping3 + bngblaster + nft instalados), los 5 escenarios pedidos. Usa
 requiere el frontend, aunque cualquier paso se puede reproducir también
 desde el navegador (`http://<ip-vm>:5050/`).
 
+**Los 5 escenarios (13 sub-casos con ataque real, más el baseline sin
+ataque) ya están validados end-to-end contra una VM real** — ver
+`webtool/scenarios.py`, que codifica el mismo catálogo un-a-uno y lo
+expone para correrlo a demanda sin copiar/pegar curl: panel "Escenarios
+de prueba" en el frontend (un botón "Correr" por sub-caso), o
+directamente `GET /api/scenarios` (catálogo) / `POST
+/api/scenarios/<id>/run` (dispara ese sub-caso, con los mismos
+switch_indices/target_ip/duration que este documento). El escenario 1
+(baseline sin ataque) no tiene botón de "correr" — es puramente
+informativo, se verifica a mano como se describe abajo.
+
 Convención de IPs (topologies/star_topology.py): `ent_i`=`10.0.i.10`,
 `gnb_i`=`10.0.i.20`, `fixed_i`=`10.0.i.30`, servidor central=`10.99.0.1`
 (el destino habitual del tráfico benigno de los 12 hosts, y también un

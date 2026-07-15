@@ -209,6 +209,42 @@ el("attack-form").onsubmit = (ev) => {
 };
 
 // ---------------------------------------------------------------------
+// Test scenarios (webtool/TEST_PLAN.md, run on demand)
+// ---------------------------------------------------------------------
+
+function renderScenarios(scenarios) {
+    const container = el("scenarios");
+    container.innerHTML = (scenarios || []).map((s) => {
+        const isInfoOnly = !s.steps || s.steps.length === 0;
+        const button = isInfoOnly
+            ? '<span class="scenario-info-note">sin ataque -- verificar manualmente</span>'
+            : `<button data-scenario-id="${s.id}">Correr</button>`;
+        return `
+        <div class="scenario-card">
+          <div class="scenario-info">
+            <div class="scenario-label">${s.label}</div>
+            <div class="scenario-description">${s.description}</div>
+            <div class="scenario-expected"><em>Esperado:</em> ${s.expected}</div>
+          </div>
+          ${button}
+        </div>`;
+    }).join("");
+
+    container.querySelectorAll("button[data-scenario-id]").forEach((btn) => {
+        btn.onclick = () => {
+            btn.disabled = true;
+            postJSON(`/api/scenarios/${btn.dataset.scenarioId}/run`).finally(() => {
+                btn.disabled = false;
+            });
+        };
+    });
+}
+
+function loadScenarios() {
+    fetch("/api/scenarios").then((r) => r.json()).then(renderScenarios).catch(() => {});
+}
+
+// ---------------------------------------------------------------------
 // Active attacks / event log
 // ---------------------------------------------------------------------
 
@@ -268,3 +304,4 @@ function refreshState() {
 
 socket.on("state_update", renderState);
 refreshState();
+loadScenarios();

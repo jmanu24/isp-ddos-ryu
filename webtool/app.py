@@ -29,6 +29,7 @@ from flask import Flask, jsonify, render_template, request  # noqa: E402
 from flask_socketio import SocketIO  # noqa: E402
 
 from webtool.orchestrator import Orchestrator  # noqa: E402
+from webtool.scenarios import SCENARIOS  # noqa: E402
 from webtool.state import webtool_state  # noqa: E402
 
 WEBTOOL_PORT = 5050
@@ -146,6 +147,17 @@ def attack_stop():
     if not attack_id:
         return jsonify({"ok": False, "error": "attack_id requerido"}), 400
     result = orchestrator.stop_attack(attack_id)
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@app.route("/api/scenarios")
+def scenarios():
+    return jsonify(SCENARIOS)
+
+
+@app.route("/api/scenarios/<scenario_id>/run", methods=["POST"])
+def scenarios_run(scenario_id):
+    result = orchestrator.run_scenario(scenario_id)
     return jsonify(result), (200 if result.get("ok") else 400)
 
 

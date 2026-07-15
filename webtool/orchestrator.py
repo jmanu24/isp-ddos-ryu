@@ -40,6 +40,7 @@ from topologies.star_topology import (  # noqa: E402
 from simulation.gnb_pool import GnbManager  # noqa: E402
 from webtool import enterprise_ops  # noqa: E402
 from webtool.bng_ops import BngLifecycle  # noqa: E402
+from webtool.scenarios import SCENARIOS_BY_ID  # noqa: E402
 from webtool.state import webtool_state  # noqa: E402
 
 OFP_PORT = 6653
@@ -351,6 +352,56 @@ class Orchestrator:
             for attack_id in list(self._attack_domain.keys()):
                 self.stop_attack(attack_id)
             return {"ok": True}
+
+    def run_scenario(self, scenario_id: str) -> dict:
+        """
+        Fires every step of a webtool/scenarios.py catalog entry --
+        webtool/TEST_PLAN.md's runbook, triggerable on demand instead of
+        copy-pasting curl by hand. Steps within one scenario are fired
+        back-to-back in this single call (not literally concurrent
+        threads), matching TEST_PLAN.md's own "curl & ... & wait" pattern
+        for scenario 5b closely enough -- each start_*_attack call just
+        spawns a subprocess/RC command and returns almost immediately, so
+        the three legs of a multi-domain scenario still land within the
+        same ~sub-second window real concurrent curls would.
+        """
+        scenario = SCENARIOS_BY_ID.get(scenario_id)
+        if scenario is None:
+            return {"ok": False, "error": f"escenario desconocido: {scenario_id}"}
+        if not scenario["steps"]:
+            return {"ok": False, "error": "este escenario no lanza ataques -- verificar manualmente (ver TEST_PLAN.md)"}
+
+        with self._lock:
+            valid_targets = set(self.valid_targets())
+            for step in scenario["steps"]:
+                if step["target_ip"] not in valid_targets:
+                    return {"ok": False, "error": f"objetivo invalido para el escenario {scenario_id}: {step['target_ip']} -- la topologia esta corriendo?"}
+
+            results = []
+            for step in scenario["steps"]:
+                domain = step["domain"]
+                attack_type = step["attack_type"]
+                dst_port = step.get("dst_port")
+                if dst_port is None:
+                    dst_port = 443 if attack_type == "SYN" else 0
+
+                if domain == "enterprise":
+                    result = self.start_enterprise_attack(
+                        step["switch_indices"], attack_type, dst_port,
+                        step["target_ip"], step.get("duration"),
+                    )
+                elif domain == "mobile":
+                    result = self.start_mobile_attack(
+                        step["switch_indices"], attack_type, dst_port, step["target_ip"],
+                        count_per_gnb=step.get("count_per_node", 1), duration=step.get("duration"),
+                    )
+                else:
+                    result = self.start_broadband_attack(
+                        step["switch_indices"], attack_type, step["target_ip"], step.get("duration"),
+                    )
+                results.append({"domain": domain, **result})
+
+            return {"ok": all(r.get("ok") for r in results), "scenario_id": scenario_id, "results": results}
 
     def _cancel_timer(self, attack_id: str) -> None:
         timer = self.attack_timers.pop(attack_id, None)
