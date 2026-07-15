@@ -31,6 +31,8 @@ class ScenarioStep(TypedDict, total=False):
 
 class Scenario(TypedDict):
     id: str
+    group: str
+    group_label: str
     label: str
     description: str
     expected: str
@@ -40,6 +42,8 @@ class Scenario(TypedDict):
 SCENARIOS: List[Scenario] = [
     {
         "id": "1",
+        "group": "1",
+        "group_label": "1 — Baseline benigno",
         "label": "1 — Baseline benigno",
         "description": "Sin ataques. Confirma que el trafico legitimo (loops ICMP de enterprise/mobile, sesiones low_and_slow de broadband) no dispara ninguna deteccion falsa.",
         "expected": "0 lineas DETECTION en el log, active_attacks=[], trafico real visible hacia 10.99.0.1.",
@@ -47,6 +51,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "2a",
+        "group": "2",
+        "group_label": "2 — TCP SYN Flood (por dominio)",
         "label": "2a — SYN Flood (enterprise)",
         "description": "ent_1 -> ent_3, 20s.",
         "expected": "DETECTION SYN_FLOOD source=10.0.1.10 destination=10.0.3.10:443/TCP, BLOCK y luego UNBLOCK automatico.",
@@ -56,6 +62,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "2b",
+        "group": "2",
+        "group_label": "2 — TCP SYN Flood (por dominio)",
         "label": "2b — SYN Flood (mobile)",
         "description": "gnb_2 -> ent_3, 20s.",
         "expected": "DETECTION SYN_FLOOD source=10.60.2.x, THROTTLE (sin UNBLOCK inmediato -- se libera por presencia, ver check_mobile_unblocks).",
@@ -65,6 +73,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "2c",
+        "group": "2",
+        "group_label": "2 — TCP SYN Flood (por dominio)",
         "label": "2c — SYN Flood (broadband)",
         "description": "sesion unica -> ent_4, 20s.",
         "expected": "DETECTION SYN_FLOOD source=10.61.1.14x, BLOCK y UNBLOCK ~60s despues (ventana fija).",
@@ -74,6 +84,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "3a",
+        "group": "3",
+        "group_label": "3 — UDP Flood (por dominio)",
         "label": "3a — UDP Flood (enterprise)",
         "description": "ent_2 -> ent_4, 20s.",
         "expected": "DETECTION UDP_FLOOD, BLOCK/UNBLOCK automatico.",
@@ -83,6 +95,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "3b",
+        "group": "3",
+        "group_label": "3 — UDP Flood (por dominio)",
         "label": "3b — UDP Flood (mobile)",
         "description": "gnb_3 -> ent_1, 20s.",
         "expected": "DETECTION UDP_FLOOD, THROTTLE.",
@@ -92,6 +106,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "3c",
+        "group": "3",
+        "group_label": "3 — UDP Flood (por dominio)",
         "label": "3c — UDP Flood (broadband)",
         "description": "sesion unica -> ent_2, 20s.",
         "expected": "DETECTION UDP_FLOOD, BLOCK/UNBLOCK.",
@@ -101,6 +117,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "4a",
+        "group": "4",
+        "group_label": "4 — ICMP Flood (por dominio)",
         "label": "4a — ICMP Flood (enterprise)",
         "description": "ent_4 -> ent_1, 20s. Puede mostrar 2 detecciones (ida y vuelta) -- esperado, no un bug.",
         "expected": "DETECTION ICMP_FLOOD (posiblemente en ambos sentidos), BLOCK/UNBLOCK.",
@@ -110,6 +128,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "4b",
+        "group": "4",
+        "group_label": "4 — ICMP Flood (por dominio)",
         "label": "4b — ICMP Flood (mobile)",
         "description": "gnb_1 -> ent_2, 20s.",
         "expected": "DETECTION ICMP_FLOOD, THROTTLE.",
@@ -119,6 +139,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "4c",
+        "group": "4",
+        "group_label": "4 — ICMP Flood (por dominio)",
         "label": "4c — ICMP Flood (broadband)",
         "description": "sesion unica -> ent_3, 20s.",
         "expected": "DETECTION ICMP_FLOOD, BLOCK/UNBLOCK.",
@@ -128,6 +150,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "5a-enterprise",
+        "group": "5",
+        "group_label": "5 — SYN distribuido",
         "label": "5a — SYN distribuido (enterprise, 4 fuentes)",
         "description": "Los 4 ent_i -> fixed_1 (10.0.1.30), 25s. Solo 4 fuentes -- por debajo de DIST_MIN_SOURCES=5.",
         "expected": "Hasta 4 SYN_FLOOD individuales, NO DDOS_DISTRIBUTED (limitacion estructural de la topologia, no una falla).",
@@ -137,6 +161,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "5a-mobile",
+        "group": "5",
+        "group_label": "5 — SYN distribuido",
         "label": "5a — SYN distribuido (mobile, 6 UEs)",
         "description": "6 UEs repartidas en gnb_1/gnb_3 (count_per_node=3) -> fixed_2 (10.0.2.30), 25s.",
         "expected": "DETECTION DDOS_DISTRIBUTED con >=5 fuentes 10.60.{1,3}.x, THROTTLE por UE contribuyente.",
@@ -146,6 +172,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "5a-broadband",
+        "group": "5",
+        "group_label": "5 — SYN distribuido",
         "label": "5a — SYN distribuido (broadband, 8 sesiones)",
         "description": "distributed_syn_flood (8 sesiones BNG) -> fixed_3 (10.0.3.30), 30s.",
         "expected": "DETECTION DDOS_DISTRIBUTED con 8 fuentes 10.61.1.14x, BLOCK por sesion. Al terminar vuelve a low_and_slow.",
@@ -155,6 +183,8 @@ SCENARIOS: List[Scenario] = [
     },
     {
         "id": "5b",
+        "group": "5",
+        "group_label": "5 — SYN distribuido",
         "label": "5b — Multi-dominio contra el servidor central",
         "description": "Enterprise (4) + mobile (8, count_per_node=2) + broadband (8 sesiones), los 3 simultaneos -> 10.99.0.1:443, 30s.",
         "expected": "Una unica MULTIDOMAIN_DISTRIBUTED_ATTACK (posiblemente en 2 etapas -- mobile+broadband primero, enterprise se suma despues), mitigada por el mecanismo real de cada dominio.",

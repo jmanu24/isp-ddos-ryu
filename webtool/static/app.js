@@ -209,39 +209,82 @@ el("attack-form").onsubmit = (ev) => {
 };
 
 // ---------------------------------------------------------------------
-// Test scenarios (webtool/TEST_PLAN.md, run on demand)
+// Test scenarios (webtool/TEST_PLAN.md, run on demand) -- two cascading
+// dropdowns: pick the top-level scenario (1-5), then the sub-scenario
+// within it (e.g. 2a/2b/2c). Grouping/order both come straight from the
+// catalog (webtool/scenarios.py) -- nothing hardcoded here.
 // ---------------------------------------------------------------------
 
-function renderScenarios(scenarios) {
-    const container = el("scenarios");
-    container.innerHTML = (scenarios || []).map((s) => {
-        const isInfoOnly = !s.steps || s.steps.length === 0;
-        const button = isInfoOnly
-            ? '<span class="scenario-info-note">sin ataque -- verificar manualmente</span>'
-            : `<button data-scenario-id="${s.id}">Correr</button>`;
-        return `
-        <div class="scenario-card">
-          <div class="scenario-info">
-            <div class="scenario-label">${s.label}</div>
-            <div class="scenario-description">${s.description}</div>
-            <div class="scenario-expected"><em>Esperado:</em> ${s.expected}</div>
-          </div>
-          ${button}
-        </div>`;
-    }).join("");
+let allScenarios = [];
 
-    container.querySelectorAll("button[data-scenario-id]").forEach((btn) => {
-        btn.onclick = () => {
-            btn.disabled = true;
-            postJSON(`/api/scenarios/${btn.dataset.scenarioId}/run`).finally(() => {
-                btn.disabled = false;
-            });
-        };
-    });
+function populateGroupSelect() {
+    const select = el("scenario-group");
+    const seen = new Set();
+    select.innerHTML = "";
+    for (const s of allScenarios) {
+        if (seen.has(s.group)) continue;
+        seen.add(s.group);
+        const opt = document.createElement("option");
+        opt.value = s.group;
+        opt.textContent = s.group_label;
+        select.appendChild(opt);
+    }
 }
 
+function populateSubSelect() {
+    const group = el("scenario-group").value;
+    const select = el("scenario-sub");
+    select.innerHTML = "";
+    allScenarios
+        .filter((s) => s.group === group)
+        .forEach((s) => {
+            const opt = document.createElement("option");
+            opt.value = s.id;
+            opt.textContent = s.label;
+            select.appendChild(opt);
+        });
+}
+
+function renderScenarioDetails() {
+    const scenario = allScenarios.find((s) => s.id === el("scenario-sub").value);
+    const details = el("scenario-details");
+    const runBtn = el("btn-scenario-run");
+    if (!scenario) {
+        details.innerHTML = "";
+        runBtn.disabled = true;
+        return;
+    }
+    const isInfoOnly = !scenario.steps || scenario.steps.length === 0;
+    details.innerHTML = `
+        <div class="scenario-description">${scenario.description}</div>
+        <div class="scenario-expected"><em>Esperado:</em> ${scenario.expected}</div>
+        ${isInfoOnly ? '<div class="scenario-info-note">Sin ataque -- verificar manualmente.</div>' : ""}`;
+    runBtn.disabled = isInfoOnly;
+}
+
+el("scenario-group").onchange = () => {
+    populateSubSelect();
+    renderScenarioDetails();
+};
+el("scenario-sub").onchange = renderScenarioDetails;
+
+el("btn-scenario-run").onclick = () => {
+    const scenarioId = el("scenario-sub").value;
+    if (!scenarioId) return;
+    const btn = el("btn-scenario-run");
+    btn.disabled = true;
+    postJSON(`/api/scenarios/${scenarioId}/run`).finally(() => {
+        renderScenarioDetails();
+    });
+};
+
 function loadScenarios() {
-    fetch("/api/scenarios").then((r) => r.json()).then(renderScenarios).catch(() => {});
+    fetch("/api/scenarios").then((r) => r.json()).then((scenarios) => {
+        allScenarios = scenarios || [];
+        populateGroupSelect();
+        populateSubSelect();
+        renderScenarioDetails();
+    }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------
