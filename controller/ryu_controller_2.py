@@ -451,24 +451,30 @@ class FlowStatsIDS(app_manager.RyuApp):
             metrics.update_connection_counts(src_ip, dst_ip, info["count"], info["new_connections"])
 
         detections = list(flood_detections)
-        detections += self.detector.analyze_low_slow(
-            low_volume_flow_counts,
-            exclude_dsts=flagged_dsts,
-        )
-        detections += self.detector.analyze_low_slow_single_source(
-            connection_port_counts,
-            exclude_pairs=flagged_pairs,
-        )
-        # Mobile-domain low-and-slow: many distinct UEs simultaneously
-        # holding a low, sub-threshold rate toward the same destination --
-        # see analyze_low_slow_mobile's docstring for why this needs its
-        # own signal instead of reusing the two flow-count-based variants
-        # above (OpenFlow-only telemetry).
-        detections += self.detector.analyze_low_slow_mobile(
-            correlated,
-            exclude_dsts=flagged_dsts,
-            is_blocked=self.orchestrator.is_mobile_blocked,
-        )
+        # settings.LOW_SLOW_DETECTION_ENABLED gates all three variants at
+        # once -- see that flag's own comment. low_volume_flow_counts/
+        # connection_port_counts are still collected and fed to metrics
+        # above regardless (pure observability, not detection/mitigation),
+        # so the Grafana panels stay live even with this off.
+        if settings.LOW_SLOW_DETECTION_ENABLED:
+            detections += self.detector.analyze_low_slow(
+                low_volume_flow_counts,
+                exclude_dsts=flagged_dsts,
+            )
+            detections += self.detector.analyze_low_slow_single_source(
+                connection_port_counts,
+                exclude_pairs=flagged_pairs,
+            )
+            # Mobile-domain low-and-slow: many distinct UEs simultaneously
+            # holding a low, sub-threshold rate toward the same destination --
+            # see analyze_low_slow_mobile's docstring for why this needs its
+            # own signal instead of reusing the two flow-count-based variants
+            # above (OpenFlow-only telemetry).
+            detections += self.detector.analyze_low_slow_mobile(
+                correlated,
+                exclude_dsts=flagged_dsts,
+                is_blocked=self.orchestrator.is_mobile_blocked,
+            )
 
         # Drop detections for a (src, dst, port, protocol) already under
         # an active block BEFORE they reach metrics/validate/process --

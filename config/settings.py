@@ -15,6 +15,16 @@ SYN_THRESHOLD = 10
 UDP_THRESHOLD = 200
 ICMP_THRESHOLD = 150
 
+# Master switch for every low-and-slow detection variant (OpenFlow flow-
+# count, OpenFlow single-source connection-port-count, and the mobile/
+# broadband per-source-rate one -- see controller/ryu_controller_2.py's
+# _run_pipeline, which gates all three analyze_low_slow* calls on this).
+# False means DDoSDetectionEngine never produces a LOW_SLOW DetectionResult
+# at all, so decision/orchestration never sees one either -- there's
+# nothing downstream to separately disable, mitigation for this type is
+# entirely a function of a detection existing in the first place.
+LOW_SLOW_DETECTION_ENABLED = False
+
 LOW_SLOW_NEW_FLOWS = 20
 LOW_SLOW_MIN_BYTES = 500
 
