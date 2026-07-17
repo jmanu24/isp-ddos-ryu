@@ -113,6 +113,12 @@ class GnbManager:
         self._rc_offset = 0
         self._stop_event = threading.Event()
         self._rc_thread: Optional[threading.Thread] = None
+        # IMSIs of benign UEs whose loop was paused by a controller
+        # THROTTLE. Tracked so the RC-watch loop can restart them on
+        # UNBLOCK (ordinary attacking UEs are never restarted -- their
+        # finite attack process was already dead; benign loops are meant
+        # to run indefinitely, so they must come back once the block lifts).
+        self._paused_benign_imsis: set = set()
 
     # ------------------------------------------------------------------
     # Benign baseline
@@ -240,8 +246,9 @@ class GnbManager:
                 commands, self._rc_offset = _read_new_commands(self.rc_queue_path, self._rc_offset)
                 for command in commands:
                     if command.get("action") == "unblock":
-                        continue
-                    self._apply_mitigation(command.get("imsi"))
+                        self._apply_unblock(command.get("imsi"))
+                    else:
+                        self._apply_mitigation(command.get("imsi"))
                 self._stop_event.wait(tick)
 
         self._rc_thread = threading.Thread(target=_loop, daemon=True)
@@ -274,16 +281,58 @@ class GnbManager:
         """
         with self._lock:
             ue = self._pool.get(imsi)
-            if ue is None or ue.benign:
+            if ue is None:
+                return
+            if ue.benign:
+                # Benign baseline loops run indefinitely and were previously
+                # ignored here, leaving the loop alive and reporting toward
+                # target_ip (e.g. 10.99.0.1) even after a controller THROTTLE.
+                # check_mobile_unblocks()'s presence check then saw that UE
+                # forever and never released the block. Fix: pause the loop
+                # (kill the process, point target_ip at the sentinel) and
+                # track the IMSI so _apply_unblock() can restart the loop
+                # once the controller sends an UNBLOCK.
+                _terminate(self._state.procs.pop(imsi, None))
+                ue.target_ip = _STOPPED_UE_TARGET_IP
+                self._paused_benign_imsis.add(imsi)
+                self._flush_ue_files()
+                print(f"[GNB-POOL] Benign UE IMSI {imsi} pausado por controlador")
                 return
             _terminate(self._state.procs.pop(imsi, None))
-            ue.target_ip = _STOPPED_UE_TARGET_IP
+            ue.target_ip = ue.benign_target_ip or _STOPPED_UE_TARGET_IP
             ue.dst_port = 0
             for attack in self._attacks.values():
                 if imsi in attack.imsis:
                     attack.imsis.remove(imsi)
             self._flush_ue_files()
         print(f"[GNB-POOL] Mitigado: IMSI {imsi} bloqueado por el controlador")
+
+    def _apply_unblock(self, imsi) -> None:
+        """
+        Called when the controller sends an UNBLOCK command for a UE.
+        For ordinary attacking UEs this is a no-op (their hping3 was a
+        finite process that is already dead; the attack ended). For benign
+        baseline UEs that were paused by _apply_mitigation, restart their
+        ICMP loop so normal background traffic resumes.
+        """
+        with self._lock:
+            if imsi not in self._paused_benign_imsis:
+                return
+            ue = self._pool.get(imsi)
+            if ue is None:
+                self._paused_benign_imsis.discard(imsi)
+                return
+            ue.target_ip = ue.benign_target_ip
+            switch_index = int(ue.ip.split(".")[2])
+            host = self._host_map.get(switch_index)
+            if host is not None:
+                self._state.procs[imsi] = host.popen(
+                    _benign_loop_argv(ue),
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            self._paused_benign_imsis.discard(imsi)
+            self._flush_ue_files()
+        print(f"[GNB-POOL] Benign UE IMSI {imsi} reanudado tras unblock del controlador")
 
     # ------------------------------------------------------------------
 
