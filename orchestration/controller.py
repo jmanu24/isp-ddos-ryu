@@ -10,6 +10,7 @@ from decision.engine import DecisionEngine, Decision
 from telemetry.base import DomainAdapter
 from mitigation.openflow_mitigator import OpenFlowMitigator, PROTO_NUMBERS
 from web import metrics
+from web.state import dashboard_state
 
 
 _THRESHOLD_BY_PROTOCOL = {
@@ -660,6 +661,7 @@ class OrchestrationController:
                     self._active_blocks[key] = action
                     self._below_threshold_streak[key] = 0
                     metrics.set_active_blocks(len(self._active_blocks))
+                    self._sync_dashboard_blocks()
                     # Counted per distinct block event, not per cycle an
                     # already-active one gets re-evaluated — see is_new
                     # above and the docstring.
@@ -701,6 +703,7 @@ class OrchestrationController:
             self._active_mobile_blocks[key] = action
             self._mobile_below_threshold_streak[key] = 0
             self._mobile_block_started_at[key] = time.time()
+            self._sync_dashboard_blocks()
 
             adapter = self._adapters.get(action.domain)
             if adapter:
@@ -1124,6 +1127,7 @@ class OrchestrationController:
                 del self._below_threshold_streak[key]
                 self._forget_block_traffic(key)
                 metrics.set_active_blocks(len(self._active_blocks))
+                self._sync_dashboard_blocks()
                 # Zero out the attack/mitigation rate gauges for this
                 # (attack_type, domain) if no other active block still
                 # carries the same type — the gauge would otherwise stay
@@ -1151,6 +1155,59 @@ class OrchestrationController:
                     self._validated_flows.discard((src_ip, dst_ip))
 
         return unblock_actions
+
+    def force_unblock(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> bool:
+        """
+        Manually release an active openflow block without waiting for the
+        normal traffic-driven unblock cycle. Returns True if a block was
+        found and removed, False if the key doesn't exist.
+
+        Used by the web UI's /api/blocks/unblock endpoint. Logged as
+        MANUAL_UNBLOCK so it's distinguishable from the automatic path.
+        """
+        key = (src_ip, dst_ip, dst_port, protocol)
+        if key not in self._active_blocks:
+            return False
+
+        original = self._active_blocks[key]
+        self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
+        del self._active_blocks[key]
+        self._below_threshold_streak.pop(key, None)
+        self._forget_block_traffic(key)
+        metrics.set_active_blocks(len(self._active_blocks))
+        self._sync_dashboard_blocks()
+        self._logger.info(log_line(
+            "enterprise", "MITIGATION", "MANUAL_UNBLOCK",
+            f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} "
+            f"attack_type={original.attack_type}",
+        ))
+        return True
+
+    def _sync_dashboard_blocks(self) -> None:
+        """Push a snapshot of all active blocks to DashboardState."""
+        import datetime as _dt
+        blocks = []
+        for (src_ip, dst_ip, dst_port, protocol), action in self._active_blocks.items():
+            blocks.append({
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "dst_port": dst_port,
+                "protocol": protocol,
+                "attack_type": action.attack_type,
+                "domain": action.domain,
+                "blocked_at": getattr(action, "_blocked_at", None),
+            })
+        for (src_ip, dst_ip, dst_port, protocol), action in self._active_mobile_blocks.items():
+            blocks.append({
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "dst_port": dst_port,
+                "protocol": protocol,
+                "attack_type": action.attack_type,
+                "domain": action.domain,
+                "blocked_at": getattr(action, "_blocked_at", None),
+            })
+        dashboard_state.set_active_blocks(blocks)
 
     def check_mobile_unblocks(self, correlated: List[CorrelatedEvent]) -> List[MitigationAction]:
         """
@@ -1283,6 +1340,7 @@ class OrchestrationController:
             del self._active_mobile_blocks[key]
             self._mobile_below_threshold_streak.pop(key, None)
             self._mobile_block_started_at.pop(key, None)
+            self._sync_dashboard_blocks()
             still_active_types = {
                 a.attack_type for a in self._active_mobile_blocks.values()
             }

@@ -8,6 +8,7 @@ class DashboardState:
         self.switches = {}
         self.events = []
         self.attacks = []
+        self.active_blocks = []
 
         self.topology = {
             "nodes": [],
@@ -75,6 +76,9 @@ class DashboardState:
         })
 
         self.attacks = self.attacks[-200:]
+
+    def set_active_blocks(self, blocks: list) -> None:
+        self.active_blocks = blocks
 
 
 dashboard_state = DashboardState()

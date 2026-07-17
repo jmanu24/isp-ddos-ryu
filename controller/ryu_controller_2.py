@@ -51,6 +51,7 @@ from orchestration.controller import OrchestrationController
 from web.state import dashboard_state
 from web.socket_server import start_server, emit_update
 from web import metrics
+from web.api import set_orchestrator
 
 import config.settings as settings
 from core.log_format import log_line
@@ -174,6 +175,8 @@ class FlowStatsIDS(app_manager.RyuApp):
             yield_fn=lambda: hub.sleep(0),
             logger=self.logger,
         )
+
+        set_orchestrator(self.orchestrator)
 
         # ── Monitoring loop ───────────────────────────────────────────
         self.monitor_thread = hub.spawn(self._monitor)
