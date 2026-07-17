@@ -167,11 +167,23 @@ class GnbManager:
                     self._next_ue_index[i] += 1
                     imsi = i * 100 + ue_index
 
+                    # Unique stopped-sentinel per UE so that when stop_attack()
+                    # or _apply_mitigation() reverts target_ip, all UEs from
+                    # the same attack don't converge on one shared IP
+                    # (_STOPPED_UE_TARGET_IP) and trigger a spurious
+                    # DDOS_DISTRIBUTED detection.  Same 203.0.113.x TEST-NET-3
+                    # range ue_traffic_generator.py uses for benign_target_ip,
+                    # but offset by switch (i*20) + ue_index to keep them
+                    # distinct from each other and from the interactive-mode
+                    # pool's own sentinels (10, 20) and _STOPPED_UE_TARGET_IP (99).
+                    stopped_ip = f"203.0.113.{i * 20 + ue_index}"
+
                     ue = UeSpec(
                         imsi=imsi, ip=f"10.60.{i}.{ue_index}", physical_host=f"gnb_{i}",
                         gnb_id=gnb_id_for(i), target_ip=target_ip, protocol=protocol,
                         dst_port=dst_port, low_slow=low_slow, benign=False,
                         rate_flags=list(rate_flags),
+                        benign_target_ip=stopped_ip,
                     )
                     self._pool[imsi] = ue
                     self._state.procs[imsi] = host.popen(
@@ -199,7 +211,7 @@ class GnbManager:
                 _terminate(self._state.procs.pop(imsi, None))
                 ue = self._pool.get(imsi)
                 if ue is not None:
-                    ue.target_ip = _STOPPED_UE_TARGET_IP
+                    ue.target_ip = ue.benign_target_ip or _STOPPED_UE_TARGET_IP
                     ue.dst_port = 0
             self._flush_ue_files()
         return True
