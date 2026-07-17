@@ -149,7 +149,7 @@ SCENARIOS: List[Scenario] = [
         ],
     },
     {
-        "id": "5a-enterprise",
+        "id": "5a",
         "group": "5",
         "group_label": "5 — SYN distribuido",
         "label": "5a — SYN distribuido (enterprise, 4 fuentes)",
@@ -160,10 +160,10 @@ SCENARIOS: List[Scenario] = [
         ],
     },
     {
-        "id": "5a-mobile",
+        "id": "5b",
         "group": "5",
         "group_label": "5 — SYN distribuido",
-        "label": "5a — SYN distribuido (mobile, 6 UEs)",
+        "label": "5b — SYN distribuido (mobile, 6 UEs)",
         "description": "6 UEs repartidas en gnb_1/gnb_3 (count_per_node=3) -> fixed_2 (10.0.2.30), 25s.",
         "expected": "DETECTION DDOS_DISTRIBUTED con >=5 fuentes 10.60.{1,3}.x, THROTTLE por UE contribuyente.",
         "steps": [
@@ -171,10 +171,10 @@ SCENARIOS: List[Scenario] = [
         ],
     },
     {
-        "id": "5a-broadband",
+        "id": "5c",
         "group": "5",
         "group_label": "5 — SYN distribuido",
-        "label": "5a — SYN distribuido (broadband, 8 sesiones)",
+        "label": "5c — SYN distribuido (broadband, 8 sesiones)",
         "description": "distributed_syn_flood (8 sesiones BNG) -> fixed_3 (10.0.3.30), 30s.",
         "expected": "DETECTION DDOS_DISTRIBUTED con 8 fuentes 10.61.1.14x, BLOCK por sesion. Al terminar vuelve a low_and_slow.",
         "steps": [
@@ -182,10 +182,10 @@ SCENARIOS: List[Scenario] = [
         ],
     },
     {
-        "id": "5b",
+        "id": "5d",
         "group": "5",
         "group_label": "5 — SYN distribuido",
-        "label": "5b — Multi-dominio contra el servidor central",
+        "label": "5d — Multi-dominio contra el servidor central",
         "description": "Enterprise (4) + mobile (8, count_per_node=2) + broadband (8 sesiones), los 3 simultaneos -> 10.99.0.1:443, 30s.",
         "expected": "Una unica MULTIDOMAIN_DISTRIBUTED_ATTACK (posiblemente en 2 etapas -- mobile+broadband primero, enterprise se suma despues), mitigada por el mecanismo real de cada dominio.",
         "steps": [
