@@ -55,10 +55,6 @@ def topology():
 
     return jsonify(dashboard_state.topology)
 
-@app.route("/blocks")
-def blocks_page():
-    return render_template("blocks.html")
-
 @app.route("/api/blocks")
 def blocks_api():
     return jsonify(dashboard_state.active_blocks)

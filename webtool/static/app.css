@@ -197,3 +197,25 @@ button:hover { background: #eee; }
     color: #888;
     font-style: italic;
 }
+
+.blocks-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9em;
+}
+
+.blocks-table th,
+.blocks-table td {
+    border: 1px solid #ddd;
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.blocks-table th {
+    background: #f0f4ff;
+    font-weight: bold;
+}
+
+.blocks-table tr:nth-child(even) {
+    background: #fafafa;
+}

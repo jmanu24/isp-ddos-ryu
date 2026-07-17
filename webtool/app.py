@@ -33,9 +33,11 @@ from webtool.scenarios import SCENARIOS  # noqa: E402
 from webtool.state import webtool_state  # noqa: E402
 
 WEBTOOL_PORT = 5050
-# The existing dashboard's own /api/events (web/api.py) -- polled as a
-# plain HTTP client, exactly like any other consumer of that endpoint.
+# The existing dashboard's own endpoints (web/api.py) -- polled/proxied
+# as a plain HTTP client, exactly like any other consumer of those endpoints.
 DASHBOARD_EVENTS_URL = "http://127.0.0.1:5000/api/events"
+DASHBOARD_BLOCKS_URL = "http://127.0.0.1:5000/api/blocks"
+DASHBOARD_UNBLOCK_URL = "http://127.0.0.1:5000/api/blocks/unblock"
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -171,7 +173,46 @@ def state():
     return jsonify(webtool_state.to_dict())
 
 
+@app.route("/api/blocks/unblock", methods=["POST"])
+def blocks_unblock():
+    """Proxy to web/api.py's /api/blocks/unblock (port 5000).
+    The controller process owns the live orchestrator; this app reaches
+    it as an HTTP client, same pattern as _poll_dashboard_events."""
+    body = request.get_json(force=True, silent=True) or {}
+    payload = json.dumps(body).encode()
+    req = urllib.request.Request(
+        DASHBOARD_UNBLOCK_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            return jsonify(data)
+    except urllib.error.HTTPError as exc:
+        try:
+            data = json.loads(exc.read())
+        except Exception:
+            data = {"ok": False, "error": str(exc)}
+        return jsonify(data), exc.code
+    except (urllib.error.URLError, OSError) as exc:
+        return jsonify({"ok": False, "error": f"controlador no disponible: {exc}"}), 503
+
+
 _dashboard_events_seen = 0
+
+
+def _poll_dashboard_blocks() -> None:
+    """Fetches the active blocks snapshot from web/api.py and stores it
+    in webtool_state so it's included in the next state_update emit."""
+    try:
+        with urllib.request.urlopen(DASHBOARD_BLOCKS_URL, timeout=2) as resp:
+            blocks = json.loads(resp.read())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return
+    if isinstance(blocks, list):
+        webtool_state.set_active_blocks(blocks)
 
 
 def _poll_dashboard_events() -> None:
@@ -200,6 +241,7 @@ def _poll_dashboard_events() -> None:
 def _reconciliation_loop() -> None:
     while True:
         _poll_dashboard_events()
+        _poll_dashboard_blocks()
         socketio.emit("state_update", webtool_state.to_dict())
         socketio.sleep(1)
 

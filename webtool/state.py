@@ -17,6 +17,7 @@ class WebToolState:
         self.nodes = {}            # node_id -> {id, domain, switch_index, ip}
         self.active_attacks = {}   # attack_id -> {domain, switch_indices, attack_type, started_at, duration, target_ip}
         self.events = []           # rolling list, same pattern web/state.py's add_event uses
+        self.active_blocks = []    # snapshot from web/api /api/blocks, polled each cycle
 
     def add_event(self, text: str) -> None:
         self.events.append({"timestamp": datetime.now().isoformat(), "message": text})
@@ -45,6 +46,9 @@ class WebToolState:
         if info:
             self.add_event(f"Ataque detenido [{info.get('domain')}] switches={info.get('switch_indices')}")
 
+    def set_active_blocks(self, blocks: list) -> None:
+        self.active_blocks = blocks
+
     def to_dict(self) -> dict:
         return {
             "controller_status": self.controller_status,
@@ -52,6 +56,7 @@ class WebToolState:
             "nodes": list(self.nodes.values()),
             "active_attacks": list(self.active_attacks.values()),
             "events": self.events[-20:],
+            "active_blocks": self.active_blocks,
         }
 
 

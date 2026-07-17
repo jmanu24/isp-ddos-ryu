@@ -317,6 +317,57 @@ function renderAttacks(attacks) {
     });
 }
 
+const BLOCK_DOMAIN_LABELS = { enterprise: "Enterprise", mobile: "Mobile", broadband: "Broadband", bgp: "BGP" };
+
+function elapsed(ts) {
+    if (!ts) return "—";
+    const secs = Math.floor(Date.now() / 1000 - ts);
+    if (secs < 60) return secs + "s";
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + "m " + (secs % 60) + "s";
+    return Math.floor(mins / 60) + "h " + (mins % 60) + "m";
+}
+
+function renderBlocks(blocks) {
+    const container = el("blocks");
+    if (!blocks || blocks.length === 0) {
+        container.innerHTML = '<div class="empty-note">Sin bloques activos.</div>';
+        return;
+    }
+    const rows = blocks.map((b) => `
+        <tr>
+          <td>${b.src_ip}</td>
+          <td>${b.dst_ip}</td>
+          <td>${b.dst_port || "—"}</td>
+          <td>${b.protocol}</td>
+          <td><span class="attack-domain-tag tag-${b.domain}">${b.attack_type}</span></td>
+          <td><span class="attack-domain-tag tag-${b.domain}">${BLOCK_DOMAIN_LABELS[b.domain] || b.domain}</span></td>
+          <td>${elapsed(b.blocked_at)}</td>
+          <td><button class="btn-danger btn-unblock"
+                data-src="${b.src_ip}" data-dst="${b.dst_ip}"
+                data-port="${b.dst_port || 0}" data-proto="${b.protocol}">
+              Desbloquear
+            </button></td>
+        </tr>`).join("");
+    container.innerHTML = `<table class="blocks-table">
+        <thead><tr>
+          <th>Fuente</th><th>Destino</th><th>Puerto</th><th>Protocolo</th>
+          <th>Tipo</th><th>Dominio</th><th>Bloqueado hace</th><th>Acción</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
+    container.querySelectorAll(".btn-unblock").forEach((btn) => {
+        btn.onclick = () => {
+            postJSON("/api/blocks/unblock", {
+                src_ip:   btn.dataset.src,
+                dst_ip:   btn.dataset.dst,
+                dst_port: parseInt(btn.dataset.port, 10),
+                protocol: btn.dataset.proto,
+            });
+        };
+    });
+}
+
 function renderEvents(events) {
     const container = el("events");
     if (!events || events.length === 0) {
@@ -338,6 +389,7 @@ function renderState(data) {
     renderTopologyGraph(data.nodes, data.active_attacks);
     renderTargetOptions(data.nodes);
     renderAttacks(data.active_attacks);
+    renderBlocks(data.active_blocks);
     renderEvents(data.events);
 }
 
