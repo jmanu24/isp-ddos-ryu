@@ -1178,30 +1178,64 @@ class OrchestrationController:
 
     def force_unblock(self, src_ip: str, dst_ip: str, dst_port: int, protocol: str) -> bool:
         """
-        Manually release an active openflow block without waiting for the
-        normal traffic-driven unblock cycle. Returns True if a block was
-        found and removed, False if the key doesn't exist.
+        Manually release an active block without waiting for the normal
+        traffic-driven unblock cycle. Handles both OpenFlow blocks
+        (_active_blocks) and mobile/broadband blocks (_active_mobile_blocks).
+        Returns True if a block was found and removed, False otherwise.
 
         Used by the web UI's /api/blocks/unblock endpoint. Logged as
         MANUAL_UNBLOCK so it's distinguishable from the automatic path.
         """
         key = (src_ip, dst_ip, dst_port, protocol)
-        if key not in self._active_blocks:
-            return False
 
-        original = self._active_blocks[key]
-        self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
-        del self._active_blocks[key]
-        self._below_threshold_streak.pop(key, None)
-        self._forget_block_traffic(key)
-        metrics.set_active_blocks(len(self._active_blocks))
-        self._sync_dashboard_blocks()
-        self._logger.info(log_line(
-            "enterprise", "MITIGATION", "MANUAL_UNBLOCK",
-            f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} "
-            f"attack_type={original.attack_type}",
-        ))
-        return True
+        if key in self._active_blocks:
+            original = self._active_blocks[key]
+            self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
+            del self._active_blocks[key]
+            self._below_threshold_streak.pop(key, None)
+            self._forget_block_traffic(key)
+            metrics.set_active_blocks(len(self._active_blocks))
+            self._sync_dashboard_blocks()
+            self._logger.info(log_line(
+                original.domain, "MITIGATION", "MANUAL_UNBLOCK",
+                f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} "
+                f"attack_type={original.attack_type}",
+            ))
+            return True
+
+        if key in self._active_mobile_blocks:
+            original = self._active_mobile_blocks[key]
+            domain = original.domain
+            unblock_action = MitigationAction(
+                domain=domain,
+                device_id=original.device_id,
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                protocol=protocol,
+                action="unblock",
+                attack_type=original.attack_type,
+            )
+            adapter = self._adapters.get(domain)
+            if adapter:
+                adapter.apply_mitigation(unblock_action)
+            del self._active_mobile_blocks[key]
+            self._mobile_below_threshold_streak.pop(key, None)
+            self._mobile_block_started_at.pop(key, None)
+            if src_ip == "*":
+                for attacker in getattr(original, "sources", []):
+                    self._validated_flows.discard((attacker, dst_ip))
+            else:
+                self._validated_flows.discard((src_ip, dst_ip))
+            self._sync_dashboard_blocks()
+            self._logger.info(log_line(
+                domain, "MITIGATION", "MANUAL_UNBLOCK",
+                f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} "
+                f"attack_type={original.attack_type}",
+            ))
+            return True
+
+        return False
 
     def _sync_dashboard_blocks(self) -> None:
         """Push a snapshot of all active blocks to DashboardState."""
