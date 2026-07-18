@@ -9,20 +9,21 @@ Log format (homologated with ryu-manager output):
   YYYY-MM-DD HH:MM:SS LEVEL [webtool] EVENT_TYPE: message
 """
 
-import logging
+import threading
 from datetime import datetime
 
-_LOG_PATH = "/tmp/webtool_controller.log"
+# Webtool events go to a SEPARATE file so they never interleave with
+# ryu-manager's stdout (which writes to webtool_controller.log via the
+# subprocess file handle).  The parser merges both files by timestamp.
+_EVENTS_PATH = "/tmp/webtool_events.log"
+_events_lock = threading.Lock()
 
-_handler = logging.FileHandler(_LOG_PATH)
-_handler.setFormatter(logging.Formatter(
-    fmt="%(asctime)s %(levelname)s [webtool] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-))
-_log = logging.getLogger("webtool")
-_log.setLevel(logging.INFO)
-_log.addHandler(_handler)
-_log.propagate = False
+
+def _log_event(msg: str) -> None:
+    line = datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " INFO [webtool] " + msg + "\n"
+    with _events_lock:
+        with open(_EVENTS_PATH, "a") as f:
+            f.write(line)
 
 
 class WebToolState:
@@ -38,7 +39,7 @@ class WebToolState:
     def add_event(self, text: str, level: str = "INFO") -> None:
         self.events.append({"timestamp": datetime.now().isoformat(), "message": text})
         self.events = self.events[-500:]
-        getattr(_log, level.lower(), _log.info)(text)
+        _log_event(text)
 
     def set_controller_status(self, status: str) -> None:
         self.controller_status = status

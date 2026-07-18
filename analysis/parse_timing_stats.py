@@ -20,13 +20,16 @@ Uso:
   python3 analysis/parse_timing_stats.py /tmp/webtool_controller.log --scenario 5d
   python3 analysis/parse_timing_stats.py /tmp/webtool_controller.log --scenario 5d --csv out.csv
 
+El script busca automáticamente /tmp/webtool_events.log junto al log del controlador.
+Se puede especificar otra ruta con --events-log.
+
 Con --scenario se acota el análisis a la ventana temporal del escenario:
   desde el primer ATTACK_START con scenario=<ID>
   hasta el primer ATTACK_START de otro escenario distinto (o fin del log).
 
-Formato del log:
-  ryu-manager: YYYY-MM-DD HH:MM:SS LEVEL FlowStatsIDS [domain] EVENT_TYPE: msg
-  webtool:     YYYY-MM-DD HH:MM:SS LEVEL [webtool] EVENT_TYPE: msg
+Archivos:
+  webtool_controller.log — stdout de ryu-manager (DETECTION, MITIGATION, etc.)
+  webtool_events.log     — eventos del webtool (ATTACK_START, ATTACK_STOP, etc.)
 """
 
 import argparse
@@ -111,45 +114,44 @@ def _parse_action_msg(msg: str) -> Optional[dict]:
     }
 
 
-def parse_log(path: str):
+def parse_events_log(path: str) -> List[dict]:
     """
-    Parse a unified webtool_controller.log.
-
-    Returns:
-      attack_starts  — [{ts, scenario, domain, attack_type, target_ip}]
-      detections     — [{ts, domain, attack_type, src, dst, dst_port, proto}]
-      mitigations    — [{ts, domain, action, attack_type, src, dst}]
-      unblocks       — same
+    Parse /tmp/webtool_events.log — lines written exclusively by webtool/state.py.
+    Format: YYYY-MM-DD HH:MM:SS INFO [webtool] EVENT_TYPE: message
+    Returns list of ATTACK_START dicts.
     """
     attack_starts = []
-    detections    = []
-    mitigations   = []
-    unblocks      = []
+    if not path or not __import__("os").path.exists(path):
+        return attack_starts
+    with open(path, "r") as f:
+        for line in f:
+            m = _WEBTOOL_LINE_RE.match(line.strip())
+            if not m or m.group("event_type") != "ATTACK_START":
+                continue
+            am = _ATTACK_START_RE.search(m.group("message"))
+            if am:
+                attack_starts.append({
+                    "ts":          _ts(m.group("ts")),
+                    "scenario":    am.group("scenario"),
+                    "domain":      am.group("domain"),
+                    "attack_type": am.group("attack_type"),
+                    "target_ip":   am.group("target_ip"),
+                })
+    return attack_starts
+
+
+def parse_ryu_log(path: str):
+    """
+    Parse /tmp/webtool_controller.log — ryu-manager stdout.
+    Returns (detections, mitigations, unblocks).
+    """
+    detections  = []
+    mitigations = []
+    unblocks    = []
 
     with open(path, "r") as f:
         for line in f:
-            line = line.strip()
-
-            # webtool events
-            m = _WEBTOOL_LINE_RE.match(line)
-            if m:
-                ts      = _ts(m.group("ts"))
-                ev_type = m.group("event_type")
-                msg     = m.group("message")
-                if ev_type == "ATTACK_START":
-                    am = _ATTACK_START_RE.search(msg)
-                    if am:
-                        attack_starts.append({
-                            "ts":          ts,
-                            "scenario":    am.group("scenario"),
-                            "domain":      am.group("domain"),
-                            "attack_type": am.group("attack_type"),
-                            "target_ip":   am.group("target_ip"),
-                        })
-                continue
-
-            # ryu-manager events
-            m = _RYU_LINE_RE.match(line)
+            m = _RYU_LINE_RE.match(line.strip())
             if not m:
                 continue
             ts      = _ts(m.group("ts"))
@@ -178,7 +180,7 @@ def parse_log(path: str):
                 else:
                     unblocks.append(entry)
 
-    return attack_starts, detections, mitigations, unblocks
+    return detections, mitigations, unblocks
 
 
 def _scenario_window(attack_starts: list, scenario_id: str):
@@ -342,12 +344,17 @@ def summarize(records):
     print()
 
 
+_DEFAULT_EVENTS_LOG = "/tmp/webtool_events.log"
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("log", help="Ruta al log unificado (ej. /tmp/webtool_controller.log)")
+    ap.add_argument("log", help="Ruta al log del controlador (ej. /tmp/webtool_controller.log)")
+    ap.add_argument("--events-log", metavar="FILE", default=_DEFAULT_EVENTS_LOG,
+                    help=f"Ruta al log de eventos del webtool (default: {_DEFAULT_EVENTS_LOG})")
     ap.add_argument("--scenario", metavar="ID",
                     help="Acotar análisis al escenario indicado (ej. '5d'). "
                          "Ventana: desde primer ATTACK_START del escenario hasta "
@@ -355,7 +362,8 @@ def main():
     ap.add_argument("--csv", metavar="FILE", help="Exportar CSV detallado")
     args = ap.parse_args()
 
-    attack_starts, detections, mitigations, unblocks = parse_log(args.log)
+    attack_starts           = parse_events_log(args.events_log)
+    detections, mitigations, unblocks = parse_ryu_log(args.log)
     print(f"Parseados: {len(attack_starts)} inicios de ataque, "
           f"{len(detections)} detecciones, "
           f"{len(mitigations)} mitigaciones, {len(unblocks)} desbloqueos")

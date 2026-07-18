@@ -50,6 +50,7 @@ OFP_PORT = 6653
 SETUP_BNG_NETNS_SCRIPT = REPO_DIR / "deploy" / "setup_bng_netns.sh"
 UE_KPM_MONITOR_SCRIPT = REPO_DIR / "simulation" / "ue_kpm_monitor.py"
 CONTROLLER_LOG_PATH = "/tmp/webtool_controller.log"
+EVENTS_LOG_PATH     = "/tmp/webtool_events.log"
 
 # UeSpec/enterprise_ops.hping3_argv both key protocol off these same
 # strings ("UDP"/"TCP_SYN"/"ICMP") -- the web UI only ever exposes the
@@ -137,12 +138,13 @@ class Orchestrator:
             env = os.environ.copy()
             env["PYTHONPATH"] = str(REPO_DIR)
 
-            # Rotate log before opening: compress existing file and start fresh.
-            if os.path.exists(CONTROLLER_LOG_PATH) and os.path.getsize(CONTROLLER_LOG_PATH) > 0:
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup = f"{CONTROLLER_LOG_PATH}.{ts}.gz"
-                with open(CONTROLLER_LOG_PATH, "rb") as _src, gzip.open(backup, "wb") as _dst:
-                    shutil.copyfileobj(_src, _dst)
+            # Rotate logs before opening: compress existing files and start fresh.
+            ts_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            for log_path in (CONTROLLER_LOG_PATH, EVENTS_LOG_PATH):
+                if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
+                    backup = f"{log_path}.{ts_stamp}.gz"
+                    with open(log_path, "rb") as _src, gzip.open(backup, "wb") as _dst:
+                        shutil.copyfileobj(_src, _dst)
 
             log_fh = open(CONTROLLER_LOG_PATH, "w")
             self.controller_proc = subprocess.Popen(
