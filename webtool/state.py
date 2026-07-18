@@ -6,7 +6,18 @@ web/, it only ever talks to it as a black-box HTTP client (see
 webtool/app.py's reconciliation loop).
 """
 
+import logging
 from datetime import datetime
+
+_LOG_PATH = "/tmp/webtool_controller.log"
+
+logging.basicConfig(
+    filename=_LOG_PATH,
+    level=logging.INFO,
+    format="%(asctime)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+_log = logging.getLogger("webtool")
 
 
 class WebToolState:
@@ -22,6 +33,7 @@ class WebToolState:
     def add_event(self, text: str) -> None:
         self.events.append({"timestamp": datetime.now().isoformat(), "message": text})
         self.events = self.events[-500:]
+        _log.info(text)
 
     def set_controller_status(self, status: str) -> None:
         self.controller_status = status
