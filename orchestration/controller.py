@@ -398,6 +398,26 @@ class OrchestrationController:
                 "MULTIDOMAIN_DISTRIBUTED_ATTACK" if already_active_domains else decision.attack_type
             )
 
+            # When this detection escalates to MULTIDOMAIN, back-fill the
+            # attack_type on any earlier blocks for the same dst_ip that were
+            # originally labeled with a single-domain type (DDOS_DISTRIBUTED,
+            # SYN_FLOOD, etc.) -- those blocks were the first-mover detections
+            # that now belong to the same multidomain event. Without this,
+            # the dashboard and UNTHROTTLE logs keep showing the original
+            # single-domain label for those blocks even after the escalation.
+            if effective_attack_type == "MULTIDOMAIN_DISTRIBUTED_ATTACK":
+                needs_sync = False
+                for action in self._active_blocks.values():
+                    if action.dst_ip == d.dst_ip and action.attack_type != "MULTIDOMAIN_DISTRIBUTED_ATTACK":
+                        action.attack_type = "MULTIDOMAIN_DISTRIBUTED_ATTACK"
+                        needs_sync = True
+                for action in self._active_mobile_blocks.values():
+                    if action.dst_ip == d.dst_ip and action.attack_type != "MULTIDOMAIN_DISTRIBUTED_ATTACK":
+                        action.attack_type = "MULTIDOMAIN_DISTRIBUTED_ATTACK"
+                        needs_sync = True
+                if needs_sync:
+                    self._sync_dashboard_blocks()
+
             action_type = self._action_for(effective_attack_type, d.domain)
 
             if (
