@@ -2,36 +2,36 @@
 """
 analysis/parse_timing_stats.py
 
-Extrae estadísticas de tiempos del log del controlador (ryu-manager)
-y, opcionalmente, del log del webtool (/tmp/webtool_controller.log):
+Extrae estadísticas de tiempos del log unificado del controlador
+(/tmp/webtool_controller.log), que contiene tanto la salida de
+ryu-manager como los eventos del webtool.
 
-  Td  — Tiempo de detección: desde "Ataque iniciado" (webtool log)
-         hasta primera DETECTION para el mismo target_ip.
-         Solo disponible si se pasa --webtool-log.
+  Td  — Tiempo de detección: desde ATTACK_START hasta ATTACK_DETECTED
+         para el mismo target_ip.
 
-  Tm  — Tiempo de mitigación: desde primera DETECTION hasta primera
-         BLOCK/THROTTLE para el mismo (domain, dst_ip).
+  Tm  — Tiempo de mitigación: desde ATTACK_DETECTED hasta BLOCK/THROTTLE
+         para el mismo (domain, dst_ip).
 
-  Tu  — Tiempo de bloqueo activo: desde primera BLOCK/THROTTLE hasta
+  Tu  — Tiempo de bloqueo activo: desde BLOCK/THROTTLE hasta
          UNBLOCK/UNTHROTTLE para la misma (src_ip, domain).
 
 Uso:
-  python3 analysis/parse_timing_stats.py <ryu.log>
-  python3 analysis/parse_timing_stats.py <ryu.log> --webtool-log /tmp/webtool_controller.log
-  python3 analysis/parse_timing_stats.py <ryu.log> --webtool-log /tmp/webtool_controller.log \\
-          --csv out.csv --scenario 5d
+  python3 analysis/parse_timing_stats.py /tmp/webtool_controller.log
+  python3 analysis/parse_timing_stats.py /tmp/webtool_controller.log --scenario 5d
+  python3 analysis/parse_timing_stats.py /tmp/webtool_controller.log --scenario 5d --csv out.csv
 
-Formato del ryu log:
-  YYYY-MM-DD HH:MM:SS LEVEL FlowStatsIDS [domain] EVENT_TYPE: ...
+Con --scenario se acota el análisis a la ventana temporal del escenario:
+  desde el primer ATTACK_START con scenario=<ID>
+  hasta el primer ATTACK_START de otro escenario distinto (o fin del log).
 
-Formato del webtool log:
-  YYYY-MM-DD HH:MM:SS Ataque iniciado [domain] switches=[...] tipo=<TYPE> -> <TARGET_IP>
+Formato del log:
+  ryu-manager: YYYY-MM-DD HH:MM:SS LEVEL FlowStatsIDS [domain] EVENT_TYPE: msg
+  webtool:     YYYY-MM-DD HH:MM:SS LEVEL [webtool] EVENT_TYPE: msg
 """
 
 import argparse
 import csv
 import re
-import sys
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -39,12 +39,12 @@ from typing import Dict, List, Optional
 
 _TS_FMT = "%Y-%m-%d %H:%M:%S"
 
-# --- ryu-manager log ---
+# ── ryu-manager lines ────────────────────────────────────────────────────────
 
-_LINE_RE = re.compile(
+_RYU_LINE_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
-    r"\s+\S+"
-    r"\s+\S+"
+    r"\s+\S+"              # level
+    r"\s+FlowStatsIDS"
     r"\s+\[(?P<domain>[^\]]+)\]"
     r"\s+(?P<event_type>\w+):"
     r"\s+(?P<message>.+)$"
@@ -56,22 +56,27 @@ _DETECTION_RE = re.compile(
     r"\s+destination=(?P<dst>[^:]+):(?P<port>\d+)/(?P<proto>\S+)"
 )
 
-_ACTION_RE = re.compile(
-    r"^(?P<action>BLOCK|THROTTLE|UNBLOCK|UNTHROTTLE)\s+(?P<attack_type>\S+)"
-)
-_SRC_IP_RE = re.compile(r"src_ip=(\S+)")
+_ACTION_RE  = re.compile(r"^(?P<action>BLOCK|THROTTLE|UNBLOCK|UNTHROTTLE)\s+(?P<attack_type>\S+)")
+_SRC_IP_RE  = re.compile(r"src_ip=(\S+)")
 _SOURCE_RE  = re.compile(r"source=(\S+)")
 _DST_RE     = re.compile(r"destination=([^:]+):(\d+)/(\S+)")
 
-# --- webtool log ---
+# ── webtool lines ─────────────────────────────────────────────────────────────
 
-_WEBTOOL_ATTACK_RE = re.compile(
+_WEBTOOL_LINE_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
-    r"\s+Ataque iniciado"
-    r"\s+\[(?P<domain>[^\]]+)\]"
+    r"\s+\S+"              # level
+    r"\s+\[webtool\]"
+    r"\s+(?P<event_type>\w+):"
+    r"\s+(?P<message>.+)$"
+)
+
+_ATTACK_START_RE = re.compile(
+    r"scenario=(?P<scenario>\S+)"
+    r"\s+domain=(?P<domain>\S+)"
     r"\s+switches=(?P<switches>\[[^\]]*\])"
     r"\s+tipo=(?P<attack_type>\S+)"
-    r"\s+->\s+(?P<target_ip>\S+)"
+    r"\s+target=(?P<target_ip>\S+)"
 )
 
 
@@ -101,23 +106,50 @@ def _parse_action_msg(msg: str) -> Optional[dict]:
         dst, dst_port, proto = m.group(1), int(m.group(2)), m.group(3)
 
     return {
-        "action": action,
-        "attack_type": attack_type,
-        "src": src or "*",
-        "dst": dst,
-        "dst_port": dst_port,
-        "proto": proto,
+        "action": action, "attack_type": attack_type,
+        "src": src or "*", "dst": dst, "dst_port": dst_port, "proto": proto,
     }
 
 
-def parse_ryu_log(path: str):
-    detections  = []
-    mitigations = []
-    unblocks    = []
+def parse_log(path: str):
+    """
+    Parse a unified webtool_controller.log.
+
+    Returns:
+      attack_starts  — [{ts, scenario, domain, attack_type, target_ip}]
+      detections     — [{ts, domain, attack_type, src, dst, dst_port, proto}]
+      mitigations    — [{ts, domain, action, attack_type, src, dst}]
+      unblocks       — same
+    """
+    attack_starts = []
+    detections    = []
+    mitigations   = []
+    unblocks      = []
 
     with open(path, "r") as f:
         for line in f:
-            m = _LINE_RE.match(line.strip())
+            line = line.strip()
+
+            # webtool events
+            m = _WEBTOOL_LINE_RE.match(line)
+            if m:
+                ts      = _ts(m.group("ts"))
+                ev_type = m.group("event_type")
+                msg     = m.group("message")
+                if ev_type == "ATTACK_START":
+                    am = _ATTACK_START_RE.search(msg)
+                    if am:
+                        attack_starts.append({
+                            "ts":          ts,
+                            "scenario":    am.group("scenario"),
+                            "domain":      am.group("domain"),
+                            "attack_type": am.group("attack_type"),
+                            "target_ip":   am.group("target_ip"),
+                        })
+                continue
+
+            # ryu-manager events
+            m = _RYU_LINE_RE.match(line)
             if not m:
                 continue
             ts      = _ts(m.group("ts"))
@@ -146,27 +178,41 @@ def parse_ryu_log(path: str):
                 else:
                     unblocks.append(entry)
 
-    return detections, mitigations, unblocks
+    return attack_starts, detections, mitigations, unblocks
 
 
-def parse_webtool_log(path: str) -> List[dict]:
+def _scenario_window(attack_starts: list, scenario_id: str):
     """
-    Returns list of attack-start events:
-      {ts, domain, attack_type, target_ip, switches}
+    Returns (t_start, t_end) for the requested scenario.
+
+    t_start = timestamp of the first ATTACK_START with scenario==scenario_id
+    t_end   = timestamp of the first ATTACK_START of a *different* scenario
+              that occurs after t_start, or None (= end of log)
     """
-    attacks = []
-    with open(path, "r") as f:
-        for line in f:
-            m = _WEBTOOL_ATTACK_RE.match(line.strip())
-            if m:
-                attacks.append({
-                    "ts":          _ts(m.group("ts")),
-                    "domain":      m.group("domain"),
-                    "attack_type": m.group("attack_type"),
-                    "target_ip":   m.group("target_ip"),
-                    "switches":    m.group("switches"),
-                })
-    return attacks
+    t_start = None
+    for ev in attack_starts:
+        if ev["scenario"] == scenario_id:
+            t_start = ev["ts"]
+            break
+    if t_start is None:
+        return None, None
+
+    t_end = None
+    for ev in attack_starts:
+        if ev["ts"] <= t_start:
+            continue
+        if ev["scenario"] != scenario_id:
+            t_end = ev["ts"]
+            break
+
+    return t_start, t_end
+
+
+def _filter(events: list, t_start, t_end) -> list:
+    return [
+        e for e in events
+        if e["ts"] >= t_start and (t_end is None or e["ts"] < t_end)
+    ]
 
 
 def _infer_dst(mit: dict, detections: list) -> Optional[str]:
@@ -176,15 +222,10 @@ def _infer_dst(mit: dict, detections: list) -> Optional[str]:
         d for d in detections
         if d["domain"] == mit["domain"] and d["ts"] <= mit["ts"]
     ]
-    if candidates:
-        return candidates[-1]["dst"]
-    return None
+    return candidates[-1]["dst"] if candidates else None
 
 
-def compute_stats(detections, mitigations, unblocks, attack_starts=None):
-    """
-    Returns one record per BLOCK/THROTTLE event with Td (optional), Tm, Tu.
-    """
+def compute_stats(attack_starts, detections, mitigations, unblocks):
     records = []
 
     for mit in mitigations:
@@ -193,7 +234,8 @@ def compute_stats(detections, mitigations, unblocks, attack_starts=None):
         domain = mit["domain"]
         mit_ts = mit["ts"]
 
-        # Tm: nearest DETECTION for same (domain, dst) within 60s before mitigation.
+        # Td: nearest ATTACK_START for same target_ip within 120s before the
+        #     first matching DETECTION.
         det_match = None
         for det in detections:
             if det["domain"] != domain:
@@ -207,6 +249,18 @@ def compute_stats(detections, mitigations, unblocks, attack_starts=None):
 
         Tm = round((mit_ts - det_match["ts"]).total_seconds(), 3) if det_match else None
 
+        Td = None
+        attack_start_ts = None
+        if det_match:
+            for atk in reversed(attack_starts):
+                if atk["target_ip"] != (dst or ""):
+                    continue
+                dt = (det_match["ts"] - atk["ts"]).total_seconds()
+                if 0.0 <= dt <= 120.0:
+                    Td = round(dt, 3)
+                    attack_start_ts = atk["ts"]
+                    break
+
         # Tu: nearest UNBLOCK/UNTHROTTLE for same (src, domain) after mitigation.
         unblock_match = None
         for ub in unblocks:
@@ -219,19 +273,6 @@ def compute_stats(detections, mitigations, unblocks, attack_starts=None):
                 break
 
         Tu = round((unblock_match["ts"] - mit_ts).total_seconds(), 3) if unblock_match else None
-
-        # Td: nearest attack-start for same target_ip within 120s before detection.
-        Td = None
-        attack_start_ts = None
-        if attack_starts and det_match:
-            for atk in reversed(attack_starts):
-                if atk["target_ip"] != (dst or ""):
-                    continue
-                dt = (det_match["ts"] - atk["ts"]).total_seconds()
-                if 0.0 <= dt <= 120.0:
-                    Td = round(dt, 3)
-                    attack_start_ts = atk["ts"]
-                    break
 
         records.append({
             "domain":        domain,
@@ -250,7 +291,7 @@ def compute_stats(detections, mitigations, unblocks, attack_starts=None):
     return records
 
 
-def summarize(records, has_td: bool):
+def summarize(records):
     by_domain: Dict[str, list] = defaultdict(list)
     for r in records:
         by_domain[r["domain"]].append(r)
@@ -259,7 +300,7 @@ def summarize(records, has_td: bool):
     print(f"{'RESUMEN DE TIEMPOS':^70}")
     print(f"{'='*70}")
 
-    def _stats(vals):
+    def _s(vals):
         if not vals:
             return None
         return sum(vals) / len(vals), min(vals), max(vals), len(vals)
@@ -268,20 +309,18 @@ def summarize(records, has_td: bool):
         tds = [r["Td_s"] for r in recs if r["Td_s"] != ""]
         tms = [r["Tm_s"] for r in recs if r["Tm_s"] != ""]
         tus = [r["Tu_s"] for r in recs if r["Tu_s"] != ""]
-        n   = len(recs)
-        print(f"\n  Dominio: {domain.upper()}  ({n} bloques)")
-        if has_td:
-            s = _stats(tds)
-            if s:
-                print(f"    Td (ataque → detección):      media={s[0]:.3f}s  min={s[1]:.3f}s  max={s[2]:.3f}s  n={s[3]}")
-            else:
-                print(f"    Td: sin datos de inicio de ataque en ventana 120s")
-        s = _stats(tms)
+        print(f"\n  Dominio: {domain.upper()}  ({len(recs)} bloques)")
+        s = _s(tds)
+        if s:
+            print(f"    Td (ataque → detección):      media={s[0]:.3f}s  min={s[1]:.3f}s  max={s[2]:.3f}s  n={s[3]}")
+        else:
+            print(f"    Td: sin datos de inicio de ataque en ventana 120s")
+        s = _s(tms)
         if s:
             print(f"    Tm (detección → mitigación):   media={s[0]:.3f}s  min={s[1]:.3f}s  max={s[2]:.3f}s  n={s[3]}")
         else:
-            print(f"    Tm: sin datos de detección previos en ventana 60s")
-        s = _stats(tus)
+            print(f"    Tm: sin DETECTION en ventana 60s antes del bloque")
+        s = _s(tus)
         if s:
             print(f"    Tu (mitigación → desbloqueo):  media={s[0]:.1f}s  min={s[1]:.1f}s  max={s[2]:.1f}s  n={s[3]}")
         else:
@@ -291,14 +330,13 @@ def summarize(records, has_td: bool):
     all_tms = [r["Tm_s"] for r in records if r["Tm_s"] != ""]
     all_tus = [r["Tu_s"] for r in records if r["Tu_s"] != ""]
     print(f"\n  TOTAL  ({len(records)} bloques)")
-    if has_td:
-        s = _stats(all_tds)
-        if s:
-            print(f"    Td: media={s[0]:.3f}s  min={s[1]:.3f}s  max={s[2]:.3f}s")
-    s = _stats(all_tms)
+    s = _s(all_tds)
+    if s:
+        print(f"    Td: media={s[0]:.3f}s  min={s[1]:.3f}s  max={s[2]:.3f}s")
+    s = _s(all_tms)
     if s:
         print(f"    Tm: media={s[0]:.3f}s  min={s[1]:.3f}s  max={s[2]:.3f}s")
-    s = _stats(all_tus)
+    s = _s(all_tus)
     if s:
         print(f"    Tu: media={s[0]:.1f}s  min={s[1]:.1f}s  max={s[2]:.1f}s")
     print()
@@ -309,26 +347,33 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("log", help="Ruta al log de ryu-manager")
-    ap.add_argument("--webtool-log", metavar="FILE",
-                    help="Ruta al log del webtool (/tmp/webtool_controller.log) "
-                         "para calcular Td (ataque → detección)")
+    ap.add_argument("log", help="Ruta al log unificado (ej. /tmp/webtool_controller.log)")
+    ap.add_argument("--scenario", metavar="ID",
+                    help="Acotar análisis al escenario indicado (ej. '5d'). "
+                         "Ventana: desde primer ATTACK_START del escenario hasta "
+                         "el primer ATTACK_START de otro escenario.")
     ap.add_argument("--csv", metavar="FILE", help="Exportar CSV detallado")
-    ap.add_argument("--scenario", metavar="LABEL",
-                    help="Etiqueta de escenario para el CSV (ej. '5d')")
     args = ap.parse_args()
 
-    detections, mitigations, unblocks = parse_ryu_log(args.log)
-    print(f"Parseados: {len(detections)} detecciones, "
+    attack_starts, detections, mitigations, unblocks = parse_log(args.log)
+    print(f"Parseados: {len(attack_starts)} inicios de ataque, "
+          f"{len(detections)} detecciones, "
           f"{len(mitigations)} mitigaciones, {len(unblocks)} desbloqueos")
 
-    attack_starts = None
-    if args.webtool_log:
-        attack_starts = parse_webtool_log(args.webtool_log)
-        print(f"Webtool log: {len(attack_starts)} ataques iniciados")
+    if args.scenario:
+        t_start, t_end = _scenario_window(attack_starts, args.scenario)
+        if t_start is None:
+            print(f"ERROR: no se encontró ningún ATTACK_START con scenario={args.scenario}")
+            return
+        t_end_str = t_end.strftime(_TS_FMT) if t_end else "fin del log"
+        print(f"Ventana escenario {args.scenario}: {t_start.strftime(_TS_FMT)} → {t_end_str}")
+        attack_starts = _filter(attack_starts, t_start, t_end)
+        detections    = _filter(detections,    t_start, t_end)
+        mitigations   = _filter(mitigations,   t_start, t_end)
+        unblocks      = _filter(unblocks,      t_start, t_end)
 
-    records = compute_stats(detections, mitigations, unblocks, attack_starts)
-    summarize(records, has_td=attack_starts is not None)
+    records = compute_stats(attack_starts, detections, mitigations, unblocks)
+    summarize(records)
 
     if args.csv:
         fields = ["scenario", "domain", "attack_type", "src", "dst",

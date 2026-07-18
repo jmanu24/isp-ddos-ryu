@@ -4,6 +4,9 @@ web app. Independent of web/state.py (the existing read-only dashboard
 embedded in the ryu-manager process) -- this app never imports from
 web/, it only ever talks to it as a black-box HTTP client (see
 webtool/app.py's reconciliation loop).
+
+Log format (homologated with ryu-manager output):
+  YYYY-MM-DD HH:MM:SS LEVEL [webtool] EVENT_TYPE: message
 """
 
 import logging
@@ -11,13 +14,15 @@ from datetime import datetime
 
 _LOG_PATH = "/tmp/webtool_controller.log"
 
-logging.basicConfig(
-    filename=_LOG_PATH,
-    level=logging.INFO,
-    format="%(asctime)s %(message)s",
+_handler = logging.FileHandler(_LOG_PATH)
+_handler.setFormatter(logging.Formatter(
+    fmt="%(asctime)s %(levelname)s [webtool] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-)
+))
 _log = logging.getLogger("webtool")
+_log.setLevel(logging.INFO)
+_log.addHandler(_handler)
+_log.propagate = False
 
 
 class WebToolState:
@@ -30,33 +35,38 @@ class WebToolState:
         self.events = []           # rolling list, same pattern web/state.py's add_event uses
         self.active_blocks = []    # snapshot from web/api /api/blocks, polled each cycle
 
-    def add_event(self, text: str) -> None:
+    def add_event(self, text: str, level: str = "INFO") -> None:
         self.events.append({"timestamp": datetime.now().isoformat(), "message": text})
         self.events = self.events[-500:]
-        _log.info(text)
+        getattr(_log, level.lower(), _log.info)(text)
 
     def set_controller_status(self, status: str) -> None:
         self.controller_status = status
-        self.add_event(f"Controlador: {status}")
+        self.add_event(f"CONTROLLER_STATUS: status={status}")
 
     def set_topology_status(self, status: str) -> None:
         self.topology_status = status
-        self.add_event(f"Topologia: {status}")
+        self.add_event(f"TOPOLOGY_STATUS: status={status}")
 
     def set_nodes(self, nodes: dict) -> None:
         self.nodes = nodes
 
-    def add_attack(self, attack_id: str, info: dict) -> None:
+    def add_attack(self, attack_id: str, info: dict, scenario: str = "manual") -> None:
         self.active_attacks[attack_id] = {"attack_id": attack_id, **info}
         self.add_event(
-            f"Ataque iniciado [{info.get('domain')}] switches={info.get('switch_indices')} "
-            f"tipo={info.get('attack_type')} -> {info.get('target_ip')}"
+            f"ATTACK_START: scenario={scenario} domain={info.get('domain')} "
+            f"switches={info.get('switch_indices')} tipo={info.get('attack_type')} "
+            f"target={info.get('target_ip')} attack_id={attack_id}"
         )
 
-    def remove_attack(self, attack_id: str) -> None:
+    def remove_attack(self, attack_id: str, scenario: str = "manual") -> None:
         info = self.active_attacks.pop(attack_id, None)
         if info:
-            self.add_event(f"Ataque detenido [{info.get('domain')}] switches={info.get('switch_indices')}")
+            self.add_event(
+                f"ATTACK_STOP: scenario={scenario} domain={info.get('domain')} "
+                f"switches={info.get('switch_indices')} tipo={info.get('attack_type')} "
+                f"target={info.get('target_ip')} attack_id={attack_id}"
+            )
 
     def set_active_blocks(self, blocks: list) -> None:
         self.active_blocks = blocks

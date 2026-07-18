@@ -18,12 +18,15 @@ threading.Timer, i.e. a different thread either way) without a same-
 thread self-deadlock.
 """
 
+import gzip
 import os
+import shutil
 import socket
 import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -113,6 +116,7 @@ class Orchestrator:
 
         self.enterprise_procs: Dict[str, list] = {}  # attack_id -> [proc, ...]
         self._attack_domain: Dict[str, str] = {}      # attack_id -> domain
+        self._attack_scenario: Dict[str, str] = {}    # attack_id -> scenario_id
         self.attack_timers: Dict[str, threading.Timer] = {}
         self._active_broadband_attack: Optional[str] = None
 
@@ -132,7 +136,15 @@ class Orchestrator:
             webtool_state.set_controller_status("starting")
             env = os.environ.copy()
             env["PYTHONPATH"] = str(REPO_DIR)
-            log_fh = open(CONTROLLER_LOG_PATH, "a")
+
+            # Rotate log before opening: compress existing file and start fresh.
+            if os.path.exists(CONTROLLER_LOG_PATH) and os.path.getsize(CONTROLLER_LOG_PATH) > 0:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = f"{CONTROLLER_LOG_PATH}.{ts}.gz"
+                with open(CONTROLLER_LOG_PATH, "rb") as _src, gzip.open(backup, "wb") as _dst:
+                    shutil.copyfileobj(_src, _dst)
+
+            log_fh = open(CONTROLLER_LOG_PATH, "w")
             self.controller_proc = subprocess.Popen(
                 [_find_ryu_manager(), "--observe-links", "controller/ryu_controller_2.py"],
                 cwd=str(REPO_DIR), env=env, stdout=log_fh, stderr=subprocess.STDOUT,
@@ -263,7 +275,8 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def start_enterprise_attack(self, switch_indices: List[int], attack_type: str, dst_port: int,
-                                 target_ip: str, duration: Optional[float] = None) -> dict:
+                                 target_ip: str, duration: Optional[float] = None,
+                                 scenario: str = "manual") -> dict:
         with self._lock:
             if self.net is None:
                 return {"ok": False, "error": "la topologia no esta corriendo"}
@@ -276,16 +289,17 @@ class Orchestrator:
             ]
             self.enterprise_procs[attack_id] = procs
             self._attack_domain[attack_id] = "enterprise"
+            self._attack_scenario[attack_id] = scenario
             webtool_state.add_attack(attack_id, {
                 "domain": "enterprise", "switch_indices": switch_indices, "attack_type": attack_type,
                 "target_ip": target_ip, "started_at": time.time(), "duration": duration,
-            })
+            }, scenario=scenario)
             self._schedule_auto_stop(attack_id, duration)
             return {"ok": True, "attack_id": attack_id}
 
     def start_mobile_attack(self, switch_indices: List[int], attack_type: str, dst_port: int,
                              target_ip: str, count_per_gnb: int = 1,
-                             duration: Optional[float] = None) -> dict:
+                             duration: Optional[float] = None, scenario: str = "manual") -> dict:
         with self._lock:
             if self.gnb_manager is None:
                 return {"ok": False, "error": "la topologia no esta corriendo"}
@@ -295,34 +309,36 @@ class Orchestrator:
                 dst_port=dst_port, target_ip=target_ip, rate_flags=["--flood"],
             )
             self._attack_domain[attack_id] = "mobile"
+            self._attack_scenario[attack_id] = scenario
             webtool_state.add_attack(attack_id, {
                 "domain": "mobile", "switch_indices": switch_indices, "attack_type": attack_type,
                 "target_ip": target_ip, "started_at": time.time(), "duration": duration,
-            })
+            }, scenario=scenario)
             self._schedule_auto_stop(attack_id, duration)
             return {"ok": True, "attack_id": attack_id}
 
     def start_broadband_attack(self, switch_indices: List[int], attack_type: str, target_ip: str,
-                                duration: Optional[float] = None) -> dict:
+                                duration: Optional[float] = None, scenario: str = "manual") -> dict:
         with self._lock:
             if self.bng is None:
                 return {"ok": False, "error": "la topologia no esta corriendo"}
-            scenario = _BROADBAND_ATTACK_SCENARIO.get(attack_type)
-            if scenario is None:
+            bng_scenario = _BROADBAND_ATTACK_SCENARIO.get(attack_type)
+            if bng_scenario is None:
                 return {"ok": False, "error": f"tipo de ataque no soportado en broadband: {attack_type}"}
             if self._active_broadband_attack is not None:
                 return {"ok": False, "error": "ya hay un ataque broadband activo -- detenlo primero"}
 
             self.bng.target_ip = target_ip
-            self.bng.start_attack(scenario)
+            self.bng.start_attack(bng_scenario)
 
             attack_id = str(uuid4())
             self._attack_domain[attack_id] = "broadband"
+            self._attack_scenario[attack_id] = scenario
             self._active_broadband_attack = attack_id
             webtool_state.add_attack(attack_id, {
                 "domain": "broadband", "switch_indices": switch_indices, "attack_type": attack_type,
                 "target_ip": target_ip, "started_at": time.time(), "duration": duration,
-            })
+            }, scenario=scenario)
             self._schedule_auto_stop(attack_id, duration)
             return {"ok": True, "attack_id": attack_id}
 
@@ -331,6 +347,7 @@ class Orchestrator:
             domain = self._attack_domain.pop(attack_id, None)
             if domain is None:
                 return {"ok": False, "error": "attack_id desconocido"}
+            scenario = self._attack_scenario.pop(attack_id, "manual")
             self._cancel_timer(attack_id)
 
             if domain == "enterprise":
@@ -344,7 +361,7 @@ class Orchestrator:
                     self.bng.stop_attack()
                 self._active_broadband_attack = None
 
-            webtool_state.remove_attack(attack_id)
+            webtool_state.remove_attack(attack_id, scenario=scenario)
             return {"ok": True}
 
     def stop_all_attacks(self) -> dict:
@@ -388,16 +405,18 @@ class Orchestrator:
                 if domain == "enterprise":
                     result = self.start_enterprise_attack(
                         step["switch_indices"], attack_type, dst_port,
-                        step["target_ip"], step.get("duration"),
+                        step["target_ip"], step.get("duration"), scenario=scenario_id,
                     )
                 elif domain == "mobile":
                     result = self.start_mobile_attack(
                         step["switch_indices"], attack_type, dst_port, step["target_ip"],
                         count_per_gnb=step.get("count_per_node", 1), duration=step.get("duration"),
+                        scenario=scenario_id,
                     )
                 else:
                     result = self.start_broadband_attack(
                         step["switch_indices"], attack_type, step["target_ip"], step.get("duration"),
+                        scenario=scenario_id,
                     )
                 results.append({"domain": domain, **result})
 
