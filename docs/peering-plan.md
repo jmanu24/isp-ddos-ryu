@@ -215,6 +215,20 @@ columna `flg` de `nfdump` (cadena fija de 8 caracteres CWR/ECE/URG/ACK/PSH/RST/S
 confirmada contra capturas reales de la VM: `"......S."` para un SYN puro, `"...A.R.."` para su
 respuesta ACK+RST) para replicar la misma distinción `is_bare_syn` que ya usa OpenFlow.
 
+**PASS confirmado en la VM (2026-09-11) tras el fix anterior** -- primera vez que el camino
+completo detección→mitigación FlowSpec se ejercita a través del motor de detección real (no
+solo `validate_peering.py`), atacando `central_server` desde `peer_ext` vía el webtool:
+
+```
+2026-09-11 02:01:09 WARNING FlowStatsIDS [bgp] DETECTION: ATTACK_DETECTED SYN_FLOOD source=10.97.0.2 destination=10.99.0.1:443/TCP
+2026-09-11 02:01:09 INFO mitigation.peering_backend [bgp] MITIGATION: FLOWSPEC_ANNOUNCED destination=10.99.0.1:443/TCP
+2026-09-11 02:01:09 WARNING FlowStatsIDS [bgp] MITIGATION: BGP_FLOWSPEC_DISCARD SYN_FLOOD source=10.97.0.2 destination=10.99.0.1:443/TCP
+```
+
+Detección a los 12s del inicio del ataque (02:00:57 → 02:01:09), consistente con la latencia de
+~13s de la tubería `nfcapd` (§2.3). Sin el falso positivo por datos viejos de sesiones
+anteriores (confirma también el fix de `_processed_files` sembrado al construirse).
+
 ## 3. Módulos nuevos y su responsabilidad
 
 ```mermaid
@@ -298,7 +312,11 @@ declarar la fase E completa mientras falte:
 - Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
   a cero mientras la regla está activa (las pruebas hasta ahora confirman que la regla existe
   en `nftables`, no que descarta tráfico real observado end-to-end).
-- El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`, no un host
-  normal de la topología, para que el motor de detección real elija `bgp` como dominio
-  representante (ver §2.4) — atacar cualquier otro destino se mitiga hoy como bloqueo OpenFlow
-  de red completa, no como `BGP_FLOWSPEC_DISCARD`.
+- ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Camino
+  detección→mitigación confirmado (§2.4, 2026-09-11)**: `ATTACK_DETECTED SYN_FLOOD` →
+  `FLOWSPEC_ANNOUNCED` → `BGP_FLOWSPEC_DISCARD` disparado por el motor de detección real (no
+  solo `validate_peering.py`), atacando `central_server` desde `peer_ext` vía el webtool
+  (atacar cualquier otro destino de la topología se sigue mitigando como bloqueo OpenFlow de
+  red completa, no como `BGP_FLOWSPEC_DISCARD` — ver §2.4). Falta aún medir
+  Td/Tdispatch/Tapply/Tefecto con las métricas formales del proyecto, no solo confirmar que el
+  log dispara.
