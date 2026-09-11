@@ -48,6 +48,13 @@ measurement above (the nft-ruleset poll timeline and the reply-traffic
 timeline, respectively) -- see _t_apply()/_t_efecto()'s own docstrings
 for exactly how each is defined and bounded.
 
+Also watches the controller log live for BGP_FLOWSPEC_DISCARD and, for
+LEAK_WINDOW_START_S..LEAK_WINDOW_END_S seconds after it, switches `nft
+list ruleset` polling to FINE_POLL_INTERVAL_S -- an attempt to actually
+resolve the known, unresolved +45s/+48s traffic leak (docs/peering-plan.md
+§6): 5 runs at 1s polling never caught the rule itself flickering,
+meaning if that's the mechanism at all, it has to be sub-second.
+
 Prerequisites: same as webtool/app.py -- run as root, deploy/
 install_bgp_peering.sh already run, and the usual stale-process
 cleanup (pkill -9 -f "flow run"/exabgp/softflowd/nfcapd/ryu-manager,
@@ -92,6 +99,16 @@ POST_ATTACK_WAIT_S = 15
 # where this gets used) -- cheap enough to run every second without
 # meaningfully perturbing anything.
 RULE_POLL_INTERVAL_S = 1.0
+# Across 5 runs, the leak (a full-volume reply burst mid-block) always
+# landed at exactly +45s and +48s after BGP_FLOWSPEC_DISCARD -- with
+# the rule confirmed present at 1s resolution throughout, meaning
+# whatever causes it (if it's the rule flickering at all) has to be
+# faster than 1s. During this window specifically, poll much faster to
+# actually resolve a sub-second flicker instead of just re-confirming
+# "still present" at second-boundaries that happen to straddle it.
+LEAK_WINDOW_START_S = 40.0
+LEAK_WINDOW_END_S = 53.0
+FINE_POLL_INTERVAL_S = 0.2
 # Minimum gap with zero reply-direction records to count as a genuine,
 # persistent traffic reduction for Tefecto (docs/thesis-revision-plan.md
 # §4.5-4.6's "Tiempo hasta efecto": "primera reduccion que cumple
@@ -256,23 +273,54 @@ def main() -> bool:
               f"telemetria) mientras el motor de deteccion real decide -- "
               f"vigilando el estado real de la regla nftables cada "
               f"{RULE_POLL_INTERVAL_S}s...")
-        # An earlier run found a full-volume reply burst ~45-48s into a
-        # 60s block window, on TWO independent runs -- not a couple of
-        # stray packets, a real gap. Polling `nft list ruleset` directly
+        # 5 runs found a full-volume reply burst at exactly +45s and +48s
+        # after BGP_FLOWSPEC_DISCARD, in 4/5 of them -- not stray packets,
+        # a real, precisely-timed gap. Polling `nft list ruleset` directly
         # (not just trusting the controller's own DISCARD/WITHDRAWN log
         # lines) tells us whether the rule itself briefly disappears from
         # the kernel during that gap (a `flow` reliability issue) or stays
-        # installed the whole time (pointing elsewhere, e.g. conntrack).
+        # installed the whole time (pointing elsewhere). 1s resolution
+        # never caught a flicker across those 5 runs -- watches the
+        # controller log live for BGP_FLOWSPEC_DISCARD so it can switch to
+        # FINE_POLL_INTERVAL_S specifically during LEAK_WINDOW_START_S..
+        # LEAK_WINDOW_END_S after that moment, instead of guessing.
         rule_transitions = []
         last_state = None
+        discard_wall_time = None
+        log_read_pos = 0
         deadline = time.time() + wait_s
+        fine_polling_active = False
         while time.time() < deadline:
+            if discard_wall_time is None:
+                with open(CONTROLLER_LOG_PATH) as f:
+                    f.seek(log_read_pos)
+                    new_text = f.read()
+                    log_read_pos = f.tell()
+                if "BGP_FLOWSPEC_DISCARD" in new_text:
+                    discard_wall_time = time.time()
+
+            if discard_wall_time is not None:
+                elapsed = time.time() - discard_wall_time
+                in_leak_window = LEAK_WINDOW_START_S <= elapsed <= LEAK_WINDOW_END_S
+            else:
+                in_leak_window = False
+
+            if in_leak_window and not fine_polling_active:
+                fine_polling_active = True
+                print(f"    -> entrando a la ventana de riesgo de la fuga "
+                      f"(+{LEAK_WINDOW_START_S:.0f}s a +{LEAK_WINDOW_END_S:.0f}s), "
+                      f"polling cada {FINE_POLL_INTERVAL_S}s...")
+            elif fine_polling_active and not in_leak_window:
+                fine_polling_active = False
+                print("    -> saliendo de la ventana de riesgo, volviendo a "
+                      f"polling normal ({RULE_POLL_INTERVAL_S}s)")
+
             ruleset = orchestrator.r1.cmd("nft list ruleset")
             present = CENTRAL_SERVER_IP in ruleset
             if present != last_state:
                 rule_transitions.append((datetime.now(), "RULE_PRESENT" if present else "RULE_ABSENT"))
                 last_state = present
-            time.sleep(RULE_POLL_INTERVAL_S)
+            time.sleep(FINE_POLL_INTERVAL_S if in_leak_window else RULE_POLL_INTERVAL_S)
 
         print("\n=== 4. Leyendo el log del controlador ===")
         log_text = Path(CONTROLLER_LOG_PATH).read_text()

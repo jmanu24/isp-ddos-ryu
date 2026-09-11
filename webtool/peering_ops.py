@@ -55,11 +55,20 @@ NFCAPD_PORT = 9995
 # nfcapd's own default rotation interval is 300s -- far too slow given
 # this project's sub-second detection cadence (COLLECT_INTERVAL, see
 # config/settings.py); attack traffic wouldn't show up in a readable
-# capture file for up to 5 minutes otherwise. 5s (nfcapd's minimum
-# supported interval is 2s, per its manpage) still batches enough flow
-# records per file to be worth nfdump's per-file decode overhead in
-# collectors/peering_flow_collector.py.
-NFCAPD_ROTATE_SECONDS = 5
+# capture file for up to 5 minutes otherwise. This is nfcapd's own
+# documented floor (2s, per its manpage) -- deliberately the fastest
+# supported value, not just "fast enough": Td (attack start -> real
+# detection) is dominated by this constant, since
+# collectors/peering_flow_collector.py never reads a file until a
+# SUBSEQUENT rotation exists (it treats the lexicographically-last file
+# as nfcapd's still-open current one). Confirmed on the VM across
+# several validate_peering_effect.py runs: Td ranged 12-21s at
+# NFCAPD_ROTATE_SECONDS=5; lowering to nfcapd's actual floor should
+# roughly halve that latency floor, at the cost of more, smaller files
+# for collectors/peering_flow_collector.py to nfdump-decode per second
+# of attack -- an acceptable trade for detection speed over decode
+# overhead.
+NFCAPD_ROTATE_SECONDS = 2
 
 # Same AS numbers validated end-to-end in deploy/spike_flowspec_flow.sh
 # (docs/peering-plan.md §2.2) -- kept identical here rather than
@@ -230,9 +239,13 @@ class PeeringLifecycle:
                  # VM: nfcapd logged "Flows: 0" for a real ping burst
                  # that finished well before the default timeout could
                  # have fired. -t general=1 forces near-immediate export
-                 # once a flow goes idle for 1s, matching
-                 # NFCAPD_ROTATE_SECONDS' own reasoning.
-                 "-t", "general=1", "-t", "maxlife=2"],
+                 # once a flow goes idle for 1s. maxlife=1 (not 2) keeps
+                 # a continuous attack flow's forced export comfortably
+                 # inside NFCAPD_ROTATE_SECONDS' own 2s window instead of
+                 # racing its exact boundary -- at maxlife==rotate, which
+                 # export lands in which capture file becomes timing-
+                 # dependent jitter for no benefit.
+                 "-t", "general=1", "-t", "maxlife=1"],
                 stdout=softflowd_log, stderr=subprocess.STDOUT,
             )
         time.sleep(1)
