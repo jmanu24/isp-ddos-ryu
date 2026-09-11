@@ -341,30 +341,31 @@ declarar la fase E completa mientras falte:
   no sirve como señal de efecto real: `softflowd` lo captura en `r1-ext0` *antes* de que
   `nftables` decida, así que se ve igual con o sin bloqueo (la misma razón por la que `bgp`
   necesitó `PRESENCE_BLIND_DOMAINS`, ver arriba). El script además vigila `nft list ruleset` en
-  vivo (cada 1s) durante toda la espera, no solo confía en los timestamps del log.
-  **Resultado (5 corridas, 2026-09-11):** en 4 de 5 corridas independientes apareció una ráfaga
-  de respuesta a volumen completo (~117,000-122,000 paquetes, el mismo orden que el tráfico sin
-  bloquear) -- y el patrón es notablemente preciso: en las 4 corridas donde ocurre, son
-  exactamente **dos** registros, en **+45s** y **+48s** respecto del `BGP_FLOWSPEC_DISCARD` (no
-  un rango difuso "45-51s" como se pensó inicialmente -- los deltas exactos coinciden corrida
-  tras corrida). Solo una corrida no mostró fuga alguna (cero tráfico de respuesta durante todo
-  el bloqueo). **Dato clave que descarta la hipótesis inicial** (que era contaminación de estado
-  entre sesiones de prueba): varias de las corridas con fuga, incluida la más reciente, tuvieron
-  arranque limpio de topología en un solo intento -- y el polling en vivo de `nft list ruleset`
-  (cada 1s durante toda la ventana) confirmó en más de una corrida que **la regla nunca
-  desapareció del kernel** (`RULE_PRESENT` continuo desde el `BGP_FLOWSPEC_DISCARD` hasta el
-  `FLOWSPEC_WITHDRAWN`, sin ninguna transición a `RULE_ABSENT` en medio). Esto descarta que
-  `flow` esté quitando y reinstalando la regla de forma detectable a resolución de 1 segundo.
-  La hipótesis más plausible ahora: `flow`/`exabgp` tienen algún ciclo interno de duración fija
-  (~45s -- sospechosamente cercano a la mitad del hold-time BGP por defecto de RFC 4271, 90s/2,
-  aunque no confirmado) que retira y reinstala la regla más rápido de lo que un muestreo de 1s
-  puede capturar, dejando pasar tráfico real durante ese hueco submuestreado -- consistente con
-  la propia advertencia de honestidad de `flow` en §2.2 ("has yet to be tested thoroughly and
-  not suitable for production for now"). **No resuelto**; seguiría siendo necesario un polling
-  de mayor frecuencia (sub-segundo) o correlacionar contra los logs internos de `flow`/`exabgp`
-  en esa ventana exacta para confirmar la causa raíz precisa. Documentado aquí como limitación
-  real y reproducible de la herramienta, no como una falla del diseño de instrumentación del
-  proyecto.
+  vivo (cada 1s, luego 0.2s en la ventana de riesgo) durante toda la espera, no solo confía en
+  los timestamps del log.
+  **Resultado (7 corridas, 2026-09-11):** en 5 de 7 corridas independientes apareció una ráfaga
+  de respuesta a volumen completo (~80,000-122,000 paquetes, el mismo orden que el tráfico sin
+  bloquear), con el delta desde `BGP_FLOWSPEC_DISCARD` variando entre +45s y +54s de corrida en
+  corrida -- no un offset perfectamente fijo, pero sí siempre dentro de una ventana estrecha
+  alrededor del segundo 45-50. **Dato clave #1** (descarta contaminación de estado entre
+  pruebas): varias corridas con fuga, incluidas las más recientes, tuvieron arranque limpio de
+  topología en un solo intento. **Dato clave #2, más contundente:** el polling en vivo de `nft
+  list ruleset` se afinó a 0.2s específicamente durante la ventana de riesgo (ampliada más
+  tarde a +35s..+60s) y **aun así la regla se mantuvo `RULE_PRESENT` de forma continua durante
+  una fuga real observada en esa misma corrida** -- ninguna transición a `RULE_ABSENT` detectada
+  ni a 1s ni a 0.2s de resolución. Esto **descarta con bastante confianza** que `flow` esté
+  quitando y reinstalando la regla -- a cualquier resolución practicable de observar, la regla
+  nunca deja de estar instalada en el kernel mientras el tráfico se cuela. La causa debe estar
+  en otro punto del camino del paquete: posible evaluación intermitente de la regla por parte
+  del propio kernel bajo esa tasa de paquetes (cientos de miles por segundo), algún efecto de
+  coalescencia GRO/GSO, o un hueco sutil en el criterio de coincidencia de la regla instalada
+  por `flow` que no se manifiesta con tráfico de prueba más liviano. **No resuelto**; el
+  siguiente paso razonable sería inspeccionar los contadores de la regla `nftables` en sí
+  (agregar `counter` explícito a la regla instalada, si `flow` lo permite) o revisar el estado
+  de `conntrack` durante la ventana exacta de la fuga, en vez de seguir afinando el polling de
+  presencia/ausencia de la regla (ya llevado a 0.2s sin encontrar nada). Documentado aquí como
+  limitación real y reproducible del camino de mitigación, no como una falla del diseño de
+  instrumentación del proyecto.
 - ~~Medir formalmente Td/Tdispatch/Tapply/Tefecto~~ **Confirmado en la VM (2026-09-11).**
   `analysis/parse_timing_stats.py` (ya existente para los otros dominios) solo necesitó
   reconocer `BGP_FLOWSPEC_DISCARD` junto a `BLOCK`/`THROTTLE` como acción de mitigación válida
@@ -374,6 +375,27 @@ declarar la fase E completa mientras falte:
   list ruleset` y la línea de tiempo de tráfico de respuesta). Integrado directamente en
   `validate_peering_effect.py` (paso 6), que reporta las cuatro métricas formales en una sola
   corrida.
+
+  **Intento de reducir Td, revertido (2026-09-11):** se probó bajar `NFCAPD_ROTATE_SECONDS` de
+  5s a 2s (el mínimo real de `nfcapd`) y forzar `softflowd`'s `expint` (intervalo de escaneo
+  interno de su tabla de flujos, 60s por defecto, nunca antes tocado) a 1s, con la hipótesis de
+  que ese ciclo de 60s explicaba la dispersión observada de Td (12-21s). **Resultado medido: lo
+  contrario.** Cada cambio empeoró Td, no lo mejoró (`rotate=2` sin `expint`: 41s; `rotate=2` con
+  `expint=1`: 59s; `rotate=5` con `expint=1`: 32s -- todos peor que el baseline de 12-21s).
+  Hipótesis revisada: `ryu-manager` corre sobre `eventlet`, donde una llamada de
+  `subprocess.run()` (el `nfdump` de `collectors/peering_flow_collector.py`) bloquea el proceso
+  completo mientras corre, no solo un green thread -- confirmado antes en esta misma sesión
+  investigando un aparente "congelamiento". Rotar cada 2s en vez de 5s triplica cuántos archivos
+  (y por tanto llamadas bloqueantes a `nfdump`) necesita `poll()` por unidad de tiempo de
+  ataque, lo que puede retrasar el ciclo completo del controlador -- de todos los dominios, no
+  solo `bgp` -- más de lo que la rotación más rápida ahorraba. Forzar `expint=1` probablemente
+  compite por recursos con la propia captura de paquetes de `softflowd` bajo un flood real de
+  cientos de miles de paquetes por segundo. **Revertido a la configuración de mejor desempeño
+  medido** (`general=1`, `maxlife=2`, `NFCAPD_ROTATE_SECONDS=5`, sin `expint`) -- el piso real de
+  ~12-21s que esta tubería basada en NetFlow logra hoy. Bajar más allá de ese piso parece
+  requerir un cambio de arquitectura (p. ej. que `collectors/peering_flow_collector.py` lea con
+  seguridad el archivo aún abierto de `nfcapd` vía un chequeo de antigüedad por `mtime`, en vez
+  de siempre saltarse el último), no más ajuste de timeouts.
 - ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Caso formal
   completo confirmado (2026-09-11):** `bgp` / SYN / DoS monofuente, ataque real desde `peer_ext`
   contra `central_server`, motor de detección real (no `validate_peering.py`):
