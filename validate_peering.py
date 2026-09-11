@@ -19,6 +19,7 @@ Prerequisites:
 Usage:
   sudo python3 validate_peering.py
 """
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ sys.path.insert(0, str(REPO_DIR))
 from topologies.star_topology import (  # noqa: E402
     build_topology, add_central_server, _disable_rp_filter_star,
     attach_external_peer, R1_EXTERNAL_IP, EXTERNAL_PEER_IP,
+    EXTERNAL_PEER_IFACE_R1,
 )
 from webtool.peering_ops import (  # noqa: E402
     PeeringLifecycle, FLOW_LOG_PATH, EXABGP_LOG_PATH, NFCAPD_ROTATE_SECONDS,
@@ -112,6 +114,29 @@ def main() -> bool:
     all_ok &= check("ping peer_ext -> r1 tuvo 5/5 respuestas", ping_ok)
     if not ping_ok:
         print(f"    salida completa del ping:\n{ping_result}")
+
+    # Diagnostico temporal: nfcapd reportaba "Packets: 0" incluso con el
+    # ping confirmado -- esto aisla si el problema es que softflowd nunca
+    # ve los paquetes en r1-ext0 (namespace/captura) o si los ve pero la
+    # exportacion NetFlow hacia nfcapd falla. tcpdump corre DENTRO del
+    # namespace de r1 (r1.popen), igual que softflowd, para comparar
+    # exactamente lo que cada uno ve en la misma interfaz.
+    print("\n    --- diagnostico: tcpdump en r1-ext0 durante un segundo ping ---")
+    tcpdump_proc = r1.popen(
+        ["tcpdump", "-i", EXTERNAL_PEER_IFACE_R1, "-n", "-c", "5", "icmp"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    time.sleep(0.5)
+    peer_ext.cmd(f"ping -c5 -i0.2 {R1_EXTERNAL_IP}")
+    try:
+        tcpdump_out, _ = tcpdump_proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        tcpdump_proc.kill()
+        tcpdump_out, _ = tcpdump_proc.communicate()
+    print(f"    tcpdump vio en {EXTERNAL_PEER_IFACE_R1}:\n{tcpdump_out}")
+
+    print("\n    --- diagnostico: softflowctl statistics (estado en vivo, sin depender de la exportacion) ---")
+    print(f"    {r1.cmd('softflowctl statistics')}")
 
     wait_s = NFCAPD_ROTATE_SECONDS + 3
     print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
