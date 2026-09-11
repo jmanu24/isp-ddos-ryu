@@ -69,6 +69,11 @@ def main() -> bool:
     except Exception as exc:
         check("PeeringLifecycle.start() no lanzo excepcion", False)
         print(f"    excepcion: {exc!r}")
+        # A failure partway through start() (e.g. a rejected softflowd
+        # flag) can still leave earlier processes running -- exabgp in
+        # particular is a plain root-namespace subprocess.Popen, not
+        # something net.stop() would ever reach on its own.
+        peering.stop()
         net.stop()
         return False
 

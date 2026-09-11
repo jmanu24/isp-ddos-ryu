@@ -68,6 +68,25 @@ FLOW_LOCAL_AS = 65001
 EXABGP_LOCAL_AS = 65002
 
 
+def _ensure_alive(proc: subprocess.Popen, name: str, log_path: str) -> None:
+    """
+    Catches a process that exited immediately (e.g. a rejected CLI flag)
+    before it becomes an hours-later "why does telemetry see nothing"
+    mystery -- r1.popen()/subprocess.Popen don't raise on their own for
+    a non-zero exit, they just leave a dead process no caller checks.
+    Confirmed real failure mode on the VM: softflowd -B (not supported
+    by this VM's build) exited with "invalid option -- 'B'" and the
+    validation script ran to completion regardless, reporting only the
+    downstream symptom (no flow records) with no clue softflowd was
+    never running at all.
+    """
+    if proc.poll() is not None:
+        raise RuntimeError(
+            f"{name} exited immediately (code {proc.returncode}) -- see {log_path}:\n"
+            f"{Path(log_path).read_text()}"
+        )
+
+
 def _write_exabgp_conf(path: str, fifo_path: str, peer_ip: str, local_ip: str) -> None:
     """
     exabgp does NOT create or read PEERING_EXABGP_FIFO itself -- this
@@ -140,6 +159,7 @@ class PeeringLifecycle:
         # attempt -- not strictly required (exabgp retries), but avoids
         # a guaranteed-failed first attempt every single start_topology().
         time.sleep(1)
+        _ensure_alive(self.flow_proc, "flow", FLOW_LOG_PATH)
 
         _write_exabgp_conf(
             EXABGP_CONF_PATH, fifo_path,
@@ -150,6 +170,8 @@ class PeeringLifecycle:
                 ["exabgp", EXABGP_CONF_PATH],
                 stdout=exabgp_log, stderr=subprocess.STDOUT,
             )
+        time.sleep(1)
+        _ensure_alive(self.exabgp_proc, "exabgp", EXABGP_LOG_PATH)
 
         # nfcapd first -- it must already be listening before softflowd
         # sends its first export, otherwise those initial UDP datagrams
@@ -162,37 +184,34 @@ class PeeringLifecycle:
                 stdout=nfcapd_log, stderr=subprocess.STDOUT,
             )
         time.sleep(1)
+        _ensure_alive(self.nfcapd_proc, "nfcapd", NFCAPD_LOG_PATH)
 
         with open(SOFTFLOWD_LOG_PATH, "wb") as softflowd_log:
             self.softflowd_proc = self.r1.popen(
                 ["softflowd", "-d",
                  "-i", EXTERNAL_PEER_IFACE_R1,
                  "-n", f"127.0.0.1:{NFCAPD_PORT}",
-                 # NetFlow v5, not v9/v10: softflowd 1.0.0 has a confirmed
-                 # upstream bug where ICMP packets are silently dropped
-                 # (0 processed despite libpcap receiving them) when
-                 # exporting as v9/v10 -- reproduced on the VM via
-                 # `softflowctl statistics` showing "Packets received by
-                 # libpcap" > 0 but "Packets processed: 0" for a plain
-                 # ping. v5 has no such issue (redmine.pfsense.org/issues
-                 # /10436, forum.netgate.com/topic/172943) and nfdump's
-                 # own CSV output schema is identical either way.
+                 # NetFlow v5, not v9/v10 -- simpler and has one fewer
+                 # documented ICMP-export bug in some softflowd builds
+                 # (redmine.pfsense.org/issues/10436) than v9/v10; nfdump
+                 # emits the same CSV schema regardless of input version.
+                 # NOT the actual fix for the "Flows: 0" issue below,
+                 # which persisted under both v9 and v5.
                  "-v", "5",
-                 # softflowd (irino/softflowd) calls pcap_set_timeout(0)
-                 # and never sets immediate mode -- on Linux this means
-                 # its TPACKET_V3 capture ring only hands packets to
-                 # userspace once a whole block fills, with no time-based
-                 # flush. Confirmed on the VM via softflowctl statistics:
-                 # "Packets received by libpcap" > 0 but "Packets
-                 # processed: 0" for a handful of packets, regardless of
-                 # protocol/NetFlow version -- pcap_dispatch() was simply
-                 # never being called on such a small ring. A small -B
-                 # buffer keeps the block size low enough that even
-                 # modest bursts (see the hping3 flood in
-                 # validate_peering.py, not a bare ping) fill and flush
-                 # promptly; real DDoS flood volumes would do this
-                 # regardless, but validation traffic needs the help.
-                 "-B", "65536",
+                 # The real root cause (confirmed on the VM via
+                 # `softflowctl statistics`: "Packets received by
+                 # libpcap" > 0 but "Packets processed: 0" for a plain
+                 # ping, independent of protocol/NetFlow version) is that
+                 # softflowd's underlying libpcap capture on Linux only
+                 # hands packets to userspace once a capture-ring block
+                 # fills, with no time-based flush -- a handful of ping
+                 # packets never does that. This VM's softflowd 1.0.0
+                 # build has no -B/buffer-size flag to shrink the block
+                 # (confirmed: "invalid option -- 'B'"), so the fix is on
+                 # the traffic side instead: validate_peering.py drives a
+                 # real hping3 flood, not a bare ping, which is enough
+                 # volume to fill a block promptly -- and is what this
+                 # pipeline exists to detect in the first place.
                  # softflowd doesn't export a flow record until it
                  # expires (default general timeout is much longer than
                  # this project's detection cadence) -- confirmed on the
@@ -204,6 +223,8 @@ class PeeringLifecycle:
                  "-t", "general=1", "-t", "maxlife=2"],
                 stdout=softflowd_log, stderr=subprocess.STDOUT,
             )
+        time.sleep(1)
+        _ensure_alive(self.softflowd_proc, "softflowd", SOFTFLOWD_LOG_PATH)
 
     def stop(self) -> None:
         for attr in ("softflowd_proc", "nfcapd_proc", "exabgp_proc", "flow_proc"):
