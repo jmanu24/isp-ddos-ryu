@@ -77,6 +77,18 @@ def main() -> bool:
         net.stop()
         return False
 
+    # Constructed here, before any of this run's own traffic exists --
+    # PeeringFlowCollector seeds _processed_files with whatever's
+    # already on disk at construction time (deliberately, so a fresh
+    # controller start doesn't replay hours-old capture files as live
+    # traffic -- see docs/peering-plan.md §2.3). Building it any later
+    # (e.g. right before the final poll(), after our own flood's file
+    # has already rotated) would seed it with OUR OWN real data too,
+    # marking it "already seen" before poll() ever gets a chance to
+    # return it. Confirmed on the VM: constructing it late made a real,
+    # successful flood test report zero records.
+    collector = PeeringFlowCollector()
+
     print("\n=== 3. Esperando sesion BGP exabgp<->flow ===")
     time.sleep(6)
     flow_log = Path(FLOW_LOG_PATH).read_text()
@@ -139,7 +151,6 @@ def main() -> bool:
     print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
     time.sleep(wait_s)
 
-    collector = PeeringFlowCollector()
     records = collector.poll()
     saw_traffic = any(r["src_ip"] == EXTERNAL_PEER_IP or r["dst_ip"] == EXTERNAL_PEER_IP for r in records)
     all_ok &= check(
