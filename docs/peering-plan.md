@@ -149,6 +149,55 @@ excepción inmediata con el log si ya murió — antes, un flag de CLI rechazado
 softflowd, no soportado en el build de esta VM) fallaba en silencio y solo se notaba varios
 pasos después como "no hay datos de telemetría", sin ninguna pista de la causa real.
 
+Adicionalmente se encontró y corrigió un segundo bug real vía las mismas pruebas: un `nfcapd`
+matado con `pkill -9` (limpieza manual entre sesiones de prueba) deja su archivo
+`nfcapd.current.<PID>` huérfano — nunca se renombra a su nombre final con timestamp porque eso
+solo ocurre en una rotación limpia. Peor aún, `PeeringFlowCollector` arrancaba con
+`_processed_files` vacío, así que el primer `poll()` de una sesión nueva del controlador leía
+*todo* archivo `nfcapd.*` preexistente como si fuera tráfico en vivo — confirmado en la VM: al
+arrancar el controlador (antes de que la topología, y por tanto `flow`/`exabgp`, existieran) se
+disparó una detección y un intento de mitigación FlowSpec real usando datos de horas antes,
+fallando al escribir al FIFO de exabgp (`ENXIO`, sin lector activo). **Fix:**
+`PeeringFlowCollector.__init__` ahora siembra `_processed_files` con lo que ya exista en el
+directorio al construirse — semántica "tail -f", no "leer todo el historial".
+
+### 2.4. Limitación arquitectónica encontrada: el dominio `bgp` casi nunca "gana" la
+representación en `detection/engine.py`
+
+Al probar el dominio desde el webtool real (`peer_ext` atacando un host normal de la topología,
+detrás de un switch), el log del controlador mostró la detección y mitigación etiquetadas como
+`[enterprise]` (`DROP_RULE_INSTALLED ... scope=4 switch(es)`), **nunca** `[bgp]`
+(`BGP_FLOWSPEC_DISCARD`) — pese a que la tubería de telemetría BGP (§2.3) sí capturó el mismo
+tráfico real (confirmado revisando los archivos `nfcapd.*` generados durante la ventana del
+ataque).
+
+Causa raíz: `correlation/correlator.py` agrupa eventos de telemetría por `dst_ip`, sin importar
+el dominio que los reportó — así que el mismo tráfico externo hacia un host interno es visto
+*tanto* por `enterprise` (vía OpenFlow, en el switch) *como* por `bgp` (vía `nfcapd` en
+`r1-ext0`, antes de llegar al switch). `detection/engine.py`'s `_pick_representative()` decide
+cuál de los dos "gana" el `DetectionResult.domain` (y por tanto qué mecanismo de mitigación se
+usa, ver `orchestration/controller.py`'s `_action_for()`), y **siempre prefiere un evento con
+`in_port` real** (solo lo tiene un evento derivado de OpenFlow packet-in) **sobre uno derivado
+de flow-stats** (lo único que puede producir el adaptador `bgp`, ya que `nfcapd` nunca reporta
+un puerto OpenFlow). Es una regla deliberada y razonable en general (permite acotar el bloqueo
+al switch+puerto más cercano al atacante real), pero tiene como efecto colateral que **mientras
+el destino esté detrás de cualquier switch, el dominio `bgp` nunca puede ganar la
+representación** — sin importar que su propia telemetría sí detecte el ataque.
+
+El único destino donde `bgp` sí gana es `central_server` (10.99.0.1): es una interfaz *dummy*
+directamente en `r1` (`topologies/star_topology.py`'s `add_central_server`), nunca observada
+por ningún switch, así que no compite con ningún evento de `enterprise`. **Decisión tomada**:
+por ahora, validar el camino real `BGP_FLOWSPEC_DISCARD` a través del motor de detección
+atacando `central_server` desde `peer_ext` (el webtool ya lo permite como objetivo — el filtro
+del dropdown de objetivos en `webtool/static/app.js` excluía `domain === "core"` pese a que
+`orchestrator.py`'s `valid_targets()` ya lo permitía; corregido para incluirlo). Queda como
+limitación arquitectónica conocida, no resuelta: un ataque externo real contra cualquier host
+normal de la topología (el escenario más realista) seguirá mitigándose como bloqueo OpenFlow de
+red completa, no como descarte BGP FlowSpec en el borde. Cambiar `_pick_representative()` para
+que un origen externo (`bgp`) gane sobre `in_port` es la opción evaluada y pospuesta
+deliberadamente -- afecta la lógica de correlación para todos los dominios, no solo `bgp`, y
+merece su propia decisión de diseño antes de tocarla.
+
 ## 3. Módulos nuevos y su responsabilidad
 
 ```mermaid
@@ -232,3 +281,7 @@ declarar la fase E completa mientras falte:
 - Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
   a cero mientras la regla está activa (las pruebas hasta ahora confirman que la regla existe
   en `nftables`, no que descarta tráfico real observado end-to-end).
+- El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`, no un host
+  normal de la topología, para que el motor de detección real elija `bgp` como dominio
+  representante (ver §2.4) — atacar cualquier otro destino se mitiga hoy como bloqueo OpenFlow
+  de red completa, no como `BGP_FLOWSPEC_DISCARD`.

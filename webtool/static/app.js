@@ -200,11 +200,17 @@ function renderTargetOptions(nodes) {
     const previous = select.value;
     select.innerHTML = "";
     (nodes || [])
-        // peer_ext is bgp's attack SOURCE (orchestrator.py's
-        // valid_targets() never includes it either) -- excluded here
-        // the same way "core" (the central server, a valid target) is
-        // deliberately kept, just the opposite reason.
-        .filter((n) => n.domain !== "core" && n.id !== "peer_ext")
+        // central_server (domain "core") IS a valid target -- orchestrator.py's
+        // valid_targets() already includes it (app.py's own comment: attacking
+        // it is how MULTIDOMAIN_DISTRIBUTED_ATTACK gets exercised, and it's the
+        // only destination not also visible to OpenFlow/enterprise telemetry,
+        // which matters for the bgp domain specifically -- see
+        // docs/peering-plan.md's note on detection/engine.py's
+        // _pick_representative() always preferring an in_port-tagged
+        // (OpenFlow) event over a flow-stats one for any target a switch also
+        // observes). peer_ext is bgp's attack SOURCE, never a target, so it's
+        // the one node still excluded here.
+        .filter((n) => n.id !== "peer_ext")
         .forEach((n) => {
             const opt = document.createElement("option");
             opt.value = n.ip;
