@@ -1,6 +1,8 @@
 # Plan de instrumentación — Dominio Peering BGP (Fase E)
 
-Estado: **spike de FlowSpec resuelto (§2) — FRR descartado, `flow` confirmado.** Referencia:
+Estado: **mecanismo de mitigación confirmado de punta a punta, incluida la topología Mininet
+real (§5) — FRR descartado, `flow` validado.** Pendiente: telemetría IPFIX real (§5 pasos 2-3)
+y medición de efecto/TTL (§6). Referencia:
 [Diseño de implementación](implementation-design.md) sección "Peering BGP" y fase E de la
 tabla de módulos. Fecha: 2026-09-10/11.
 
@@ -155,10 +157,12 @@ flowchart LR
    de exportación) antes de escribir el parser en Python.
 3. `collectors/peering_flow_collector.py` + `telemetry/bgp_adapter.py` (telemetría real,
    sin mitigación todavía) — validar que el detection engine ve tráfico de peering real.
-4. ~~Integrar `flow` dentro de la topología Mininet~~ **Código escrito (§4:
-   `attach_peering_uplink_to_r1` + `webtool/peering_ops.py`), pendiente de correr
-   `start_topology()` en la VM y confirmar que la sesión `exabgp`↔`flow` se establece igual
-   que en el spike aislado, y que una regla anunciada realmente aparece en el `nftables` de `r1`.**
+4. ~~Integrar `flow` dentro de la topología Mininet~~ **Confirmado en la VM (2026-09-11):**
+   `build_topology()` + `PeeringLifecycle.start()` real (sin FRR, sin namespace aislado) —
+   sesión `exabgp`↔`flow` establecida sobre `10.98.0.1`↔`10.98.0.2` (el enlace de
+   `attach_peering_uplink_to_r1`), y el ciclo `announce`→regla real en `nft list ruleset`
+   dentro de `r1`→`withdraw`→regla removida, confirmado con `r1.cmd("nft list ruleset")`
+   antes y después. Teardown (`peering.stop()` + `net.stop()`) limpio, sin errores.
 5. Actualizar los 3 puntos de código existente (§4) y el webtool. **Hecho** salvo
    `webtool/static/app.js` (sin cambios necesarios, ver nota en §4).
 6. Escenario de ataque end-to-end contra el dominio peering (uno de los "24 casos básicos"
@@ -167,11 +171,13 @@ flowchart LR
 ## 6. Criterio de salida de la fase (igual al de `implementation-design.md` §6)
 
 **"Router instala y retira política; efecto medido."** La instalación y el retiro reales ya
-están confirmados en el spike aislado (§2.2: `announce` y `withdraw` verificados con regla
-real de `nftables` apareciendo y desapareciendo). No declarar la fase E completa mientras falte:
-- **Validar en la VM** que `webtool/peering_ops.py` reproduce ese mismo resultado dentro de
-  la topología Mininet real (el código ya existe, §4, pero no se ha corrido todavía).
+están confirmados tanto en el spike aislado (§2.2) como dentro de la topología Mininet real
+(§5, paso 4) — `announce`/`withdraw` verificados con regla real de `nftables` apareciendo y
+desapareciendo en el `r1` de verdad. No declarar la fase E completa mientras falte:
 - Confirmar el retiro por **expiración de TTL** desde `mitigation/peering_backend.py`
-  (`MitigationAction.duration`), no solo por un `withdraw` manual vía FIFO como en el spike.
+  (`MitigationAction.duration`), no solo por un `withdraw` manual vía FIFO como en las pruebas.
+- Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
+  a cero mientras la regla está activa (las pruebas hasta ahora confirman que la regla existe
+  en `nftables`, no que descarta tráfico real observado end-to-end).
 - El colector IPFIX produce eventos pero nunca se validó contra una captura de referencia.
 - Medir el *efecto* real sobre tráfico generado (no solo que la regla existe en `nftables`).
