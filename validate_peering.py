@@ -19,7 +19,6 @@ Prerequisites:
 Usage:
   sudo python3 validate_peering.py
 """
-import os
 import subprocess
 import sys
 import time
@@ -28,7 +27,6 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_DIR))
 
-import config.settings as settings  # noqa: E402
 from topologies.star_topology import (  # noqa: E402
     build_topology, add_central_server, _disable_rp_filter_star,
     attach_external_peer, R1_EXTERNAL_IP, EXTERNAL_PEER_IP,
@@ -130,29 +128,11 @@ def main() -> bool:
     # already uses for attack scenarios) generates enough volume to
     # flush promptly, and is what this pipeline actually exists to
     # observe.
-    # DIAGNOSTIC (temporary): confirmed nfcapd receiving 0 packets across
-    # every rotated file after the nfdump 1.6.18 -> 1.7.4 upgrade (Flows:
-    # 0/Packets: 0 for the whole run in NFCAPD_LOG_PATH) -- isolating
-    # whether softflowd stopped exporting at all, or the export never
-    # reaches nfcapd's loopback socket, by sniffing r1's own loopback for
-    # NetFlow UDP traffic (127.0.0.1:NFCAPD_PORT) while the flood runs.
-    from webtool.peering_ops import NFCAPD_PORT
-    tcpdump_proc = r1.popen(
-        ["tcpdump", "-i", "lo", "-n", "udp", "port", str(NFCAPD_PORT),
-         "-c", "10"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
     flood_proc = peer_ext.popen(
         ["hping3", "--icmp", "--flood", R1_EXTERNAL_IP],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    time.sleep(4)
-    try:
-        tcpdump_out, _ = tcpdump_proc.communicate(timeout=2)
-    except subprocess.TimeoutExpired:
-        tcpdump_proc.kill()
-        tcpdump_out, _ = tcpdump_proc.communicate()
-    print(f"    tcpdump en r1 (lo, udp/{NFCAPD_PORT}) durante el flood:\n{tcpdump_out}")
+    time.sleep(2)
     flood_proc.terminate()
     try:
         flood_proc.wait(timeout=3)
@@ -160,22 +140,9 @@ def main() -> bool:
         flood_proc.kill()
     all_ok &= check("flood ICMP peer_ext -> r1 ejecutado (2s)", True)
 
-    # DIAGNOSTIC (temporary): a real run showed the flood's data file only
-    # getting its permanent nfcapd.<timestamp> name at peering.stop()'s
-    # SIGTERM-triggered final flush, well after this wait+poll() already
-    # ran and found nothing -- meaning nfcapd wasn't performing a natural,
-    # timed rotation within NFCAPD_ROTATE_SECONDS+3s at all. Waiting much
-    # longer here, and dumping the directory state right before poll(),
-    # to see directly how long a real rotation actually takes from a
-    # clean nfcapd start (removing the SIGTERM-flush confound entirely).
-    wait_s = NFCAPD_ROTATE_SECONDS * 4 + 5
-    print(f"    esperando {wait_s}s (diagnostico: bastante mas que "
-          f"NFCAPD_ROTATE_SECONDS+3) a que nfcapd rote un archivo de captura...")
+    wait_s = NFCAPD_ROTATE_SECONDS + 3
+    print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
     time.sleep(wait_s)
-
-    print(f"    estado de {settings.PEERING_NFCAPD_DIR} justo antes de poll():")
-    for fname in sorted(os.listdir(settings.PEERING_NFCAPD_DIR)):
-        print(f"      {fname}")
 
     records = collector.poll()
     saw_traffic = any(r["src_ip"] == EXTERNAL_PEER_IP or r["dst_ip"] == EXTERNAL_PEER_IP for r in records)

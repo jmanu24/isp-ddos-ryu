@@ -57,26 +57,22 @@ NFCAPD_PORT = 9995
 # config/settings.py); attack traffic wouldn't show up in a readable
 # capture file for up to 5 minutes otherwise.
 #
-# REVERTED from nfcapd's documented floor (2) back to 5: lowering it
-# was meant to shrink Td (attack start -> real detection), reasoning
-# that Td is bounded below by how long until a file rotates and becomes
-# readable. Measured the OPPOSITE on the VM -- Td got WORSE (41s, then
-# 59s) after lowering this, not better, even with softflowd's own
-# expint tightened too. softflowd's own nfcapd-reported packet counts
-# stayed continuous and healthy throughout those runs (no capture-side
-# starvation), which points elsewhere: ryu-manager runs under eventlet,
-# and a plain subprocess.run() call (collectors/peering_flow_collector.py's
-# own nfdump invocation) blocks the WHOLE process, not just one green
-# thread, for its duration -- confirmed earlier this session while
-# chasing an unrelated apparent "freeze". Cutting the rotation interval
-# from 5s to 2s roughly triples how many files (and therefore blocking
-# nfdump calls) collectors/peering_flow_collector.py's poll() needs per
-# unit of attack time, which can delay the controller's own cycle --
-# for every domain, not just bgp -- more than the faster rotation ever
-# saved. Reverted pending a real fix (e.g. eventlet-friendly subprocess
-# handling, or batching multiple files into fewer nfdump invocations)
-# rather than trading file-count overhead for latency blindly.
-NFCAPD_ROTATE_SECONDS = 5
+# FIRST ATTEMPT at nfdump's documented floor (2) measured WORSE Td (41s,
+# then 59s) than this 5s baseline (12-21s) -- but that measurement was
+# taken under nfdump/nfcapd 1.6.18, which only names capture files down
+# to MINUTE resolution regardless of -t. At rotate=2 that means up to 30
+# rotations/minute all racing for the same filename, silently
+# overwriting each other's data (confirmed via nfcapd's own internal
+# rotation count not matching the number of surviving files on disk) --
+# a real, separate bug from anything about eventlet or nfdump call
+# volume, now fixed by upgrading to nfdump 1.7.4 (adds seconds to
+# capture filenames below 60s, see deploy/install_bgp_peering.sh).
+# Retrying rotate=2 now that this confound is gone -- if Td is still
+# worse than 5s's baseline, the other standing hypothesis (ryu-manager
+# runs under eventlet; a plain subprocess.run() nfdump call blocks the
+# WHOLE process, not just one green thread, and more files means more
+# blocking calls per unit of attack time) is next to investigate.
+NFCAPD_ROTATE_SECONDS = 2
 
 # Same AS numbers validated end-to-end in deploy/spike_flowspec_flow.sh
 # (docs/peering-plan.md §2.2) -- kept identical here rather than
@@ -269,10 +265,15 @@ class PeeringLifecycle:
                  # forcing softflowd to scan every 1s instead of 60s
                  # plausibly competes with its own packet capture loop
                  # under a real high-volume flood, adding latency instead
-                 # of cutting it. Left at maxlife=2 (matches
-                 # NFCAPD_ROTATE_SECONDS=5 with margin) and no expint
-                 # override -- the confirmed-best softflowd/nfcapd timeout
-                 # settings measured. The actual architecture change that
+                 # of cutting it. Left at maxlife=2 and no expint override
+                 # -- the confirmed-best softflowd timeout settings
+                 # measured at the time (against NFCAPD_ROTATE_SECONDS=5;
+                 # kept unchanged for now while NFCAPD_ROTATE_SECONDS is
+                 # retried at 2 with nfdump 1.7.4, to isolate that one
+                 # variable -- see NFCAPD_ROTATE_SECONDS' own comment
+                 # above for why the original rotate=2 measurement was
+                 # confounded by a separate nfdump filename-collision
+                 # bug). The actual architecture change that
                  # was needed instead landed in
                  # collectors/peering_flow_collector.py: it no longer
                  # waits for a subsequent rotation before trusting a
