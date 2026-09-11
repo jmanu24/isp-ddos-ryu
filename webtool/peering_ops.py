@@ -247,27 +247,31 @@ class PeeringLifecycle:
                  # VM: nfcapd logged "Flows: 0" for a real ping burst
                  # that finished well before the default timeout could
                  # have fired. -t general=1 forces near-immediate export
-                 # once a flow goes idle for 1s. maxlife=1 (not 2) keeps
-                 # a continuous attack flow's forced export comfortably
-                 # inside NFCAPD_ROTATE_SECONDS' own 2s window instead of
-                 # racing its exact boundary -- at maxlife==rotate, which
-                 # export lands in which capture file becomes timing-
-                 # dependent jitter for no benefit.
+                 # once a flow goes idle for 1s, matching
+                 # NFCAPD_ROTATE_SECONDS' own reasoning.
                  #
-                 # expint controls something DIFFERENT from general/
-                 # maxlife: how often softflowd's own internal loop scans
-                 # its flow table for anything that has crossed one of
-                 # those timeouts -- it defaults to 60s regardless of how
-                 # tight general/maxlife are set. Never overridden before
-                 # this: Td (attack start -> real detection) measured
-                 # anywhere from 12s to 41s across validate_peering_
-                 # effect.py runs, with no other explanation for that
-                 # spread -- consistent with detection latency being
-                 # dominated by a random phase offset against a 60s
-                 # internal scan cycle, not by nfcapd's own (now 2s)
-                 # rotation interval, which is comparatively a minor
-                 # factor. expint=1 forces that scan every second instead.
-                 "-t", "general=1", "-t", "maxlife=1", "-t", "expint=1"],
+                 # Tried and REVERTED: maxlife=1 (was 2) and an expint=1
+                 # override (softflowd's separate "how often to scan the
+                 # flow table" timeout, default 60s, distinct from
+                 # general/maxlife). Hypothesis was that a 60s scan cycle
+                 # dominated Td's spread (12-21s baseline) via random
+                 # phase offset. Measured the OPPOSITE on the VM: adding
+                 # expint=1 made Td worse both at NFCAPD_ROTATE_SECONDS=2
+                 # (41s -> 59s) and back at =5 (still 32s, worse than the
+                 # 12-21s baseline with no expint override at all) --
+                 # forcing softflowd to scan every 1s instead of 60s
+                 # plausibly competes with its own packet capture loop
+                 # under a real high-volume flood, adding latency instead
+                 # of cutting it. Left at maxlife=2 (matches
+                 # NFCAPD_ROTATE_SECONDS=5 with margin) and no expint
+                 # override -- the confirmed-best settings measured so
+                 # far. Reducing Td further below this ~12-21s floor
+                 # looks like it needs an actual architecture change (e.g.
+                 # collectors/peering_flow_collector.py safely reading a
+                 # still-open file via an mtime-staleness check instead
+                 # of always skipping the last one), not more timeout
+                 # tuning.
+                 "-t", "general=1", "-t", "maxlife=2"],
                 stdout=softflowd_log, stderr=subprocess.STDOUT,
             )
         time.sleep(1)
