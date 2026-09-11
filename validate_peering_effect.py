@@ -99,15 +99,18 @@ POST_ATTACK_WAIT_S = 15
 # where this gets used) -- cheap enough to run every second without
 # meaningfully perturbing anything.
 RULE_POLL_INTERVAL_S = 1.0
-# Across 5 runs, the leak (a full-volume reply burst mid-block) always
-# landed at exactly +45s and +48s after BGP_FLOWSPEC_DISCARD -- with
-# the rule confirmed present at 1s resolution throughout, meaning
-# whatever causes it (if it's the rule flickering at all) has to be
-# faster than 1s. During this window specifically, poll much faster to
-# actually resolve a sub-second flicker instead of just re-confirming
-# "still present" at second-boundaries that happen to straddle it.
-LEAK_WINDOW_START_S = 40.0
-LEAK_WINDOW_END_S = 53.0
+# Across 6 runs, the leak (a full-volume reply burst mid-block) landed
+# at +45s and +48s five times, and once at +54s -- not a single fixed
+# offset, some run-to-run jitter. Widened with margin on both sides
+# rather than assuming the earlier "always +45s/+48s" read was the
+# whole story. With the rule confirmed present at 1s resolution
+# throughout every prior run, whatever causes it (if it's the rule
+# flickering at all) has to be faster than 1s -- during this window
+# specifically, poll much faster to actually resolve a sub-second
+# flicker instead of just re-confirming "still present" at second-
+# boundaries that happen to straddle it.
+LEAK_WINDOW_START_S = 35.0
+LEAK_WINDOW_END_S = 60.0
 FINE_POLL_INTERVAL_S = 0.2
 # Minimum gap with zero reply-direction records to count as a genuine,
 # persistent traffic reduction for Tefecto (docs/thesis-revision-plan.md

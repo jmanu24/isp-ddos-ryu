@@ -245,7 +245,21 @@ class PeeringLifecycle:
                  # racing its exact boundary -- at maxlife==rotate, which
                  # export lands in which capture file becomes timing-
                  # dependent jitter for no benefit.
-                 "-t", "general=1", "-t", "maxlife=1"],
+                 #
+                 # expint controls something DIFFERENT from general/
+                 # maxlife: how often softflowd's own internal loop scans
+                 # its flow table for anything that has crossed one of
+                 # those timeouts -- it defaults to 60s regardless of how
+                 # tight general/maxlife are set. Never overridden before
+                 # this: Td (attack start -> real detection) measured
+                 # anywhere from 12s to 41s across validate_peering_
+                 # effect.py runs, with no other explanation for that
+                 # spread -- consistent with detection latency being
+                 # dominated by a random phase offset against a 60s
+                 # internal scan cycle, not by nfcapd's own (now 2s)
+                 # rotation interval, which is comparatively a minor
+                 # factor. expint=1 forces that scan every second instead.
+                 "-t", "general=1", "-t", "maxlife=1", "-t", "expint=1"],
                 stdout=softflowd_log, stderr=subprocess.STDOUT,
             )
         time.sleep(1)
