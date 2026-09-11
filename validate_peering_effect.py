@@ -170,11 +170,12 @@ def _block_intervals(events):
 def _decode_nfcapd_dir(capture_dir: str, nfdump_bin: str):
     """(datetime, src_ip, dst_ip, td, ipkt, ibyt, file) for every flow record
     across every capture file currently in the directory -- this script
-    reads the WHOLE directory after the test, not collectors/
-    peering_flow_collector.py's own live-polling "skip the last file"
-    semantics (irrelevant here, every file involved is long since rotated
-    by the time this runs). Packet/byte/duration fields carried through so
-    any stray inside-block record can be inspected for its actual size,
+    reads the WHOLE directory after the test, unlike collectors/
+    peering_flow_collector.py's own live poll() (only ever reads new
+    files since it was last called; irrelevant here, every file involved
+    is long since complete by the time this runs). Packet/byte/duration
+    fields carried through so any stray inside-block record can be
+    inspected for its actual size,
     not just its existence.
     """
     records = []

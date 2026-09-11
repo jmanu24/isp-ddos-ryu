@@ -128,18 +128,15 @@ def main() -> bool:
         flood_proc.kill()
     all_ok &= check("flood ICMP peer_ext -> r1 ejecutado (2s)", True)
 
-    # collectors/peering_flow_collector.py deliberately treats the
-    # lexicographically-last capture file as nfcapd's still-open current
-    # one and never reads it (correct for the orchestrator's real,
-    # continuous polling loop, where a later poll's newer file always
-    # supersedes it) -- but for this one-shot script that means the
-    # file our flood actually landed in must be followed by a SECOND
-    # rotation before we poll, or it gets skipped forever. One interval
-    # isn't enough: confirmed on the VM that the file containing real
-    # traffic was still the only/last file when a single interval's
-    # wait elapsed. Two intervals guarantees a subsequent file exists.
-    wait_s = NFCAPD_ROTATE_SECONDS * 2 + 3
-    print(f"    esperando {wait_s}s a que nfcapd rote dos archivos de captura...")
+    # collectors/peering_flow_collector.py now trusts any file nfcapd
+    # hasn't named nfcapd.current.<pid> as complete -- nfcapd only gives
+    # a file its permanent nfcapd.<timestamp> name via an atomic rename
+    # on rotation, so there's no need to wait for a SECOND rotation
+    # (the collector's original, more conservative design) before ours
+    # is safe to read. One interval plus margin for nfcapd to actually
+    # perform that rotation and rename is enough.
+    wait_s = NFCAPD_ROTATE_SECONDS + 3
+    print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
     time.sleep(wait_s)
 
     collector = PeeringFlowCollector()

@@ -63,10 +63,19 @@ class PeeringFlowCollector:
     each with `nfdump -o csv`, and returns new per-flow records since the
     last call.
 
-    A capture file is only read once it is no longer the most recent one
-    in the directory -- nfcapd keeps appending to the current file until
-    its rotation interval elapses, so reading it early would return a
-    partial flow set for that interval.
+    nfcapd never writes a file under its permanent nfcapd.<timestamp>
+    name directly -- it always writes to nfcapd.current.<pid> first, and
+    only renames it to that permanent name once a rotation interval is
+    fully closed (confirmed on the VM: an nfcapd killed with SIGKILL
+    leaves an orphaned nfcapd.current.<pid> file behind forever, sitting
+    right alongside normally-completed nfcapd.<timestamp> ones -- see
+    docs/peering-plan.md §2.3). So a file is safe to read the moment it
+    stops being named nfcapd.current.* -- no need to ALSO wait for a
+    subsequent rotation to exist before trusting it, which earlier cost
+    a full extra rotation interval of detection latency for nothing
+    (that was this class's original design, based on the wrong
+    assumption that the lexicographically-last nfcapd.* name was always
+    the in-progress one).
     """
 
     def __init__(
@@ -88,32 +97,32 @@ class PeeringFlowCollector:
         # exabgp) even existed to receive it.
         self._processed_files = set(self._existing_files())
 
+    @staticmethod
+    def _is_complete(fname: str) -> bool:
+        return fname.startswith("nfcapd.") and not fname.startswith("nfcapd.current.")
+
     def _existing_files(self) -> List[str]:
         try:
-            return [f for f in os.listdir(self.capture_dir) if f.startswith("nfcapd.")]
+            return [f for f in os.listdir(self.capture_dir) if self._is_complete(f)]
         except OSError:
             return []
 
     def poll(self) -> List[Dict]:
-        """Return flow records from every unread, fully-rotated capture file."""
+        """Return flow records from every unread, fully-written capture file."""
         if not self.capture_dir or not os.path.isdir(self.capture_dir):
             return []
 
         try:
-            entries = sorted(os.listdir(self.capture_dir))
+            entries = os.listdir(self.capture_dir)
         except OSError as exc:
             self.logger.warning("Cannot list nfcapd capture dir %s: %s", self.capture_dir, exc)
             return []
 
-        files = [f for f in entries if f.startswith("nfcapd.")]
+        files = sorted(f for f in entries if self._is_complete(f))
         if not files:
             return []
 
-        # The lexicographically-last file is nfcapd's current, still-open
-        # capture (nfcapd.YYYYMMDDhhmm filenames sort chronologically) --
-        # never read it.
-        readable = files[:-1]
-        new_files = [f for f in readable if f not in self._processed_files]
+        new_files = [f for f in files if f not in self._processed_files]
 
         records: List[Dict] = []
         for fname in new_files:

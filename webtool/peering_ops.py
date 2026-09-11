@@ -264,13 +264,14 @@ class PeeringLifecycle:
                  # under a real high-volume flood, adding latency instead
                  # of cutting it. Left at maxlife=2 (matches
                  # NFCAPD_ROTATE_SECONDS=5 with margin) and no expint
-                 # override -- the confirmed-best settings measured so
-                 # far. Reducing Td further below this ~12-21s floor
-                 # looks like it needs an actual architecture change (e.g.
-                 # collectors/peering_flow_collector.py safely reading a
-                 # still-open file via an mtime-staleness check instead
-                 # of always skipping the last one), not more timeout
-                 # tuning.
+                 # override -- the confirmed-best softflowd/nfcapd timeout
+                 # settings measured. The actual architecture change that
+                 # was needed instead landed in
+                 # collectors/peering_flow_collector.py: it no longer
+                 # waits for a subsequent rotation before trusting a
+                 # file, it trusts any file nfcapd has stopped calling
+                 # nfcapd.current.<pid> (nfcapd's own atomic-rename-on-
+                 # close convention already guarantees that's complete).
                  "-t", "general=1", "-t", "maxlife=2"],
                 stdout=softflowd_log, stderr=subprocess.STDOUT,
             )
