@@ -698,17 +698,22 @@ class OrchestrationController:
 
             return is_new
 
-        if action.domain in settings.PER_SOURCE_MITIGATION_DOMAINS and action.action == "block":
+        if action.domain in settings.PER_SOURCE_MITIGATION_DOMAINS and action.action in ("block", "bgp_flowspec_discard"):
             # Mirrors the openflow branch above: dedupe so an attack
             # that's still ongoing doesn't re-queue a fresh mitigation
             # command (and re-log "MITIGATION") every single pipeline
             # cycle — check_mobile_unblocks() is what eventually clears
-            # this once the source's reported throughput actually drops.
-            # Shared by every PER_SOURCE_MITIGATION_DOMAINS member (mobile
-            # UEs, BNGBlaster sessions) -- the dict key carries no domain
-            # field, just (src_ip, dst_ip, dst_port, protocol), which is
-            # already unambiguous since a given src_ip belongs to exactly
-            # one domain in practice.
+            # this once the source's reported throughput actually drops
+            # (or, for PRESENCE_BLIND_DOMAINS members like bgp, once its
+            # fixed wall-clock window elapses). Shared by every
+            # PER_SOURCE_MITIGATION_DOMAINS member (mobile UEs, BNGBlaster
+            # sessions, bgp FlowSpec routes) -- the dict key carries no
+            # domain field, just (src_ip, dst_ip, dst_port, protocol),
+            # which is already unambiguous since a given src_ip belongs to
+            # exactly one domain in practice. "bgp_flowspec_discard" is
+            # bgp's own action string (see _action_for) -- it's still a
+            # per-source block in every sense this branch cares about,
+            # just not literally named "block".
             key = (action.src_ip, action.dst_ip, action.dst_port, action.protocol)
             is_new = key not in self._active_mobile_blocks
 
@@ -1400,7 +1405,10 @@ class OrchestrationController:
             }
             if attack_type not in still_active_types:
                 metrics.record_attack_rate(attack_type, domain, 0, 0)
-                metrics.record_mitigation_rate(attack_type, "block", domain, 0, 0)
+                # original.action, not a hardcoded "block" -- true for
+                # mobile/broadband (always "block") but bgp's own action
+                # string is "bgp_flowspec_discard" (see _action_for).
+                metrics.record_mitigation_rate(attack_type, original.action, domain, 0, 0)
             # Same per-flow re-validation as check_unblocks() -- see
             # _validated_flows' declaration comment. original.sources
             # covers a wildcard block; src_ip alone covers the normal

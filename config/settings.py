@@ -120,8 +120,13 @@ LOW_SLOW_MOBILE_MIN_CYCLES = 20    # consecutive cycles that count must hold bef
 # (_build_actions, dispatch(), check_mobile_unblocks) both key off this
 # tuple instead of a hardcoded "mobile" string, so BroadbandAdapter's
 # per-session BNGBlaster sessions reuse the exact same machinery
-# MobileNetworkAdapter's per-UE quarantine already validated.
-PER_SOURCE_MITIGATION_DOMAINS = ("mobile", "broadband")
+# MobileNetworkAdapter's per-UE quarantine already validated. "bgp" joined
+# this set for the same reason: BGP FlowSpec is a per-source discard route
+# (one exact 5-tuple match, not a destination-wide network lever either),
+# so it reuses this same per-source block/unblock machinery -- see
+# docs/peering-plan.md §6 for why a hand-rolled bgp-specific tracking
+# dict/check function turned out to be unnecessary.
+PER_SOURCE_MITIGATION_DOMAINS = ("mobile", "broadband", "bgp")
 
 # Domains whose block is a complete cutoff, not a throttle -- mobile's
 # RC quarantine drops a UE's rate near zero but it keeps reporting
@@ -135,7 +140,15 @@ PER_SOURCE_MITIGATION_DOMAINS = ("mobile", "broadband")
 # still running -- a fast, repeating BLOCK/UNBLOCK/re-detect oscillation
 # instead of one stable block for the duration of the attack. Domains
 # here use a fixed wall-clock hold (MitigationAction.duration) instead.
-PRESENCE_BLIND_DOMAINS = ("broadband",)
+# "bgp" belongs here for the OPPOSITE reason broadband does -- its block
+# doesn't cut telemetry off, softflowd captures on r1-ext0 BEFORE the
+# FlowSpec rule ever gets a chance to drop the packet, so the attacker
+# would keep showing up as "present" in telemetry forever, even with the
+# block fully in effect. Either way (telemetry vanishes vs. telemetry
+# never reflects the block at all), a presence-based signal can't tell
+# whether the block is working, so both domains fall back to the same
+# fixed wall-clock TTL instead.
+PRESENCE_BLIND_DOMAINS = ("broadband", "bgp")
 
 # --- BGP Peering domain (see docs/peering-plan.md) --------------------
 # Directory nfcapd rotates its binary NetFlow/IPFIX capture files into,
