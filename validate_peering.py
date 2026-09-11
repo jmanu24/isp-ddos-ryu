@@ -130,11 +130,29 @@ def main() -> bool:
     # already uses for attack scenarios) generates enough volume to
     # flush promptly, and is what this pipeline actually exists to
     # observe.
+    # DIAGNOSTIC (temporary): confirmed nfcapd receiving 0 packets across
+    # every rotated file after the nfdump 1.6.18 -> 1.7.4 upgrade (Flows:
+    # 0/Packets: 0 for the whole run in NFCAPD_LOG_PATH) -- isolating
+    # whether softflowd stopped exporting at all, or the export never
+    # reaches nfcapd's loopback socket, by sniffing r1's own loopback for
+    # NetFlow UDP traffic (127.0.0.1:NFCAPD_PORT) while the flood runs.
+    from webtool.peering_ops import NFCAPD_PORT
+    tcpdump_proc = r1.popen(
+        ["tcpdump", "-i", "lo", "-n", "udp", "port", str(NFCAPD_PORT),
+         "-c", "10"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
     flood_proc = peer_ext.popen(
         ["hping3", "--icmp", "--flood", R1_EXTERNAL_IP],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    time.sleep(2)
+    time.sleep(4)
+    try:
+        tcpdump_out, _ = tcpdump_proc.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        tcpdump_proc.kill()
+        tcpdump_out, _ = tcpdump_proc.communicate()
+    print(f"    tcpdump en r1 (lo, udp/{NFCAPD_PORT}) durante el flood:\n{tcpdump_out}")
     flood_proc.terminate()
     try:
         flood_proc.wait(timeout=3)
