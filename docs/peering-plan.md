@@ -307,13 +307,13 @@ están confirmados tanto en el spike aislado (§2.2) como dentro de la topologí
 desapareciendo en el `r1` de verdad. La telemetría real (§2.3) también queda confirmada de
 punta a punta: `peer_ext` → `softflowd` → `nfcapd` → `nfdump` → `PeeringFlowCollector`. No
 declarar la fase E completa mientras falte:
-- **Código escrito, pendiente de confirmar en la VM (2026-09-11):** el dominio `bgp` no tenía
-  NINGÚN mecanismo de retiro automático -- `_dispatch()` caía al camino genérico (sin dedup, sin
-  registro en ningún diccionario de bloqueos activos), y ni `check_unblocks()` (solo enterprise)
-  ni `check_mobile_unblocks()` (solo mobile/broadband) ni `force_unblock()` (botón manual del
-  webtool) reconocían un bloqueo `bgp`. Una vez anunciada, la ruta FlowSpec nunca se retiraba,
-  ni automática ni manualmente. Además, un desbloqueo basado en presencia de tráfico (como usan
-  enterprise/mobile) **no puede funcionar** para `bgp`: `softflowd` captura en `r1-ext0` *antes*
+- ~~El dominio `bgp` no tenía ningún mecanismo de retiro automático~~ **Confirmado en la VM
+  (2026-09-11).** `_dispatch()` caía al camino genérico (sin dedup, sin registro en ningún
+  diccionario de bloqueos activos), y ni `check_unblocks()` (solo enterprise) ni
+  `check_mobile_unblocks()` (solo mobile/broadband) ni `force_unblock()` (botón manual del
+  webtool) reconocían un bloqueo `bgp` -- una vez anunciada, la ruta FlowSpec nunca se retiraba,
+  ni automática ni manualmente. Un desbloqueo basado en presencia de tráfico (como usan
+  enterprise/mobile) tampoco puede funcionar para `bgp`: `softflowd` captura en `r1-ext0` *antes*
   de que la regla FlowSpec descarte el paquete, así que la telemetría seguiría reportando al
   atacante como "presente" aunque el bloqueo funcione perfectamente. **Fix:** en vez de escribir
   un diccionario/función de chequeo nuevos, `bgp` se agregó a `PER_SOURCE_MITIGATION_DOMAINS` y
@@ -323,8 +323,13 @@ declarar la fase E completa mientras falte:
   ventana de tiempo fijo (`MitigationAction.duration`) que ya usa `broadband` por una razón
   distinta pero con la misma conclusión (la presencia no sirve como señal). Solo hizo falta
   generalizar una condición en `_dispatch()` (aceptaba `action.action == "block"`, ahora también
-  `"bgp_flowspec_discard"`). Falta confirmar en la VM que un bloqueo `bgp` real se retira solo
-  tras `MitigationAction.duration` segundos.
+  `"bgp_flowspec_discard"`). **Verificado con dos ataques reales (SYN y UDP) contra
+  `central_server`:** `BGP_FLOWSPEC_DISCARD` seguido de `FLOWSPEC_WITHDRAWN`/`UNBLOCK` exactos
+  60s después (el `duration` por defecto), en ambos casos independiente de si el ataque en sí ya
+  se había detenido (el SYN se detuvo manualmente 21s *antes* de que el TTL expirara) o seguía
+  activo (el UDP, aún corriendo, se re-detectó 9s después del retiro y se re-bloqueó con su
+  propia ventana fresca, retirada de nuevo a los 60s exactos) -- ciclo completo
+  detección→anuncio→bloqueo→expiración→re-detección→re-bloqueo confirmado.
 - Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
   a cero mientras la regla está activa (las pruebas hasta ahora confirman que la regla existe
   en `nftables`, no que descarta tráfico real observado end-to-end).
