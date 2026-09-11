@@ -109,6 +109,46 @@ no presentar como una solución de nivel productivo.
 Reproducible con `deploy/spike_flowspec_frr.sh` (documenta el FAIL, conservado como evidencia)
 y el procedimiento de `flow` reproducido en `deploy/spike_flowspec_flow.sh` (documenta el PASS).
 
+### 2.3. Telemetría (`peer_ext` → `softflowd` → `nfcapd` → `nfdump` → collector) — PASS
+
+Confirmado de punta a punta en la VM (`validate_peering.py`, paso 6) el 2026-09-11, tras varias
+rondas de debugging real que vale documentar porque cada una fue una causa raíz distinta, no
+una sola:
+
+1. **Un ping simple nunca llega a exportarse.** `softflowd` reportó "Flows: 0" incluso con
+   ICMP real confirmado por `tcpdump` en la misma interfaz. `softflowctl statistics` aisló la
+   causa: `Packets received by libpcap` > 0 pero `Packets processed: 0` — el *ring buffer* de
+   captura de Linux (TPACKET_V3) solo entrega paquetes a `softflowd` cuando se llena un bloque
+   completo, y `softflowd` no fija un *timeout* de lectura ni modo inmediato, así que un puñado
+   de pings nunca dispara el volcado. La causa **no** es específica de ICMP ni de la versión de
+   NetFlow (se descartó explícitamente probando v9 y v5 con el mismo resultado). El build de
+   `softflowd` 1.0.0 de esta VM tampoco soporta `-B` (tamaño de buffer) para mitigarlo desde ahí.
+   **Fix:** `validate_peering.py` genera tráfico real con `hping3 --icmp --flood` (mismo patrón
+   ya usado en el dominio enterprise) en vez de un ping — volumen suficiente para llenar un
+   bloque de inmediato, y además representa mejor lo que esta tubería existe para detectar.
+2. **`collectors/peering_flow_collector.py` nunca lee el último archivo de `nfcapd`** por
+   diseño (asume que `nfcapd` lo tiene abierto — correcto para el polling continuo del
+   orchestrator en producción). En una prueba de una sola pasada, si solo ocurre una rotación
+   antes de consultar al colector, el archivo con los datos reales queda excluido para siempre.
+   **Fix:** esperar dos ciclos de rotación de `nfcapd`, no uno, antes de invocar `poll()`.
+3. `nfdump -o csv` agrega un bloque `Summary` final con columnas distintas a las de un flujo
+   real; `csv.DictReader` lo mapea por posición sobre el header original, dejando columnas más
+   allá del ancho del resumen (como `ipkt`) en `None`, y `int(None)` lanza `TypeError` — no
+   capturado por el `except (KeyError, ValueError)` existente. Nunca se había manifestado
+   porque todo archivo de captura anterior estaba vacío ("No matched flows", sin bloque
+   `Summary`). **Fix:** agregar `TypeError` al `except`.
+4. Un `flow` matado con `pkill -9` durante la limpieza manual de la VM no alcanza a borrar su
+   propio socket de control (nombre determinístico según IP:puerto de bind), y la siguiente
+   corrida falla con `Address already in use`. **Fix:** `PeeringLifecycle.start()` limpia
+   sockets viejos en `/run/flow/*.sock` antes de arrancar `flow`, igual que ya crea el FIFO de
+   `exabgp` si no existe.
+
+De paso, se agregó `PeeringLifecycle._ensure_alive()`: cada uno de los 4 subprocesos
+(`flow`/`exabgp`/`nfcapd`/`softflowd`) se verifica vivo justo después de arrancar, y lanza una
+excepción inmediata con el log si ya murió — antes, un flag de CLI rechazado (como el `-B` de
+softflowd, no soportado en el build de esta VM) fallaba en silencio y solo se notaba varios
+pasos después como "no hay datos de telemetría", sin ninguna pista de la causa real.
+
 ## 3. Módulos nuevos y su responsabilidad
 
 ```mermaid
@@ -152,20 +192,20 @@ flowchart LR
 
 1. ~~Spike de validación FlowSpec en FRR~~ **Resuelto (§2): FRR descartado, `flow`
    confirmado con una regla real en `nftables`.**
-2. ~~Instalar y configurar `softflowd` en la interfaz externa de `r1`~~ **Código escrito
-   (§4a): nuevo host `peer_ext` (`topologies/star_topology.py`'s `attach_external_peer`,
-   enlazado directo a `r1`, no vía switch — representa tráfico externo/upstream, la misma
-   decisión de diseño que `ent_i`/`gnb_i`/`fixed_i` para sus propios dominios) +
-   `softflowd`/`nfcapd` corriendo dentro del namespace de `r1` (`webtool/peering_ops.py`,
-   igual que `flow`), exportando por loopback interno de `r1` con rotación cada 5s (no los
-   300s por defecto de `nfcapd` — demasiado lento para la cadencia de detección del
-   proyecto). Pendiente de validar en la VM (`validate_peering.py`, paso 6).**
+2. ~~Instalar y configurar `softflowd` en la interfaz externa de `r1`~~ **Confirmado en la VM
+   (2026-09-11, §2.3): nuevo host `peer_ext` (`topologies/star_topology.py`'s
+   `attach_external_peer`, enlazado directo a `r1`, no vía switch — representa tráfico
+   externo/upstream, la misma decisión de diseño que `ent_i`/`gnb_i`/`fixed_i` para sus
+   propios dominios) + `softflowd`/`nfcapd` corriendo dentro del namespace de `r1`
+   (`webtool/peering_ops.py`, igual que `flow`), exportando por loopback interno de `r1` con
+   rotación cada 5s (no los 300s por defecto de `nfcapd` — demasiado lento para la cadencia de
+   detección del proyecto).**
 3. `collectors/peering_flow_collector.py` + `telemetry/bgp_adapter.py`: **ya existían** desde
-   la instrumentación inicial (ver §3) — lo nuevo es la validación de que `nfdump -o csv`
+   la instrumentación inicial (ver §3) — **confirmado en la VM (§2.3) que `nfdump -o csv`
    realmente produce el formato que el parser asume (campos `sa`/`da`/`dp`/`pr`/`td`/`ipkt`/
-   `ibyt`), probado hasta ahora solo con datos sintéticos, no con `nfdump` real. Paso 6 de
-   `validate_peering.py` corre el pipeline completo (`peer_ext` → `softflowd` → `nfcapd` →
-   `PeeringFlowCollector.poll()`) para confirmarlo.
+   `ibyt`), antes probado solo con datos sintéticos.** Paso 6 de `validate_peering.py` corre el
+   pipeline completo (`peer_ext` → `softflowd` → `nfcapd` → `PeeringFlowCollector.poll()`) y
+   pasa de punta a punta.
 4. ~~Integrar `flow` dentro de la topología Mininet~~ **Confirmado en la VM (2026-09-11):**
    `build_topology()` + `PeeringLifecycle.start()` real (sin FRR, sin namespace aislado) —
    sesión `exabgp`↔`flow` establecida sobre `10.98.0.1`↔`10.98.0.2` (el enlace de
@@ -184,11 +224,11 @@ flowchart LR
 **"Router instala y retira política; efecto medido."** La instalación y el retiro reales ya
 están confirmados tanto en el spike aislado (§2.2) como dentro de la topología Mininet real
 (§5, paso 4) — `announce`/`withdraw` verificados con regla real de `nftables` apareciendo y
-desapareciendo en el `r1` de verdad. No declarar la fase E completa mientras falte:
+desapareciendo en el `r1` de verdad. La telemetría real (§2.3) también queda confirmada de
+punta a punta: `peer_ext` → `softflowd` → `nfcapd` → `nfdump` → `PeeringFlowCollector`. No
+declarar la fase E completa mientras falte:
 - Confirmar el retiro por **expiración de TTL** desde `mitigation/peering_backend.py`
   (`MitigationAction.duration`), no solo por un `withdraw` manual vía FIFO como en las pruebas.
 - Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
   a cero mientras la regla está activa (las pruebas hasta ahora confirman que la regla existe
   en `nftables`, no que descarta tráfico real observado end-to-end).
-- El colector IPFIX produce eventos pero nunca se validó contra una captura de referencia.
-- Medir el *efecto* real sobre tráfico generado (no solo que la regla existe en `nftables`).
