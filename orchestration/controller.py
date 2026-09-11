@@ -355,12 +355,21 @@ class OrchestrationController:
           with no confirmed host-port location yet are skipped entirely —
           NEVER blocked network-wide; they'll get caught once a host-port
           sighting for them arrives in a later cycle.
-        - PER_SOURCE_MITIGATION_DOMAINS sources (mobile UEs, BNGBlaster
-          subscriber sessions): no destination-wide network lever the way
-          an OpenFlow drop rule is, so a "*" src_ip can't be dispatched as
-          a single action the way it can for OpenFlow — one action per
-          contributing source instead, each quarantined individually
-          through the existing per-source block/unblock machinery.
+        - PER_SOURCE_MITIGATION_DOMAINS sources that are ALSO per-source
+          mitigation levers (mobile UEs, BNGBlaster subscriber sessions):
+          no destination-wide network lever the way an OpenFlow drop rule
+          is, so a "*" src_ip can't be dispatched as a single action as
+          OpenFlow can — one action per contributing source instead, each
+          quarantined individually through the existing per-source
+          block/unblock machinery.
+        - bgp sources: despite also being a PER_SOURCE_MITIGATION_DOMAINS
+          member (for its single-source dispatch path and PRESENCE_BLIND_
+          DOMAINS TTL release), a FlowSpec discard route IS a destination-
+          wide lever like OpenFlow's — one aggregate action, src_ip="*",
+          never one per source. Confirmed necessary, not just tidier: one
+          action per (spoofed, virtually-unique-per-packet) source under
+          real DDoS testing produced thousands of redundant dispatches
+          for what should have been a single route.
 
         OpenFlow's own LOW_SLOW flow-count variant also uses src_ip="*"
         but carries no per-source IP list at all (it's a flow-count
@@ -494,6 +503,50 @@ class OrchestrationController:
                                 bps=d.bps,
                             ))
 
+                    elif src_domain == "bgp":
+                        # Unlike mobile/broadband (below), a BGP FlowSpec
+                        # discard route IS a single (dst_ip, dst_port,
+                        # protocol)-scoped network lever, same shape as
+                        # OpenFlow's own block -- there's no per-source
+                        # concept to quarantine individually (a FlowSpec
+                        # route can't discard "just one IP" among spoofed
+                        # traffic anyway). Dispatching one action per
+                        # contributing source (the old behavior, falling
+                        # through to the generic PER_SOURCE_MITIGATION_
+                        # DOMAINS branch below) actively broke on the VM
+                        # under a real spoofed (--rand-source) DDoS test:
+                        # _dispatch()'s own per-source dedup key (src_ip,
+                        # dst_ip, dst_port, protocol) never recognized two
+                        # cycles' sources as "the same" attacker, since a
+                        # virtually-unique src_ip per packet means almost
+                        # every source is "new" every single cycle --
+                        # confirmed over 7,000 redundant FLOWSPEC_ANNOUNCED
+                        # dispatches (up to ~1,500 in one second) for what
+                        # should have been ONE route. One aggregate action
+                        # instead, src_ip="*" (mirrors OpenFlow's own
+                        # DDOS_DISTRIBUTED shape exactly) -- _dispatch()'s
+                        # dedup key becomes ("*", dst_ip, dst_port,
+                        # protocol), stable across cycles regardless of how
+                        # many (or how ephemeral) the contributing sources
+                        # are. check_mobile_unblocks() already handles
+                        # src_ip="*" (its own `if src_ip == "*":` branch)
+                        # and releases PRESENCE_BLIND_DOMAINS members like
+                        # bgp on a fixed wall-clock duration regardless of
+                        # src_ip, so no change needed there.
+                        actions.append(MitigationAction(
+                            domain=src_domain,
+                            device_id=d.device_id,
+                            src_ip="*",
+                            dst_ip=d.dst_ip,
+                            dst_port=d.dst_port,
+                            protocol=d.protocol,
+                            action=per_domain_action_type,
+                            sources=sources_subset,
+                            attack_type=effective_attack_type,
+                            pps=d.pps,
+                            bps=d.bps,
+                        ))
+
                     elif src_domain in settings.PER_SOURCE_MITIGATION_DOMAINS:
                         # domains in PER_SOURCE_MITIGATION_DOMAINS (mobile
                         # UEs, BNGBlaster subscriber sessions) have
@@ -505,7 +558,13 @@ class OrchestrationController:
                         # source, each quarantined individually through
                         # the existing per-source block/unblock machinery,
                         # which already works correctly per real source
-                        # IP (see check_mobile_unblocks).
+                        # IP (see check_mobile_unblocks). bgp is also a
+                        # PER_SOURCE_MITIGATION_DOMAINS member (for the
+                        # single-source dispatch path and its
+                        # PRESENCE_BLIND_DOMAINS TTL-release, both below/
+                        # elsewhere) but never reaches this branch -- the
+                        # bgp-specific one above always intercepts it
+                        # first.
                         for source in sources_subset:
                             actions.append(MitigationAction(
                                 domain=src_domain,
