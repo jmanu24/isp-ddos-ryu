@@ -136,3 +136,15 @@ PER_SOURCE_MITIGATION_DOMAINS = ("mobile", "broadband")
 # instead of one stable block for the duration of the attack. Domains
 # here use a fixed wall-clock hold (MitigationAction.duration) instead.
 PRESENCE_BLIND_DOMAINS = ("broadband",)
+
+# --- BGP Peering domain (see docs/peering-plan.md) --------------------
+# Directory nfcapd rotates its binary NetFlow/IPFIX capture files into,
+# fed by softflowd sniffing r1's external interface. Read via `nfdump`,
+# never parsed as raw wire format (collectors/peering_flow_collector.py).
+PEERING_NFCAPD_DIR = "/var/cache/nfcapd/r1"
+PEERING_NFDUMP_BIN = "nfdump"
+
+# Named pipe exabgp's `api` process section reads announce/withdraw
+# commands from (mitigation/peering_backend.py). exabgp itself holds the
+# actual BGP session to r1's FRR speaker.
+PEERING_EXABGP_FIFO = "/run/exabgp/exabgp.in"

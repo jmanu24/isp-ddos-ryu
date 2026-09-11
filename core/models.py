@@ -137,7 +137,7 @@ class MitigationAction:
     """
     Command issued by the Orchestration layer to a domain's mitigation backend.
 
-    action   : "block" | "rate_limit" | "bgp_blackhole"
+    action   : "block" | "rate_limit" | "bgp_flowspec_discard"
     duration : how long the rule should stay active (seconds)
     dst_ip/dst_port/protocol : L4 5-tuple fields the mitigation backend
                                should match on (block by exact flow, not

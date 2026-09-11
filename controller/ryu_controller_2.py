@@ -150,12 +150,12 @@ class FlowStatsIDS(app_manager.RyuApp):
         # -- see each module's docstring). of_adapter IS the Enterprise
         # domain (OpenFlow/SDN over the PE-facing topology) -- there is
         # no separate Enterprise adapter/stub; External Peering (BGP)
-        # remains a stub.
+        # is instrumented per docs/peering-plan.md.
         self.all_adapters = [
             self.of_adapter,
             MobileNetworkAdapter(logger=self.logger),
             BroadbandAdapter(bng_host="bng-blaster-1", logger=self.logger),
-            BGPPeeringAdapter(),         # stub — wire up router_host later (External Peering domain)
+            BGPPeeringAdapter(logger=self.logger),
         ]
 
         # Domains that had at least one active mitigation block as of the

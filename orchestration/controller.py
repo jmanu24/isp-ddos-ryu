@@ -640,7 +640,7 @@ class OrchestrationController:
     def _action_for(attack_type: str, domain: str) -> str:
         """Map attack type + domain to a concrete mitigation action string."""
         if domain == "bgp":
-            return "bgp_blackhole"
+            return "bgp_flowspec_discard"
         if attack_type in (
             "SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "DDOS_DISTRIBUTED",
             "MULTIDOMAIN_DISTRIBUTED_ATTACK", "LOW_SLOW",

@@ -1,49 +1,91 @@
-from typing import List
+"""
+telemetry/bgp_adapter.py — BGP Peering domain adapter.
 
-from core.models import TelemetryEvent, MitigationAction
+Telemetry : ingress flow records decoded from nfcapd/softflowd IPFIX
+            captures (see collectors/peering_flow_collector.py).
+Mitigation: BGP FlowSpec discard route, announced to r1's FRR speaker
+            via mitigation/peering_backend.py (see docs/peering-plan.md).
+
+is_connected() reflects whether the last collect() cycle could read the
+nfcapd capture directory at all -- it does NOT confirm the BGP session
+to r1 is up, nor that FlowSpec routes actually get installed in r1's
+dataplane. That capability is unverified (see docs/peering-plan.md §2,
+the FlowSpec spike); apply_mitigation() logs this caveat explicitly
+rather than reporting a confirmed block.
+"""
+import logging
+import time
+from typing import List, Optional
+
+from collectors.peering_flow_collector import PeeringFlowCollector
+from core.log_format import log_line
+from core.models import MitigationAction, TelemetryEvent
+from mitigation.peering_backend import PeeringBackend
 from telemetry.base import DomainAdapter
 
 
 class BGPPeeringAdapter(DomainAdapter):
-    """
-    Telemetry adapter for the BGP Peering Domain (Border Router / IGR).
-
-    Production integration points:
-    - Telemetry : NetFlow/sFlow from the border router,
-                  or BGP Monitoring Protocol (BMP, RFC 7854)
-    - Mitigation: BGP Blackhole Community announcement (RFC 7999)
-                  via ExaBGP, GoBGP, or a NETCONF RPC on the BR
-
-    Currently a stub — returns no events until the router endpoint is wired up.
-    """
-
     domain_name = "bgp"
-
-    # RFC 7999 well-known blackhole community
-    DEFAULT_BLACKHOLE_COMMUNITY = "65535:666"
 
     def __init__(
         self,
-        router_host: str = None,
-        bgp_community: str = DEFAULT_BLACKHOLE_COMMUNITY
+        collector: Optional[PeeringFlowCollector] = None,
+        backend: Optional[PeeringBackend] = None,
+        device_id: str = "r1",
+        logger: Optional[logging.Logger] = None,
+        clock=time.time,
     ):
-        self.router_host = router_host
-        self.bgp_community = bgp_community
+        self.collector = collector or PeeringFlowCollector()
+        self.backend = backend or PeeringBackend()
+        self.device_id = device_id
+        self.logger = logger or logging.getLogger(__name__)
+        self.clock = clock
+        self._last_poll_ok = False
 
     def is_connected(self) -> bool:
-        # TODO: verify BMP session or ExaBGP API reachability
-        return False
+        return self._last_poll_ok
 
     def collect(self) -> List[TelemetryEvent]:
-        # TODO: parse BMP RIB-IN updates or sFlow datagrams
-        #       → return TelemetryEvent list
-        return []
+        try:
+            records = self.collector.poll()
+            self._last_poll_ok = True
+        except OSError as exc:
+            self.logger.warning("Peering flow collector failed: %s", exc)
+            self._last_poll_ok = False
+            return []
+
+        now = self.clock()
+        return [
+            TelemetryEvent(
+                domain=self.domain_name,
+                device_id=self.device_id,
+                src_ip=record["src_ip"],
+                dst_ip=record["dst_ip"],
+                dst_port=record["dst_port"],
+                protocol=record["protocol"],
+                pps=record["pps"],
+                bps=record["bps"],
+                timestamp=now,
+            )
+            for record in records
+        ]
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
-        # TODO: announce RTBH route for action.src_ip with bgp_community
-        #       via ExaBGP REST API or GoBGP gRPC
-        print(
-            f"[BGP] Blackhole {action.src_ip} "
-            f"community={self.bgp_community} (stub)"
+        if action.action == "bgp_flowspec_discard":
+            announced = self.backend.announce(action.dst_ip, action.dst_port, action.protocol)
+            if announced:
+                self.logger.warning(log_line(
+                    self.domain_name, "MITIGATION", "FLOWSPEC_ANNOUNCED",
+                    f"destination={action.dst_ip}:{action.dst_port}/{action.protocol} "
+                    f"-- BGP announcement sent to exabgp; dataplane installation on r1 "
+                    f"is NOT verified (see docs/peering-plan.md spike)",
+                ))
+            return announced
+
+        if action.action == "unblock":
+            return self.backend.withdraw(action.dst_ip, action.dst_port, action.protocol)
+
+        self.logger.warning(
+            "Peering adapter received unsupported action=%r", action.action
         )
         return False
