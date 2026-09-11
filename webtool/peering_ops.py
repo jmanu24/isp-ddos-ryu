@@ -178,6 +178,21 @@ class PeeringLifecycle:
                  # /10436, forum.netgate.com/topic/172943) and nfdump's
                  # own CSV output schema is identical either way.
                  "-v", "5",
+                 # softflowd (irino/softflowd) calls pcap_set_timeout(0)
+                 # and never sets immediate mode -- on Linux this means
+                 # its TPACKET_V3 capture ring only hands packets to
+                 # userspace once a whole block fills, with no time-based
+                 # flush. Confirmed on the VM via softflowctl statistics:
+                 # "Packets received by libpcap" > 0 but "Packets
+                 # processed: 0" for a handful of packets, regardless of
+                 # protocol/NetFlow version -- pcap_dispatch() was simply
+                 # never being called on such a small ring. A small -B
+                 # buffer keeps the block size low enough that even
+                 # modest bursts (see the hping3 flood in
+                 # validate_peering.py, not a bare ping) fill and flush
+                 # promptly; real DDoS flood volumes would do this
+                 # regardless, but validation traffic needs the help.
+                 "-B", "65536",
                  # softflowd doesn't export a flow record until it
                  # expires (default general timeout is much longer than
                  # this project's detection cadence) -- confirmed on the

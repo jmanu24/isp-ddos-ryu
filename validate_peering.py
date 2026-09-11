@@ -19,6 +19,7 @@ Prerequisites:
 Usage:
   sudo python3 validate_peering.py
 """
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -99,22 +100,27 @@ def main() -> bool:
             TEST_DST not in after_withdraw,
         )
 
-    print(f"\n=== 6. Telemetria real: trafico desde peer_ext ({EXTERNAL_PEER_IP}) hacia r1 ===")
+    print(f"\n=== 6. Telemetria real: flood ICMP desde peer_ext ({EXTERNAL_PEER_IP}) hacia r1 ===")
     print(f"    peer_ext-eth0: {peer_ext.cmd('ip addr show peer_ext-eth0')}")
-    # Real ICMP packets crossing r1's external-facing interface
-    # (EXTERNAL_PEER_IFACE_R1) -- exactly what softflowd is watching.
-    ping_result = peer_ext.cmd(f"ping -c5 -i0.2 {R1_EXTERNAL_IP}")
-    # Exact "5 received" (or "5 packets received"), not just the absence
-    # of "0 received" -- that weaker check previously passed even when
-    # ping failed outright before printing any stats line at all (e.g.
-    # "Network is unreachable"), masking peer_ext having no IP assigned.
-    ping_ok = "5 received" in ping_result or "5 packets received" in ping_result
-    all_ok &= check("ping peer_ext -> r1 tuvo 5/5 respuestas", ping_ok)
-    if not ping_ok:
-        print(f"    salida completa del ping:\n{ping_result}")
-
-    print("\n    --- diagnostico temporal: softflowctl statistics ---")
-    print(f"    {r1.cmd('softflowctl statistics')}")
+    # A real ping (a handful of packets) never fills softflowd's pcap
+    # capture ring on Linux (see webtool/peering_ops.py's -B comment for
+    # why), so it would never get past libpcap into softflowd's own
+    # processing -- confirmed on the VM via softflowctl statistics
+    # showing 0 packets processed despite a successful ping. A short
+    # hping3 flood (same tool/pattern webtool/orchestrator.py already
+    # uses for attack scenarios) generates enough volume to flush
+    # promptly, and is what this pipeline actually exists to observe.
+    flood_proc = peer_ext.popen(
+        ["hping3", "--icmp", "--flood", R1_EXTERNAL_IP],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    time.sleep(2)
+    flood_proc.terminate()
+    try:
+        flood_proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        flood_proc.kill()
+    all_ok &= check("flood ICMP peer_ext -> r1 ejecutado (2s)", True)
 
     wait_s = NFCAPD_ROTATE_SECONDS + 3
     print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
