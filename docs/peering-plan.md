@@ -342,37 +342,46 @@ declarar la fase E completa mientras falte:
   `nftables` decida, así que se ve igual con o sin bloqueo (la misma razón por la que `bgp`
   necesitó `PRESENCE_BLIND_DOMAINS`, ver arriba). El script además vigila `nft list ruleset` en
   vivo (cada 1s) durante toda la espera, no solo confía en los timestamps del log.
-  **Resultado (4 corridas, 2026-09-11):** en 3 de 4 corridas independientes apareció una ráfaga
-  de respuesta a volumen completo (~120,000 paquetes, el mismo orden que el tráfico sin
-  bloquear) colándose en una ventana de ~3-6s ubicada consistentemente entre los segundos 45 y
-  51 de cada ventana de bloqueo de 60s. La cuarta corrida no mostró fuga alguna (cero tráfico de
-  respuesta durante todo el bloqueo). **Dato clave que descarta la hipótesis inicial** (que era
-  contaminación de estado entre sesiones de prueba): la corrida más reciente, con arranque
-  limpio de un solo intento, volvió a mostrar la fuga (48-51s) -- y esta vez el polling en vivo
-  de `nft list ruleset` (cada 1s durante toda la ventana) confirmó que **la regla nunca
+  **Resultado (5 corridas, 2026-09-11):** en 4 de 5 corridas independientes apareció una ráfaga
+  de respuesta a volumen completo (~117,000-122,000 paquetes, el mismo orden que el tráfico sin
+  bloquear) -- y el patrón es notablemente preciso: en las 4 corridas donde ocurre, son
+  exactamente **dos** registros, en **+45s** y **+48s** respecto del `BGP_FLOWSPEC_DISCARD` (no
+  un rango difuso "45-51s" como se pensó inicialmente -- los deltas exactos coinciden corrida
+  tras corrida). Solo una corrida no mostró fuga alguna (cero tráfico de respuesta durante todo
+  el bloqueo). **Dato clave que descarta la hipótesis inicial** (que era contaminación de estado
+  entre sesiones de prueba): varias de las corridas con fuga, incluida la más reciente, tuvieron
+  arranque limpio de topología en un solo intento -- y el polling en vivo de `nft list ruleset`
+  (cada 1s durante toda la ventana) confirmó en más de una corrida que **la regla nunca
   desapareció del kernel** (`RULE_PRESENT` continuo desde el `BGP_FLOWSPEC_DISCARD` hasta el
   `FLOWSPEC_WITHDRAWN`, sin ninguna transición a `RULE_ABSENT` en medio). Esto descarta que
   `flow` esté quitando y reinstalando la regla de forma detectable a resolución de 1 segundo.
-  La hipótesis más plausible ahora: `flow`/`exabgp` tienen algún ciclo interno (refresco de
-  sesión BGP, resincronización de rutas, o similar) que retira y reinstala la regla más rápido
-  de lo que un muestreo de 1s puede capturar, dejando pasar tráfico real durante ese hueco
-  submuestreado -- consistente con la propia advertencia de honestidad de `flow` en §2.2 ("has
-  yet to be tested thoroughly and not suitable for production for now"). **No resuelto**;
-  seguiría siendo necesario un polling de mayor frecuencia (sub-segundo) o correlacionar contra
-  los logs internos de `flow`/`exabgp` en esa ventana exacta para confirmar la causa raíz
-  precisa. Documentado aquí como limitación real y reproducible de la herramienta, no como una
-  falla del diseño de instrumentación del proyecto.
+  La hipótesis más plausible ahora: `flow`/`exabgp` tienen algún ciclo interno de duración fija
+  (~45s -- sospechosamente cercano a la mitad del hold-time BGP por defecto de RFC 4271, 90s/2,
+  aunque no confirmado) que retira y reinstala la regla más rápido de lo que un muestreo de 1s
+  puede capturar, dejando pasar tráfico real durante ese hueco submuestreado -- consistente con
+  la propia advertencia de honestidad de `flow` en §2.2 ("has yet to be tested thoroughly and
+  not suitable for production for now"). **No resuelto**; seguiría siendo necesario un polling
+  de mayor frecuencia (sub-segundo) o correlacionar contra los logs internos de `flow`/`exabgp`
+  en esa ventana exacta para confirmar la causa raíz precisa. Documentado aquí como limitación
+  real y reproducible de la herramienta, no como una falla del diseño de instrumentación del
+  proyecto.
 - ~~Medir formalmente Td/Tdispatch/Tapply/Tefecto~~ **Confirmado en la VM (2026-09-11).**
   `analysis/parse_timing_stats.py` (ya existente para los otros dominios) solo necesitó
   reconocer `BGP_FLOWSPEC_DISCARD` junto a `BLOCK`/`THROTTLE` como acción de mitigación válida
-  -- el resto de su cómputo de Td/Tm/Tu ya era genérico por dominio. Integrado directamente en
-  `validate_peering_effect.py` (paso 6), que reporta ambos criterios pendientes en una sola
-  corrida. Resultado real: **Td (ataque→detección) = 15.0s**, **Tm (detección→mitigación) =
-  0.0s** (ambas ocurren en el mismo ciclo de log), **Tu (mitigación→desbloqueo) = 60.0s**
-  (exacto al `MitigationAction.duration` por defecto).
-- ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Camino
-  detección→mitigación confirmado (§2.4, 2026-09-11)**: `ATTACK_DETECTED SYN_FLOOD` →
-  `FLOWSPEC_ANNOUNCED` → `BGP_FLOWSPEC_DISCARD` disparado por el motor de detección real (no
-  solo `validate_peering.py`), atacando `central_server` desde `peer_ext` vía el webtool
-  (atacar cualquier otro destino de la topología se sigue mitigando como bloqueo OpenFlow de
-  red completa, no como `BGP_FLOWSPEC_DISCARD` — ver §2.4).
+  -- el resto de su cómputo de Td/Tm ya era genérico por dominio. `Tiempo de aplicación`
+  (instalación confirmada menos envío) y `Tiempo hasta efecto` (primera reducción persistente
+  menos inicio del ataque) se derivan de datos que el script ya recolectaba (el polling de `nft
+  list ruleset` y la línea de tiempo de tráfico de respuesta). Integrado directamente en
+  `validate_peering_effect.py` (paso 6), que reporta las cuatro métricas formales en una sola
+  corrida.
+- ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Caso formal
+  completo confirmado (2026-09-11):** `bgp` / SYN / DoS monofuente, ataque real desde `peer_ext`
+  contra `central_server`, motor de detección real (no `validate_peering.py`):
+  `ATTACK_DETECTED SYN_FLOOD` → `FLOWSPEC_ANNOUNCED` → `BGP_FLOWSPEC_DISCARD` →
+  (60s después) `FLOWSPEC_WITHDRAWN`. Métricas de una corrida representativa: **Td = 21.0s**,
+  **Tiempo de despacho = 0.0s** (mismo ciclo de log que la detección), **Tiempo de aplicación =
+  0.92s** (cota superior, limitada por la resolución de polling de 1s), **Tiempo hasta efecto =
+  8.49s** (primer hueco ≥8s sin tráfico de respuesta) -- con la salvedad de la fuga de ~45-48s
+  documentada arriba, que rompe la persistencia total del efecto durante el resto de la ventana
+  de bloqueo. Atacar cualquier otro destino de la topología se sigue mitigando como bloqueo
+  OpenFlow de red completa, no como `BGP_FLOWSPEC_DISCARD` — ver §2.4.
