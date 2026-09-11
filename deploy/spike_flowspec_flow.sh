@@ -128,16 +128,37 @@ echo "== 6. Instalación real en el plano de datos (nftables, dentro del namespa
 ip netns exec "$NETNS" nft list ruleset
 
 echo
-echo "== RESULTADO =="
+echo "== RESULTADO (announce) =="
 if ip netns exec "$NETNS" nft list ruleset 2>/dev/null | grep -q "$TEST_DST"; then
-  echo "PASS -- flow instaló una regla real de nftables para $TEST_DST."
-  echo "Confirma docs/peering-plan.md §2.2. Pendiente: probar withdraw() y la"
-  echo "integración dentro de la topología Mininet real (ver §5/§6 del plan)."
+  ok "flow instaló una regla real de nftables para $TEST_DST (docs/peering-plan.md §2.2)."
 else
-  echo "FAIL -- la ruta aparece en 'flow show' (paso 5) pero no hay regla real"
-  echo "de nftables (paso 6). Esto NO coincide con el resultado ya confirmado"
-  echo "el 2026-09-10/11 -- revisar si cambió la versión de flow instalada."
+  fail "la ruta aparece en 'flow show' (paso 5) pero no hay regla real de nftables (paso 6) -- \
+esto NO coincide con el resultado ya confirmado el 2026-09-10/11; revisar si cambió la versión de flow instalada."
 fi
+
+echo "== 7. Retirando la ruta (withdraw) =="
+echo "withdraw flow route { match { destination $TEST_DST/32; protocol tcp; destination-port =80; } then { discard; } }" > "$FIFO"
+sleep 2
+
+echo "== 8. Confirmando que la ruta y la regla real desaparecieron =="
+echo "--- flow show ---"
+ip netns exec "$NETNS" flow show
+echo "--- nftables ---"
+ip netns exec "$NETNS" nft list ruleset
+
+echo
+echo "== RESULTADO (withdraw) =="
+if ip netns exec "$NETNS" nft list ruleset 2>/dev/null | grep -q "$TEST_DST"; then
+  fail "la regla de nftables para $TEST_DST sigue presente después del withdraw -- retiro NO confirmado."
+else
+  ok "la regla de nftables para $TEST_DST fue removida -- ciclo announce/withdraw confirmado de punta a punta."
+fi
+
+echo
+echo "== RESULTADO FINAL =="
+echo "PASS -- ciclo completo announce -> instalación real -> withdraw -> remoción real,"
+echo "confirmado (docs/peering-plan.md §2.2). Pendiente: integración dentro de la"
+echo "topología Mininet real (ver §5/§6 del plan) y medición de efecto sobre tráfico."
 
 echo
 echo "Para limpiar: sudo ./deploy/spike_flowspec_flow.sh --cleanup"

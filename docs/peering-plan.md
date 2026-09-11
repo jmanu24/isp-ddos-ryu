@@ -89,9 +89,15 @@ table inet flowspecs {
 
 Regla real, en `nftables`, instalada automáticamente a partir de la ruta BGP FlowSpec
 anunciada. **Esto es la prueba de capacidad que exige `implementation-design.md` §5** (más
-allá de ACCEPTED/DISPATCHED — esto es una instalación real verificada, aunque la medición de
-*efecto* sobre tráfico real y la integración con `r1`/la topología Mininet siguen pendientes,
-ver §5).
+allá de ACCEPTED/DISPATCHED — esto es una instalación real verificada).
+
+**Ciclo de retiro también confirmado.** Se probó `withdraw flow route { ... }` (mismo match)
+sobre la misma sesión: `flow show` dejó de listar la ruta, y `nft list ruleset` volvió a
+mostrar la cadena `flowspecs` vacía — la regla real fue removida, no solo desasociada de la
+vista de `flow`. El ciclo completo announce→instalación→withdraw→remoción queda confirmado
+de punta a punta. Automatizado en `deploy/spike_flowspec_flow.sh` (pasos 7-8). Lo único que
+sigue pendiente es la medición de *efecto* sobre tráfico real y la integración con `r1`/la
+topología Mininet (ver §5/§6).
 
 **Honestidad a mantener en la tesis:** `flow` es una herramienta joven y su propio README lo
 advierte — *"has yet to be tested thoroughly and not suitable for production for now"* (30
@@ -154,10 +160,11 @@ flowchart LR
 
 ## 6. Criterio de salida de la fase (igual al de `implementation-design.md` §6)
 
-**"Router instala y retira política; efecto medido."** La instalación real ya está confirmada
-(§2.2, regla verificada en `nftables`). No declarar la fase E completa mientras falte:
+**"Router instala y retira política; efecto medido."** La instalación y el retiro reales ya
+están confirmados (§2.2: `announce` y `withdraw` verificados con regla real de `nftables`
+apareciendo y desapareciendo). No declarar la fase E completa mientras falte:
 - Integrar `flow` dentro de la topología Mininet real (el spike corrió aislado, sobre la VM).
-- Confirmar que el *retiro* (withdraw) de la ruta al expirar el TTL efectivamente borra la
-  regla de `nftables` — el spike solo confirmó el `announce`, no se probó el `withdraw` contra `flow`.
+- Confirmar el retiro por **expiración de TTL** desde `mitigation/peering_backend.py`
+  (`MitigationAction.duration`), no solo por un `withdraw` manual vía FIFO como en el spike.
 - El colector IPFIX produce eventos pero nunca se validó contra una captura de referencia.
 - Medir el *efecto* real sobre tráfico generado (no solo que la regla existe en `nftables`).

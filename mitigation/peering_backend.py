@@ -18,13 +18,14 @@ block that runs `cat <fifo path>`, whose stdout exabgp reads as
 commands. This module only ever writes to that FIFO; it does not
 implement BGP itself, nor does it manage the exabgp or flow processes.
 
-CAPABILITY STATUS: announcing a FlowSpec discard route via this module
-and having `flow` install it as a real nftables rule is CONFIRMED (see
-docs/peering-plan.md §2.2 for the verified `nft list ruleset` output).
-Still unverified: withdraw() actually removing that rule from `flow`
-(the spike only exercised announce), and the measured *effect* on real
-traffic once wired into the Mininet topology's r1 (see docs/
-peering-plan.md §6). Per implementation-design.md §5's state machine,
+CAPABILITY STATUS: both directions are CONFIRMED against a live `flow`
+instance (see docs/peering-plan.md §2.2) -- announcing a FlowSpec
+discard route produces a real nftables rule, and withdrawing it removes
+that same rule (`nft list ruleset` verified empty afterward). Still
+unverified: TTL-driven withdrawal specifically (the spike withdrew
+manually via the FIFO, not through MitigationAction.duration expiring),
+and the measured *effect* on real traffic once wired into the Mininet
+topology's r1 (see docs/peering-plan.md §6). Per implementation-design.md §5's state machine,
 apply()/announce()/withdraw() returning True here means DISPATCHED/
 ACCEPTED -- do not report it to the UI/logs as APPLIED or VERIFIED
 without the readback/effect measurement implementation-design.md §5
