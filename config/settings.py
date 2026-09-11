@@ -146,5 +146,7 @@ PEERING_NFDUMP_BIN = "nfdump"
 
 # Named pipe exabgp's `api` process section reads announce/withdraw
 # commands from (mitigation/peering_backend.py). exabgp itself holds the
-# actual BGP session to r1's FRR speaker.
+# actual BGP session to r1's `flow` instance (github.com/hack3ric/flow)
+# -- not FRR, whose own FlowSpec-to-dataplane bridge never installs the
+# rule for real (see docs/peering-plan.md §2.1).
 PEERING_EXABGP_FIFO = "/run/exabgp/exabgp.in"

@@ -2,23 +2,33 @@
 mitigation/peering_backend.py — BGP FlowSpec speaker for the Peering domain.
 
 Talks to a locally running `exabgp` process, which holds the actual BGP
-session to r1's FRR (bgpd + zebra). exabgp does NOT create or manage
-this FIFO itself -- deploy/spike_flowspec_frr.sh (and, eventually, the
-real deployment config) must `mkfifo` it and point exabgp's own config
-at it via a `process` block that runs `cat <fifo path>`, whose stdout
-exabgp reads as commands. This module only ever writes to that FIFO; it
-does not implement BGP itself, nor does it manage the exabgp process.
+session to r1's `flow` instance (https://github.com/hack3ric/flow) --
+NOT FRR. FRR's own FlowSpec-to-dataplane bridge builds the rule object
+in memory but never actually installs it in the kernel; this is a
+confirmed, long-standing gap in FRR mainline, not a configuration
+mistake (see docs/peering-plan.md §2.1, FRRouting/frr#3160). `flow`
+receives the same BGP FlowSpec NLRI and translates it into a real
+nftables rule via rtnetlink -- confirmed with a live nftables rule (see
+docs/peering-plan.md §2.2).
 
-CAPABILITY STATUS -- read before trusting a True return here: this
-announces a FlowSpec discard route. Whether r1's FRR actually translates
-a received FlowSpec route into a real iptables/ipset rule (via FRR's PBR
-integration) is UNVERIFIED (see docs/peering-plan.md §2, the FlowSpec
-dataplane spike, and deploy/spike_flowspec_frr.sh).
-apply()/announce()/withdraw() report success based on the FIFO write
-succeeding, which only proves the announcement was handed to exabgp --
-NOT that traffic is actually being dropped. Per implementation-design.md
-§5's state machine, this is at most DISPATCHED/ACCEPTED, never APPLIED
-or VERIFIED; do not report it to the UI/logs as a confirmed block.
+exabgp does NOT create or manage this FIFO itself -- deploy/
+spike_flowspec_flow.sh (and, eventually, the real deployment config)
+must `mkfifo` it and point exabgp's own config at it via a `process`
+block that runs `cat <fifo path>`, whose stdout exabgp reads as
+commands. This module only ever writes to that FIFO; it does not
+implement BGP itself, nor does it manage the exabgp or flow processes.
+
+CAPABILITY STATUS: announcing a FlowSpec discard route via this module
+and having `flow` install it as a real nftables rule is CONFIRMED (see
+docs/peering-plan.md §2.2 for the verified `nft list ruleset` output).
+Still unverified: withdraw() actually removing that rule from `flow`
+(the spike only exercised announce), and the measured *effect* on real
+traffic once wired into the Mininet topology's r1 (see docs/
+peering-plan.md §6). Per implementation-design.md §5's state machine,
+apply()/announce()/withdraw() returning True here means DISPATCHED/
+ACCEPTED -- do not report it to the UI/logs as APPLIED or VERIFIED
+without the readback/effect measurement implementation-design.md §5
+requires for those states.
 """
 import logging
 import os

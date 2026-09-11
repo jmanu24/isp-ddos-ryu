@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 #
+# RESULT: FAIL, root-caused and documented -- see docs/peering-plan.md
+# §2.1. FRR's own FlowSpec-to-dataplane bridge builds the rule object in
+# memory (visible via `show pbr ipset`/`show pbr iptable`) but never
+# installs it in the kernel -- a confirmed, unresolved gap in FRR
+# mainline since 2019 (FRRouting/frr#3160), not something this script
+# (or more configuration) can fix. Kept in the repo as documented
+# negative evidence and to make the failure mode reproducible -- NOT a
+# deployment script. The working path is deploy/spike_flowspec_flow.sh
+# (docs/peering-plan.md §2.2), which uses github.com/hack3ric/flow
+# instead of FRR and confirms a real installed nftables rule.
+#
 # docs/peering-plan.md §2 -- standalone go/no-go spike for FRR's FlowSpec
 # support: confirms (or refutes) that a FlowSpec route received from an
 # external BGP speaker (exabgp) actually gets installed as a real

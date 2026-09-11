@@ -1,39 +1,48 @@
 #!/usr/bin/env bash
 #
 # Idempotent installer for the BGP Peering domain's toolchain on Ubuntu:
-#   - FRR (bgpd + zebra)  -- the router r1 runs, receives/installs
-#     announced routes. Installed from FRR's own APT repo (frrouting.org),
-#     not Ubuntu's default one, since FlowSpec support needs a reasonably
-#     recent FRR (8.x+) that older distro-packaged versions may not have.
-#   - exabgp              -- the BGP speaker mitigation/peering_backend.py
-#     talks to over its FIFO API; exabgp holds the actual session to r1.
-#   - softflowd + nfdump   -- ingress flow telemetry: softflowd sniffs
+#   - flow                 -- the tool r1 runs that receives BGP FlowSpec
+#     routes and installs them as real nftables rules via rtnetlink(7).
+#     See docs/peering-plan.md §2: FRR's own FlowSpec-to-dataplane bridge
+#     never installs the rule for real (confirmed, long-standing gap in
+#     FRR mainline, FRRouting/frr#3160) -- `flow` does, confirmed with a
+#     live `nft list ruleset` output. Installed from a prebuilt release
+#     binary (github.com/hack3ric/flow), no Rust toolchain needed.
+#   - exabgp                -- the BGP speaker mitigation/peering_backend.py
+#     talks to over its FIFO API; exabgp holds the actual session to `flow`.
+#   - softflowd + nfdump    -- ingress flow telemetry: softflowd sniffs
 #     r1's external interface and exports NetFlow/IPFIX to nfcapd (part
 #     of the nfdump suite), which collectors/peering_flow_collector.py
 #     reads via `nfdump -o csv`.
+#   - FRR (optional, --with-frr only) -- kept ONLY to reproduce the
+#     documented negative result in deploy/spike_flowspec_frr.sh. Not
+#     part of the working pipeline -- do not point mitigation/
+#     peering_backend.py at it.
 #
 # This script installs and enables the toolchain; it does NOT configure
-# the actual BGP session (peer IPs), FlowSpec address-family, or which
-# interface softflowd/nfcapd should watch -- those are the deployment
-# decisions the docs/peering-plan.md §2 spike works out for this
-# specific topology (r1's real interface names / addressing).
+# the actual BGP session (peer IPs/ASNs) or which interface softflowd/
+# nfcapd should watch -- those are the deployment decisions
+# docs/peering-plan.md §5 works out for this specific topology (r1's
+# real interface names / addressing inside Mininet).
 #
 # Usage:
-#   ./deploy/install_bgp_peering.sh                 # install everything
+#   ./deploy/install_bgp_peering.sh                 # install flow + exabgp + softflowd/nfdump
 #   ./deploy/install_bgp_peering.sh --check-only     # validate only, never install
-#   ./deploy/install_bgp_peering.sh --skip-frr-repo  # use Ubuntu's own frr package
-#                                                     # instead of frrouting.org's repo
+#   ./deploy/install_bgp_peering.sh --with-frr       # also install FRR (historical spike only)
+#   ./deploy/install_bgp_peering.sh --flow-version 0.2.0  # pin a specific flow release
 
 set -euo pipefail
 
 CHECK_ONLY=0
-SKIP_FRR_REPO=0
+WITH_FRR=0
+FLOW_VERSION="0.2.0"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --check-only) CHECK_ONLY=1; shift ;;
-    --skip-frr-repo) SKIP_FRR_REPO=1; shift ;;
-    -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --with-frr) WITH_FRR=1; shift ;;
+    --flow-version) FLOW_VERSION="$2"; shift 2 ;;
+    -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -46,56 +55,51 @@ if [ "$(uname -s)" != "Linux" ]; then
   fail "Este toolchain solo corre en Linux -- este script debe correr en la VM Ubuntu, no aquí."
 fi
 
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) FLOW_ARCH="x86_64-unknown-linux-gnu" ;;
+  aarch64) FLOW_ARCH="aarch64-unknown-linux-gnu" ;;
+  armv7l) FLOW_ARCH="armv7-unknown-linux-gnueabihf" ;;
+  *) FLOW_ARCH="" ;;
+esac
+
 # ---------------------------------------------------------------------
-# 1. FRR (bgpd + zebra)
+# 1. flow -- the real FlowSpec-to-nftables installer (see docs/peering-plan.md §2.2)
 # ---------------------------------------------------------------------
-echo "== 1. FRR (bgpd + zebra) =="
+echo "== 1. flow (FlowSpec -> nftables, github.com/hack3ric/flow) =="
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
-  dpkg -s frr >/dev/null 2>&1 && ok "paquete frr presente" || warn "paquete frr ausente"
-  command -v vtysh >/dev/null 2>&1 && ok "vtysh en PATH ($(vtysh --version 2>&1 | head -1))" || warn "vtysh no encontrado"
+  command -v flow >/dev/null 2>&1 && ok "flow en PATH ($(flow --help 2>&1 | head -1))" || warn "flow ausente"
+  command -v nft >/dev/null 2>&1 && ok "nft (nftables) en PATH" || warn "nft no encontrado"
 else
-  if dpkg -s frr >/dev/null 2>&1; then
-    ok "frr ya instalado ($(dpkg -s frr | awk -F': ' '/^Version/{print $2}'))"
-  elif [ "$SKIP_FRR_REPO" -eq 1 ]; then
-    warn "usando el paquete frr de los repos de Ubuntu (puede no soportar FlowSpec) -- ver --skip-frr-repo"
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq frr frr-pythontools
-    ok "frr instalado desde los repos de Ubuntu"
+  if command -v flow >/dev/null 2>&1; then
+    ok "flow ya instalado ($(command -v flow))"
   else
-    # FRR's official repo -- see https://deb.frrouting.org/. Pulls a
-    # current release rather than whatever Ubuntu's own repo happens to
-    # carry, since FlowSpec support is a relatively recent addition.
-    curl -fsSL https://deb.frrouting.org/frr/keys.gpg | sudo tee /usr/share/keyrings/frrouting.gpg >/dev/null
-    FRRVER="frr-stable"
-    echo "deb [signed-by=/usr/share/keyrings/frrouting.gpg] https://deb.frrouting.org/frr $(lsb_release -s -c) ${FRRVER}" \
-      | sudo tee /etc/apt/sources.list.d/frr.list >/dev/null
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq frr frr-pythontools
-    ok "frr instalado desde deb.frrouting.org ($(dpkg -s frr | awk -F': ' '/^Version/{print $2}'))"
+    [ -n "$FLOW_ARCH" ] || fail "arquitectura '$ARCH' sin binario precompilado de flow -- ver https://github.com/hack3ric/flow/releases"
+
+    TMPDIR="$(mktemp -d)"
+    ASSET="flow-${FLOW_VERSION}-${FLOW_ARCH}.tar.xz"
+    URL="https://github.com/hack3ric/flow/releases/download/v${FLOW_VERSION}/${ASSET}"
+
+    curl -fSL -o "${TMPDIR}/${ASSET}" "$URL"
+    curl -fSL -o "${TMPDIR}/${ASSET}.sha256" "${URL}.sha256"
+    # The .sha256 file lists the asset's own filename, which already
+    # matches what was just downloaded (no renaming here) -- so a plain
+    # `sha256sum -c` against it works without editing its contents.
+    (cd "$TMPDIR" && sha256sum -c "${ASSET}.sha256")
+    tar xf "${TMPDIR}/${ASSET}" -C "$TMPDIR"
+    sudo install -m 755 "${TMPDIR}/flow-${FLOW_VERSION}-${FLOW_ARCH}/flow" /usr/local/bin/flow
+    rm -rf "$TMPDIR"
+    ok "flow ${FLOW_VERSION} instalado en /usr/local/bin/flow (checksum verificado)"
   fi
 
-  # bgpd ships disabled by default on Debian/Ubuntu packages -- FRR
-  # itself will refuse to start it until this is flipped on.
-  if grep -q '^bgpd=no' /etc/frr/daemons 2>/dev/null; then
-    sudo sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons
-    ok "bgpd habilitado en /etc/frr/daemons"
-  elif grep -q '^bgpd=yes' /etc/frr/daemons 2>/dev/null; then
-    ok "bgpd ya habilitado en /etc/frr/daemons"
-  else
-    warn "/etc/frr/daemons no tiene una línea bgpd= reconocible -- revisar manualmente"
-  fi
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq nftables
+  ok "nftables instalado (lo que flow usa para instalar las reglas)"
 
-  sudo systemctl enable frr >/dev/null 2>&1 || warn "no se pudo habilitar el servicio frr (systemd no disponible?)"
-
-  # FRR's own FlowSpec-to-dataplane translation goes through PBR, which
-  # programs real iptables/ipset rules. Per FRR's own FlowSpec docs: if
-  # either tool is missing, that installation step fails SILENTLY --
-  # `show bgp ipv4 flowspec` still shows the received route, giving no
-  # indication anything is wrong. Installing both explicitly here so
-  # deploy/spike_flowspec_frr.sh isn't the first place this gets noticed.
-  sudo apt-get install -y -qq iptables ipset
-  ok "iptables/ipset instalados (requeridos por la instalación de FlowSpec en el plano de datos)"
+  # flow's default --run-dir is /run/flow.
+  sudo mkdir -p /run/flow
+  ok "/run/flow preparado"
 fi
 
 # ---------------------------------------------------------------------
@@ -155,12 +159,38 @@ else
 fi
 
 # ---------------------------------------------------------------------
+# 4. FRR (optional -- historical spike only, NOT part of the working pipeline)
+# ---------------------------------------------------------------------
+if [ "$WITH_FRR" -eq 1 ]; then
+  echo "== 4. FRR (--with-frr: solo para reproducir deploy/spike_flowspec_frr.sh) =="
+  warn "FRR NO se usa en el pipeline real -- ver docs/peering-plan.md §2.1. Instalando solo para reproducir el spike documentado como FAIL."
+
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    dpkg -s frr >/dev/null 2>&1 && ok "paquete frr presente" || warn "paquete frr ausente"
+  else
+    if dpkg -s frr >/dev/null 2>&1; then
+      ok "frr ya instalado ($(dpkg -s frr | awk -F': ' '/^Version/{print $2}'))"
+    else
+      curl -fsSL https://deb.frrouting.org/frr/keys.gpg | sudo tee /usr/share/keyrings/frrouting.gpg >/dev/null
+      echo "deb [signed-by=/usr/share/keyrings/frrouting.gpg] https://deb.frrouting.org/frr $(lsb_release -s -c) frr-stable" \
+        | sudo tee /etc/apt/sources.list.d/frr.list >/dev/null
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq frr frr-pythontools iptables ipset
+      ok "frr instalado desde deb.frrouting.org ($(dpkg -s frr | awk -F': ' '/^Version/{print $2}'))"
+    fi
+    if grep -q '^bgpd=no' /etc/frr/daemons 2>/dev/null; then
+      sudo sed -i 's/^bgpd=no/bgpd=yes/; s/^pbrd=no/pbrd=yes/' /etc/frr/daemons
+      ok "bgpd y pbrd habilitados en /etc/frr/daemons"
+    fi
+    sudo systemctl enable frr >/dev/null 2>&1 || true
+  fi
+fi
+
+# ---------------------------------------------------------------------
 echo
-echo "Instalación completa. Pendiente (docs/peering-plan.md §2, spike de FlowSpec):"
-echo "  - Configurar la sesión BGP real entre exabgp y r1 (FRR) -- IPs/ASN de este testbed."
-echo "  - Habilitar 'address-family ipv4 flowspec' en bgpd y confirmar que"
-echo "    FRR instala una regla real en nftables/iptables, no solo la ruta BGP."
+echo "Instalación completa. Pendiente (docs/peering-plan.md §5, integración con la topología real):"
+echo "  - Arrancar 'flow' en r1 dentro de la topología Mininet (no solo en el spike aislado)."
+echo "  - Configurar exabgp (mitigation/peering_backend.py) para apuntar a esa instancia de flow."
 echo "  - Apuntar softflowd a la interfaz externa real de r1 y confirmar que"
 echo "    nfcapd empieza a rotar archivos en /var/cache/nfcapd/r1."
-echo "  - Configurar el proceso 'api' de exabgp para leer del FIFO en /run/exabgp"
-echo "    (PEERING_EXABGP_FIFO en config/settings.py)."
+echo "  - Ver deploy/spike_flowspec_flow.sh para el procedimiento ya validado end-to-end."

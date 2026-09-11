@@ -3,15 +3,16 @@ telemetry/bgp_adapter.py — BGP Peering domain adapter.
 
 Telemetry : ingress flow records decoded from nfcapd/softflowd IPFIX
             captures (see collectors/peering_flow_collector.py).
-Mitigation: BGP FlowSpec discard route, announced to r1's FRR speaker
-            via mitigation/peering_backend.py (see docs/peering-plan.md).
+Mitigation: BGP FlowSpec discard route, announced to r1's `flow`
+            instance (github.com/hack3ric/flow -- not FRR, see
+            docs/peering-plan.md §2.1) via mitigation/peering_backend.py.
 
 is_connected() reflects whether the last collect() cycle could read the
 nfcapd capture directory at all -- it does NOT confirm the BGP session
-to r1 is up, nor that FlowSpec routes actually get installed in r1's
-dataplane. That capability is unverified (see docs/peering-plan.md §2,
-the FlowSpec spike); apply_mitigation() logs this caveat explicitly
-rather than reporting a confirmed block.
+to r1 is up. Real nftables installation via `flow` IS confirmed (see
+docs/peering-plan.md §2.2), but only against a standalone spike, not
+yet against r1 inside the actual Mininet topology; apply_mitigation()
+logs this caveat explicitly rather than reporting a confirmed block.
 """
 import logging
 import time
