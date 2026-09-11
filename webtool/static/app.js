@@ -6,7 +6,7 @@
 const socket = io();
 
 const DOMAIN_TO_PREFIX = { enterprise: "ent", mobile: "gnb", broadband: "fixed" };
-const DOMAIN_LABELS = { enterprise: "Enterprise", mobile: "Mobile", broadband: "Broadband" };
+const DOMAIN_LABELS = { enterprise: "Enterprise", mobile: "Mobile", broadband: "Broadband", bgp: "External Peering" };
 
 const el = (id) => document.getElementById(id);
 
@@ -33,6 +33,7 @@ const DOMAIN_COLORS = {
     enterprise: { background: "#dbe9ff", border: "#5b8def" },
     mobile: { background: "#ffe6d5", border: "#e8823c" },
     broadband: { background: "#dcf5df", border: "#4caf6b" },
+    bgp: { background: "#ead6fd", border: "#8e44ad" },
 };
 const ATTACKING_COLOR = { background: "#ffb3b3", border: "#c0392b" };
 const TARGET_COLOR = { background: "#fff3b0", border: "#e6b800" };
@@ -44,9 +45,16 @@ function renderTopologyGraph(nodes, activeAttacks) {
     const attackingIds = new Set();
     const targetIds = new Set();
     for (const a of activeAttacks || []) {
-        const prefix = DOMAIN_TO_PREFIX[a.domain];
-        if (prefix) {
-            for (const i of a.switch_indices || []) attackingIds.add(`${prefix}_${i}`);
+        if (a.domain === "bgp") {
+            // peer_ext is bgp's only possible source (see
+            // orchestrator.py's start_peering_attack) -- no
+            // switch_indices/DOMAIN_TO_PREFIX scheme applies to it.
+            attackingIds.add("peer_ext");
+        } else {
+            const prefix = DOMAIN_TO_PREFIX[a.domain];
+            if (prefix) {
+                for (const i of a.switch_indices || []) attackingIds.add(`${prefix}_${i}`);
+            }
         }
         const targetNode = (nodes || []).find((n) => n.ip === a.target_ip);
         if (targetNode) targetIds.add(targetNode.id);
@@ -78,6 +86,23 @@ function renderTopologyGraph(nodes, activeAttacks) {
         color: DOMAIN_COLORS.core,
     });
     edgesData.push({ from: "r1", to: "central_server" });
+
+    // peer_ext (external/upstream peer, docs/peering-plan.md §5) links
+    // directly to r1 like central_server -- no switch in between, so it
+    // never matches the switchIndices-driven loop below. Opposite angle
+    // from the central server so the two don't collide.
+    const peerExtNode = (nodes || []).find((n) => n.id === "peer_ext");
+    if (peerExtNode) {
+        const peerExtAngle = serverAngle + Math.PI;
+        const isAttacking = attackingIds.has("peer_ext");
+        nodesData.push({
+            id: "peer_ext", label: `peer_ext\n${peerExtNode.ip}`, shape: "ellipse",
+            x: R_SERVER * Math.cos(peerExtAngle), y: R_SERVER * Math.sin(peerExtAngle), fixed: true,
+            color: isAttacking ? ATTACKING_COLOR : DOMAIN_COLORS.bgp,
+            borderWidth: isAttacking ? 3 : 1,
+        });
+        edgesData.push({ from: "r1", to: "peer_ext" });
+    }
 
     switchIndices.forEach((si, idx) => {
         const angle = (idx / switchIndices.length) * 2 * Math.PI - Math.PI / 2;
@@ -153,6 +178,12 @@ el("attack-domain").onchange = () => {
     const domain = el("attack-domain").value;
     el("row-count-per-node").style.display = domain === "mobile" ? "" : "none";
 
+    // bgp has exactly one possible source (peer_ext) -- no switch
+    // selection applies, show a fixed label instead.
+    const isBgp = domain === "bgp";
+    el("row-switch-checks").style.display = isBgp ? "none" : "";
+    el("row-bgp-source").style.display = isBgp ? "" : "none";
+
     // SYN_DISTRIBUTED (8-session BNGBlaster scenario) only makes sense
     // for broadband -- enterprise/mobile already reach a distributed
     // attack via multiple switch_indices/count_per_node with plain SYN.
@@ -169,7 +200,11 @@ function renderTargetOptions(nodes) {
     const previous = select.value;
     select.innerHTML = "";
     (nodes || [])
-        .filter((n) => n.domain !== "core")
+        // peer_ext is bgp's attack SOURCE (orchestrator.py's
+        // valid_targets() never includes it either) -- excluded here
+        // the same way "core" (the central server, a valid target) is
+        // deliberately kept, just the opposite reason.
+        .filter((n) => n.domain !== "core" && n.id !== "peer_ext")
         .forEach((n) => {
             const opt = document.createElement("option");
             opt.value = n.ip;
@@ -184,7 +219,7 @@ el("attack-form").onsubmit = (ev) => {
 
     const domain = el("attack-domain").value;
     const switchIndices = [...document.querySelectorAll(".switch-check:checked")].map((c) => parseInt(c.value, 10));
-    if (switchIndices.length === 0) {
+    if (domain !== "bgp" && switchIndices.length === 0) {
         alert("Selecciona al menos un switch origen.");
         return;
     }
@@ -304,7 +339,7 @@ function renderAttacks(attacks) {
         <div class="attack-card">
           <div class="attack-info">
             <span class="attack-domain-tag tag-${a.domain}">${DOMAIN_LABELS[a.domain] || a.domain}</span>
-            switches=[${(a.switch_indices || []).join(",")}]
+            ${a.domain === "bgp" ? "origen=peer_ext" : `switches=[${(a.switch_indices || []).join(",")}]`}
             ${a.attack_type} -&gt; ${a.target_ip}
             (duracion: ${durationText}${elapsed !== null ? `, hace ${elapsed}s` : ""})
           </div>

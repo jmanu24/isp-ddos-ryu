@@ -54,7 +54,13 @@ _ATTACK_TYPES_BY_DOMAIN = {
     "enterprise": ("SYN", "UDP", "ICMP"),
     "mobile": ("SYN", "UDP", "ICMP"),
     "broadband": ("SYN", "UDP", "ICMP", "SYN_DISTRIBUTED"),
+    "bgp": ("SYN", "UDP", "ICMP"),
 }
+
+# bgp has exactly one possible source (peer_ext -- see
+# orchestrator.py's start_peering_attack), so it's the only domain with
+# no switch_indices selection at all.
+_DOMAINS_WITHOUT_SWITCH_SELECTION = {"bgp"}
 
 
 @app.route("/")
@@ -108,7 +114,7 @@ def attack_start():
 
     if domain not in _ATTACK_TYPES_BY_DOMAIN:
         return jsonify({"ok": False, "error": f"domain invalido: {domain}"}), 400
-    if not isinstance(switch_indices, list) or not switch_indices:
+    if domain not in _DOMAINS_WITHOUT_SWITCH_SELECTION and (not isinstance(switch_indices, list) or not switch_indices):
         return jsonify({"ok": False, "error": "switch_indices debe ser una lista no vacia"}), 400
     if attack_type not in _ATTACK_TYPES_BY_DOMAIN[domain]:
         return jsonify({"ok": False, "error": f"attack_type invalido para {domain}: {attack_type}"}), 400
@@ -136,8 +142,10 @@ def attack_start():
             switch_indices, attack_type, dst_port, target_ip,
             count_per_gnb=count_per_node, duration=duration,
         )
-    else:
+    elif domain == "broadband":
         result = orchestrator.start_broadband_attack(switch_indices, attack_type, target_ip, duration)
+    else:
+        result = orchestrator.start_peering_attack(attack_type, dst_port, target_ip, duration)
 
     return jsonify(result), (200 if result.get("ok") else 400)
 

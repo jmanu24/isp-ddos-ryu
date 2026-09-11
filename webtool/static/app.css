@@ -92,6 +92,7 @@ button:hover { background: #eee; }
 .swatch-enterprise { background: #dbe9ff; border-color: #5b8def; }
 .swatch-mobile { background: #ffe6d5; border-color: #e8823c; }
 .swatch-broadband { background: #dcf5df; border-color: #4caf6b; }
+.swatch-bgp { background: #ead6fd; border-color: #8e44ad; }
 .swatch-attacking { background: #ffb3b3; border-color: #c0392b; }
 .swatch-target { background: #fff3b0; border-color: #e6b800; }
 
@@ -154,6 +155,7 @@ button:hover { background: #eee; }
 .tag-enterprise { background: #5b8def; }
 .tag-mobile { background: #e8823c; }
 .tag-broadband { background: #4caf6b; }
+.tag-bgp { background: #8e44ad; }
 
 #scenario-group, #scenario-sub {
     min-width: 320px;

@@ -361,6 +361,34 @@ class Orchestrator:
             self._schedule_auto_stop(attack_id, duration)
             return {"ok": True, "attack_id": attack_id}
 
+    def start_peering_attack(self, attack_type: str, dst_port: int, target_ip: str,
+                              duration: Optional[float] = None, scenario: str = "manual") -> dict:
+        """
+        The "external attacker" leg -- unlike enterprise/mobile/broadband,
+        this domain has exactly one possible source (peer_ext, the host
+        attach_external_peer() links directly to r1, no switch in
+        between -- see topologies/star_topology.py), so there's no
+        switch_indices selection at all. Reuses enterprise_ops'
+        hping3_argv/start_attack/stop_attack unchanged -- launching a real
+        hping3 flood from any single Mininet host is the same operation
+        regardless of which domain that host belongs to.
+        """
+        with self._lock:
+            if self.peer_ext is None:
+                return {"ok": False, "error": "la topologia no esta corriendo"}
+            protocol = ATTACK_TYPE_TO_PROTOCOL[attack_type]
+            attack_id = str(uuid4())
+            proc = enterprise_ops.start_attack(self.peer_ext, protocol, dst_port, target_ip, ["--flood"])
+            self.enterprise_procs[attack_id] = [proc]
+            self._attack_domain[attack_id] = "bgp"
+            self._attack_scenario[attack_id] = scenario
+            webtool_state.add_attack(attack_id, {
+                "domain": "bgp", "switch_indices": [], "attack_type": attack_type,
+                "target_ip": target_ip, "started_at": time.time(), "duration": duration,
+            }, scenario=scenario)
+            self._schedule_auto_stop(attack_id, duration)
+            return {"ok": True, "attack_id": attack_id}
+
     def stop_attack(self, attack_id: str) -> dict:
         with self._lock:
             domain = self._attack_domain.pop(attack_id, None)
@@ -369,7 +397,7 @@ class Orchestrator:
             scenario = self._attack_scenario.pop(attack_id, "manual")
             self._cancel_timer(attack_id)
 
-            if domain == "enterprise":
+            if domain in ("enterprise", "bgp"):
                 for proc in self.enterprise_procs.pop(attack_id, []):
                     enterprise_ops.stop_attack(proc)
             elif domain == "mobile":

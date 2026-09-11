@@ -34,6 +34,7 @@
     <span class="legend-item"><span class="swatch swatch-enterprise"></span>enterprise</span>
     <span class="legend-item"><span class="swatch swatch-mobile"></span>mobile</span>
     <span class="legend-item"><span class="swatch swatch-broadband"></span>broadband</span>
+    <span class="legend-item"><span class="swatch swatch-bgp"></span>external peering (bgp)</span>
     <span class="legend-item"><span class="swatch swatch-attacking"></span>atacando</span>
     <span class="legend-item"><span class="swatch swatch-target"></span>objetivo</span>
   </div>
@@ -48,10 +49,11 @@
         <option value="enterprise">Enterprise</option>
         <option value="mobile">Mobile (gNB)</option>
         <option value="broadband">Broadband (BNG)</option>
+        <option value="bgp">External Peering (BGP)</option>
       </select>
     </div>
 
-    <div class="form-row">
+    <div class="form-row" id="row-switch-checks">
       <label>Switches origen</label>
       <div id="switch-checks" class="switch-checks">
         <label><input type="checkbox" class="switch-check" value="1"> s1</label>
@@ -59,6 +61,11 @@
         <label><input type="checkbox" class="switch-check" value="3"> s3</label>
         <label><input type="checkbox" class="switch-check" value="4"> s4</label>
       </div>
+    </div>
+
+    <div class="form-row" id="row-bgp-source" style="display:none">
+      <label>Origen</label>
+      <span>peer_ext (unico origen externo -- ver docs/peering-plan.md)</span>
     </div>
 
     <div class="form-row" id="row-count-per-node" style="display:none">
