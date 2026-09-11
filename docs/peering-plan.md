@@ -198,6 +198,23 @@ que un origen externo (`bgp`) gane sobre `in_port` es la opción evaluada y posp
 deliberadamente -- afecta la lógica de correlación para todos los dominios, no solo `bgp`, y
 merece su propia decisión de diseño antes de tocarla.
 
+**Segundo bug real, encontrado atacando `central_server` para validar lo anterior:** un SYN
+flood real desde `peer_ext` (confirmado capturado por `softflowd`/`nfcapd`, cientos de miles de
+paquetes) contra `central_server` no producía **ninguna** detección -- ni `[bgp]` ni
+`[enterprise]`, nada. Se descartó primero una hipótesis de proceso congelado (`strace` sobre el
+PID real de `ryu-manager` mostró actividad normal: lectura de CSVs de mobile/broadband, listado
+de `/var/cache/nfcapd/r1`, polling de flow-stats a los switches -- el controlador nunca se
+detuvo). La causa real: `collectors/peering_flow_collector.py`'s `_proto_name()` solo producía
+`"TCP"` genérico, nunca `"TCP_SYN"` -- y `detection/engine.py`'s `_PROTOCOL_CHECKS` filtra
+exactamente por `protocol == "TCP_SYN"` para el umbral `SYN_THRESHOLD`
+(`telemetry/openflow_adapter.py`'s propio camino de packet-in ya hace esta distinción:
+`is_bare_syn = SYN activo y ACK no activo`). Sin esa distinción, un SYN flood observado solo por
+`bgp` (como `central_server`, invisible para cualquier switch) nunca cruza el umbral de
+`SYN_FLOOD` ni cae en el fallback distribuido (que exige múltiples fuentes). **Fix:** usar la
+columna `flg` de `nfdump` (cadena fija de 8 caracteres CWR/ECE/URG/ACK/PSH/RST/SYN/FIN,
+confirmada contra capturas reales de la VM: `"......S."` para un SYN puro, `"...A.R.."` para su
+respuesta ACK+RST) para replicar la misma distinción `is_bare_syn` que ya usa OpenFlow.
+
 ## 3. Módulos nuevos y su responsabilidad
 
 ```mermaid
