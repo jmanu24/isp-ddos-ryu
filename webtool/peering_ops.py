@@ -140,6 +140,18 @@ class PeeringLifecycle:
         if not Path(fifo_path).exists():
             subprocess.run(["mkfifo", "-m", "666", fifo_path], check=True)
 
+        # flow derives its control socket's filename deterministically
+        # from its bind address:port (always the same PEERING_UPLINK_R1_IP
+        # here), so a prior instance killed ungracefully (e.g. a bare
+        # `pkill -9`, which never gives it the chance to clean up its own
+        # socket) leaves a stale file that a fresh flow then refuses to
+        # bind over ("Address already in use") -- confirmed on the VM.
+        # Mininet only isolates the network namespace, not the mount
+        # namespace, so /run/flow is the same host directory regardless
+        # of r1.popen() vs. the root namespace, safe to clear from here.
+        for stale_sock in Path("/run/flow").glob("*.sock"):
+            stale_sock.unlink(missing_ok=True)
+
         # `flow` runs INSIDE r1's own namespace (r1.popen, not a plain
         # subprocess.Popen) so its nftables installation lands on r1's
         # own dataplane -- the same distinction that made the standalone
