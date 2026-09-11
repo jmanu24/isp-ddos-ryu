@@ -43,6 +43,7 @@ from topologies.star_topology import (  # noqa: E402
 from simulation.gnb_pool import GnbManager  # noqa: E402
 from webtool import enterprise_ops  # noqa: E402
 from webtool.bng_ops import BngLifecycle  # noqa: E402
+from webtool.peering_ops import PeeringLifecycle  # noqa: E402
 from webtool.scenarios import SCENARIOS_BY_ID  # noqa: E402
 from webtool.state import webtool_state  # noqa: E402
 
@@ -112,6 +113,7 @@ class Orchestrator:
 
         self.gnb_manager: Optional[GnbManager] = None
         self.bng: Optional[BngLifecycle] = None
+        self.peering: Optional[PeeringLifecycle] = None
         self.monitor_proc = None
         self.enterprise_benign: Dict[int, object] = {}  # switch_index -> proc
 
@@ -214,6 +216,9 @@ class Orchestrator:
                 self.bng = BngLifecycle(target_ip=CENTRAL_SERVER_IP)
                 self.bng.start_baseline()
 
+                self.peering = PeeringLifecycle(self.r1)
+                self.peering.start()
+
                 self.enterprise_benign = {
                     i: enterprise_ops.start_benign_loop(roles[ROLE_ENTERPRISE], CENTRAL_SERVER_IP)
                     for i, roles in hosts.items()
@@ -256,6 +261,9 @@ class Orchestrator:
             if self.bng is not None:
                 self.bng.stop_all()
                 self.bng = None
+            if self.peering is not None:
+                self.peering.stop()
+                self.peering = None
             if self.monitor_proc is not None:
                 enterprise_ops.stop_attack(self.monitor_proc)
                 self.monitor_proc = None

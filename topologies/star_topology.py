@@ -47,6 +47,21 @@ CENTRAL_SERVER_IFACE = "r1-central0"
 CENTRAL_SERVER_IP = "10.99.0.1"
 CENTRAL_SERVER_CIDR = "10.99.0.1/24"
 
+# BGP Peering domain uplink (see docs/peering-plan.md §5): a veth pair
+# between the ROOT namespace (where webtool/orchestrator.py's exabgp
+# subprocess runs, alongside the Ryu controller itself) and r1's own
+# namespace (where `flow` runs, installing FlowSpec routes as real
+# nftables rules). 10.98.0.0/24 -- distinct from 10.50.0.0/24 (BNG),
+# 10.60.0.0/16 (mobile UEs), 10.61.x.0/24 (BNG sessions) and
+# 10.99.0.0/24 (central server), all already in use elsewhere in this
+# topology.
+PEERING_UPLINK_IFACE_ROOT = "veth-peering0"
+PEERING_UPLINK_IFACE_R1 = "veth-peering1"
+PEERING_UPLINK_ROOT_IP = "10.98.0.1"
+PEERING_UPLINK_ROOT_CIDR = "10.98.0.1/24"
+PEERING_UPLINK_R1_IP = "10.98.0.2"
+PEERING_UPLINK_R1_CIDR = "10.98.0.2/24"
+
 ROLE_ENTERPRISE = "enterprise"
 ROLE_MOBILE_GNB = "mobile_gnb"
 ROLE_FIXED = "fixed"
@@ -174,6 +189,55 @@ def attach_bng_gateway_to_r1(
     r1.cmd(f'ip addr add {addr_cidr} dev {network_peer}')
     print(f"*** {network_peer} movido al namespace de r1 ({addr_cidr}) -- "
           f"r1 es ahora el gateway de BNGBlaster")
+
+
+def attach_peering_uplink_to_r1(r1) -> None:
+    """
+    Gives r1 a genuine interface reachable from the ROOT namespace, for
+    the BGP Peering domain (docs/peering-plan.md §5): webtool/
+    orchestrator.py's `exabgp` subprocess (root namespace, alongside the
+    Ryu controller itself) needs a real routed path to `flow` (started
+    inside r1's own namespace by this same orchestrator, see
+    webtool/peering_ops.py), since `flow` is the process that actually
+    installs FlowSpec routes as nftables rules on r1.
+
+    Same veth + move-into-r1's-pid-namespace technique as
+    attach_bng_gateway_to_r1 above -- see that function's docstring for
+    why this is the correct way to attach a ROOT-namespace interface to
+    a Mininet node (which runs in a `mnexec -a`-managed namespace, not a
+    named `ip netns`). Must be called after build_topology() (i.e.
+    after net.start()), so r1.pid is valid.
+    """
+    subprocess.run(
+        ["ip", "link", "add", PEERING_UPLINK_IFACE_ROOT, "type", "veth",
+         "peer", "name", PEERING_UPLINK_IFACE_R1],
+        check=True,
+    )
+    subprocess.run(
+        ["ip", "addr", "add", PEERING_UPLINK_ROOT_CIDR, "dev", PEERING_UPLINK_IFACE_ROOT],
+        check=True,
+    )
+    subprocess.run(["ip", "link", "set", PEERING_UPLINK_IFACE_ROOT, "up"], check=True)
+
+    subprocess.run(
+        ["ip", "link", "set", PEERING_UPLINK_IFACE_R1, "netns", str(r1.pid)],
+        check=True,
+    )
+    r1.cmd(f'ip link set {PEERING_UPLINK_IFACE_R1} up')
+    r1.cmd(f'ip addr add {PEERING_UPLINK_R1_CIDR} dev {PEERING_UPLINK_IFACE_R1}')
+    print(f"*** {PEERING_UPLINK_IFACE_ROOT}/{PEERING_UPLINK_IFACE_R1} enlazados -- "
+          f"r1 alcanzable en {PEERING_UPLINK_R1_IP} desde el namespace raiz "
+          f"({PEERING_UPLINK_ROOT_IP})")
+
+
+def detach_peering_uplink(root_iface: str = PEERING_UPLINK_IFACE_ROOT) -> None:
+    """
+    Deletes the veth pair from the ROOT namespace side -- deleting either
+    end of a veth pair removes both, same convention as net.stop() itself
+    tearing down Mininet's own links. Best-effort: the interface may
+    already be gone if r1's own namespace was torn down first.
+    """
+    subprocess.run(["ip", "link", "del", root_iface], check=False)
 
 
 if __name__ == '__main__':

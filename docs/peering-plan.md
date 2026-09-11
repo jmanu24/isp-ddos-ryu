@@ -137,9 +137,14 @@ flowchart LR
 - `webtool/static/app.js:318` (`BLOCK_DOMAIN_LABELS`): ya tiene `bgp: "BGP"` — sin cambios
   necesarios, pero verificar que la UI de bloqueos activos muestre la acción correcta una
   vez que `bgp_flowspec_discard` empiece a aparecer en logs/estado real.
-- `topologies/star_topology.py`: `r1` (`LinuxRouter`) necesita arrancar `flow` (no FRR) al
-  inicializar la topología, escuchando en la interfaz/dirección que `mitigation/
-  peering_backend.py`'s `exabgp` usará como peer.
+- `topologies/star_topology.py`: **hecho.** `attach_peering_uplink_to_r1()` da a `r1` una
+  interfaz real (`10.98.0.2`, veth) alcanzable desde el namespace raíz (`10.98.0.1`), mismo
+  patrón que `attach_bng_gateway_to_r1`.
+- `webtool/peering_ops.py` (nuevo): **hecho, sin validar en la VM todavía.** `PeeringLifecycle`
+  arranca `flow` dentro del namespace de `r1` (vía `r1.popen`, escuchando en `10.98.0.2:179`)
+  y `exabgp` en el namespace raíz (junto al propio controlador Ryu), generando su
+  `exabgp.conf` apuntando a esa dirección. Cableado en `webtool/orchestrator.py`'s
+  `start_topology()`/`stop_topology()`, simétrico a como ya maneja BNG.
 
 ## 5. Orden de entrega
 
@@ -150,20 +155,22 @@ flowchart LR
    de exportación) antes de escribir el parser en Python.
 3. `collectors/peering_flow_collector.py` + `telemetry/bgp_adapter.py` (telemetría real,
    sin mitigación todavía) — validar que el detection engine ve tráfico de peering real.
-4. Integrar `flow` como el proceso que corre en `r1` dentro de la topología Mininet (no solo
-   en el spike aislado) + validar `mitigation/peering_backend.py` contra esa instancia real,
-   incluyendo la medición de *efecto* sobre tráfico generado (no solo la instalación de la
-   regla, ya confirmada en el spike).
-5. Actualizar los 3 puntos de código existente (§4) y el webtool.
+4. ~~Integrar `flow` dentro de la topología Mininet~~ **Código escrito (§4:
+   `attach_peering_uplink_to_r1` + `webtool/peering_ops.py`), pendiente de correr
+   `start_topology()` en la VM y confirmar que la sesión `exabgp`↔`flow` se establece igual
+   que en el spike aislado, y que una regla anunciada realmente aparece en el `nftables` de `r1`.**
+5. Actualizar los 3 puntos de código existente (§4) y el webtool. **Hecho** salvo
+   `webtool/static/app.js` (sin cambios necesarios, ver nota en §4).
 6. Escenario de ataque end-to-end contra el dominio peering (uno de los "24 casos básicos"
    de la matriz de `thesis-revision-plan.md`), con medición de Td/Tdispatch/Tapply/Tefecto.
 
 ## 6. Criterio de salida de la fase (igual al de `implementation-design.md` §6)
 
 **"Router instala y retira política; efecto medido."** La instalación y el retiro reales ya
-están confirmados (§2.2: `announce` y `withdraw` verificados con regla real de `nftables`
-apareciendo y desapareciendo). No declarar la fase E completa mientras falte:
-- Integrar `flow` dentro de la topología Mininet real (el spike corrió aislado, sobre la VM).
+están confirmados en el spike aislado (§2.2: `announce` y `withdraw` verificados con regla
+real de `nftables` apareciendo y desapareciendo). No declarar la fase E completa mientras falte:
+- **Validar en la VM** que `webtool/peering_ops.py` reproduce ese mismo resultado dentro de
+  la topología Mininet real (el código ya existe, §4, pero no se ha corrido todavía).
 - Confirmar el retiro por **expiración de TTL** desde `mitigation/peering_backend.py`
   (`MitigationAction.duration`), no solo por un `withdraw` manual vía FIFO como en el spike.
 - El colector IPFIX produce eventos pero nunca se validó contra una captura de referencia.
