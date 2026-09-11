@@ -109,11 +109,15 @@ def _block_intervals(events):
 
 
 def _decode_nfcapd_dir(capture_dir: str, nfdump_bin: str):
-    """(datetime, src_ip, dst_ip) for every flow record across every capture
-    file currently in the directory -- this script reads the WHOLE
-    directory after the test, not collectors/peering_flow_collector.py's
-    own live-polling "skip the last file" semantics (irrelevant here,
-    every file involved is long since rotated by the time this runs)."""
+    """(datetime, src_ip, dst_ip, td, ipkt, ibyt, file) for every flow record
+    across every capture file currently in the directory -- this script
+    reads the WHOLE directory after the test, not collectors/
+    peering_flow_collector.py's own live-polling "skip the last file"
+    semantics (irrelevant here, every file involved is long since rotated
+    by the time this runs). Packet/byte/duration fields carried through so
+    any stray inside-block record can be inspected for its actual size,
+    not just its existence.
+    """
     records = []
     for path in sorted(Path(capture_dir).glob("nfcapd.*")):
         if path.name.startswith("nfcapd.current."):
@@ -132,9 +136,12 @@ def _decode_nfcapd_dir(capture_dir: str, nfdump_bin: str):
                 continue
             try:
                 ts = datetime.strptime(ts_raw[:19], _FMT)
-            except ValueError:
+                td = float(row.get("td", 0) or 0)
+                ipkt = int(row.get("ipkt", 0) or 0)
+                ibyt = int(row.get("ibyt", 0) or 0)
+            except (ValueError, TypeError):
                 continue
-            records.append((ts, sa, da))
+            records.append((ts, sa, da, td, ipkt, ibyt, path.name))
     return records
 
 
@@ -194,8 +201,8 @@ def main() -> bool:
         print("\n=== 5. Decodificando capturas nfcapd y comparando trafico de respuesta ===")
         records = _decode_nfcapd_dir(settings.PEERING_NFCAPD_DIR, settings.PEERING_NFDUMP_BIN)
         replies = [
-            (ts, sa, da) for ts, sa, da in records
-            if sa == CENTRAL_SERVER_IP and da == EXTERNAL_PEER_IP
+            r for r in records
+            if r[1] == CENTRAL_SERVER_IP and r[2] == EXTERNAL_PEER_IP
         ]
         print(f"    registros totales decodificados: {len(records)}, "
               f"de respuesta (central_server -> peer_ext): {len(replies)}")
@@ -209,22 +216,30 @@ def main() -> bool:
         replies_inside = [r for r in replies if _inside_any_interval(r[0])]
         replies_outside = [r for r in replies if not _inside_any_interval(r[0])]
 
+        pkts_outside = sum(r[4] for r in replies_outside)
+        pkts_inside = sum(r[4] for r in replies_inside)
+
         all_ok &= check(
             f"trafico de respuesta visto FUERA de la ventana de bloqueo "
-            f"({len(replies_outside)} registros -- confirma que central_server "
-            f"responde normalmente sin el bloqueo activo)",
+            f"({len(replies_outside)} registros, {pkts_outside} paquetes -- "
+            f"confirma que central_server responde normalmente sin el "
+            f"bloqueo activo)",
             len(replies_outside) > 0,
         )
         all_ok &= check(
             f"CERO trafico de respuesta visto DENTRO de la ventana de bloqueo "
-            f"({len(replies_inside)} registros -- confirma que el paquete se "
-            f"descarta de verdad, no solo que la regla existe)",
+            f"({len(replies_inside)} registros, {pkts_inside} paquetes -- "
+            f"confirma que el paquete se descarta de verdad, no solo que la "
+            f"regla existe)",
             len(replies_inside) == 0,
         )
+        print(f"    detalle completo, fuera del bloqueo (linea base para comparar):")
+        for ts, sa, da, td, ipkt, ibyt, fname in replies_outside:
+            print(f"      {ts}  {sa} -> {da}  td={td:.3f}s ipkt={ipkt} ibyt={ibyt}  ({fname})")
         if replies_inside:
-            print("    registros de respuesta inesperados dentro del bloqueo:")
-            for ts, sa, da in replies_inside:
-                print(f"      {ts}  {sa} -> {da}")
+            print("    registros de respuesta inesperados DENTRO del bloqueo:")
+            for ts, sa, da, td, ipkt, ibyt, fname in replies_inside:
+                print(f"      {ts}  {sa} -> {da}  td={td:.3f}s ipkt={ipkt} ibyt={ibyt}  ({fname})")
 
     finally:
         print("\n=== 6. Apagando (stop_topology + stop_controller) ===")
