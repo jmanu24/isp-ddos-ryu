@@ -27,9 +27,34 @@ import config.settings as settings
 _PROTO_NAMES = {"TCP": "TCP", "UDP": "UDP", "ICMP": "ICMP"}
 
 
-def _proto_name(raw: str) -> str:
-    raw = (raw or "").strip().upper()
-    return _PROTO_NAMES.get(raw, raw or "IP")
+def _proto_name(raw_proto: str, raw_flags: str = "") -> str:
+    """
+    A bare SYN (SYN set, ACK not set -- a flood/half-open connection
+    attempt, as opposed to a normal established-connection packet) needs
+    its own "TCP_SYN" tag, not generic "TCP": detection/engine.py's
+    _PROTOCOL_CHECKS filters on protocol == "TCP_SYN" specifically for
+    its SYN_FLOOD threshold, the same distinction
+    telemetry/openflow_adapter.py's own packet-in path already makes
+    (is_bare_syn = SYN set and not ACK set). Without this, a real SYN
+    flood observed by this domain's own telemetry (confirmed via
+    softflowd/nfcapd capturing it) would never classify as SYN_FLOOD --
+    it would just be generic "TCP", invisible to that check, and (since
+    this domain's own destination is rarely shared with another domain's
+    telemetry, so there's usually no second source to fall back to)
+    invisible to the distributed-flood fallback too.
+
+    nfdump's `flg` column is a fixed-width 8-character string, one
+    column per flag in order CWR,ECE,URG,ACK,PSH,RST,SYN,FIN ('.' where
+    unset) -- confirmed against real captures on the VM: "......S." for
+    a bare SYN, "...A.R.." for its ACK+RST reply.
+    """
+    raw_proto = (raw_proto or "").strip().upper()
+    if raw_proto == "TCP":
+        flags = (raw_flags or "").strip()
+        if len(flags) == 8 and flags[6] == "S" and flags[3] != "A":
+            return "TCP_SYN"
+        return "TCP"
+    return _PROTO_NAMES.get(raw_proto, raw_proto or "IP")
 
 
 class PeeringFlowCollector:
@@ -120,7 +145,7 @@ class PeeringFlowCollector:
         nfdump's `-o csv` output includes its own header row -- csv.DictReader
         picks up field names from it directly rather than this module
         hardcoding a column order that varies across nfdump versions.
-        Short field names used below (sa/da/dp/pr/td/ipkt/ibyt) match
+        Short field names used below (sa/da/dp/pr/td/ipkt/ibyt/flg) match
         nfdump 1.7.x's csv output; verify against `nfdump -o csv -c 1`
         on the deployed version if this ever stops parsing.
         """
@@ -138,7 +163,7 @@ class PeeringFlowCollector:
                     "src_ip": src_ip,
                     "dst_ip": dst_ip,
                     "dst_port": int(row.get("dp") or 0),
-                    "protocol": _proto_name(row.get("pr", "")),
+                    "protocol": _proto_name(row.get("pr", ""), row.get("flg", "")),
                     "pps": packets / duration_s,
                     "bps": byte_count / duration_s,
                 })
