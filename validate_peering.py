@@ -19,6 +19,7 @@ Prerequisites:
 Usage:
   sudo python3 validate_peering.py
 """
+import os
 import subprocess
 import sys
 import time
@@ -27,6 +28,7 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_DIR))
 
+import config.settings as settings  # noqa: E402
 from topologies.star_topology import (  # noqa: E402
     build_topology, add_central_server, _disable_rp_filter_star,
     attach_external_peer, R1_EXTERNAL_IP, EXTERNAL_PEER_IP,
@@ -140,16 +142,22 @@ def main() -> bool:
         flood_proc.kill()
     all_ok &= check("flood ICMP peer_ext -> r1 ejecutado (2s)", True)
 
-    # collectors/peering_flow_collector.py now trusts any file nfcapd
-    # hasn't named nfcapd.current.<pid> as complete -- nfcapd only gives
-    # a file its permanent nfcapd.<timestamp> name via an atomic rename
-    # on rotation, so there's no need to wait for a SECOND rotation
-    # (the collector's original, more conservative design) before ours
-    # is safe to read. One interval plus margin for nfcapd to actually
-    # perform that rotation and rename is enough.
-    wait_s = NFCAPD_ROTATE_SECONDS + 3
-    print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
+    # DIAGNOSTIC (temporary): a real run showed the flood's data file only
+    # getting its permanent nfcapd.<timestamp> name at peering.stop()'s
+    # SIGTERM-triggered final flush, well after this wait+poll() already
+    # ran and found nothing -- meaning nfcapd wasn't performing a natural,
+    # timed rotation within NFCAPD_ROTATE_SECONDS+3s at all. Waiting much
+    # longer here, and dumping the directory state right before poll(),
+    # to see directly how long a real rotation actually takes from a
+    # clean nfcapd start (removing the SIGTERM-flush confound entirely).
+    wait_s = NFCAPD_ROTATE_SECONDS * 4 + 5
+    print(f"    esperando {wait_s}s (diagnostico: bastante mas que "
+          f"NFCAPD_ROTATE_SECONDS+3) a que nfcapd rote un archivo de captura...")
     time.sleep(wait_s)
+
+    print(f"    estado de {settings.PEERING_NFCAPD_DIR} justo antes de poll():")
+    for fname in sorted(os.listdir(settings.PEERING_NFCAPD_DIR)):
+        print(f"      {fname}")
 
     records = collector.poll()
     saw_traffic = any(r["src_ip"] == EXTERNAL_PEER_IP or r["dst_ip"] == EXTERNAL_PEER_IP for r in records)
