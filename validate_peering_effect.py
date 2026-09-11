@@ -66,6 +66,11 @@ ATTACK_DURATION_S = 100
 # rotation (5s interval, needs to be no longer the "last" file -- see
 # collectors/peering_flow_collector.py) and one more detection cycle.
 POST_ATTACK_WAIT_S = 15
+# How often to poll `nft list ruleset` on r1 during the wait, to catch a
+# real-time rule presence/absence flip (see the "45-48s gap" comment
+# where this gets used) -- cheap enough to run every second without
+# meaningfully perturbing anything.
+RULE_POLL_INTERVAL_S = 1.0
 
 _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 _FMT = "%Y-%m-%d %H:%M:%S"
@@ -167,6 +172,7 @@ def main() -> bool:
         return False
 
     try:
+        run_start = datetime.now()
         print(f"\n=== 3. Lanzando flood SYN real (bgp) desde peer_ext -> "
               f"central_server ({ATTACK_DURATION_S}s) ===")
         result = orchestrator.start_peering_attack(
@@ -176,8 +182,26 @@ def main() -> bool:
 
         wait_s = ATTACK_DURATION_S + POST_ATTACK_WAIT_S
         print(f"    esperando {wait_s}s (duracion del ataque + margen de "
-              f"telemetria) mientras el motor de deteccion real decide...")
-        time.sleep(wait_s)
+              f"telemetria) mientras el motor de deteccion real decide -- "
+              f"vigilando el estado real de la regla nftables cada "
+              f"{RULE_POLL_INTERVAL_S}s...")
+        # An earlier run found a full-volume reply burst ~45-48s into a
+        # 60s block window, on TWO independent runs -- not a couple of
+        # stray packets, a real gap. Polling `nft list ruleset` directly
+        # (not just trusting the controller's own DISCARD/WITHDRAWN log
+        # lines) tells us whether the rule itself briefly disappears from
+        # the kernel during that gap (a `flow` reliability issue) or stays
+        # installed the whole time (pointing elsewhere, e.g. conntrack).
+        rule_transitions = []
+        last_state = None
+        deadline = time.time() + wait_s
+        while time.time() < deadline:
+            ruleset = orchestrator.r1.cmd("nft list ruleset")
+            present = CENTRAL_SERVER_IP in ruleset
+            if present != last_state:
+                rule_transitions.append((datetime.now(), "RULE_PRESENT" if present else "RULE_ABSENT"))
+                last_state = present
+            time.sleep(RULE_POLL_INTERVAL_S)
 
         print("\n=== 4. Leyendo el log del controlador ===")
         log_text = Path(CONTROLLER_LOG_PATH).read_text()
@@ -198,8 +222,25 @@ def main() -> bool:
         else:
             print(f"    ventanas de bloqueo detectadas: {len(intervals)}")
 
+        print(f"\n    estado real de 'nft list ruleset' en r1 (polling cada "
+              f"{RULE_POLL_INTERVAL_S}s durante la espera):")
+        for ts, state in rule_transitions:
+            print(f"      {ts.strftime(_FMT)}  {state}")
+        if not rule_transitions:
+            print("      (nunca se detecto la regla presente durante el polling)")
+
         print("\n=== 5. Decodificando capturas nfcapd y comparando trafico de respuesta ===")
-        records = _decode_nfcapd_dir(settings.PEERING_NFCAPD_DIR, settings.PEERING_NFDUMP_BIN)
+        # PEERING_NFCAPD_DIR accumulates capture files across every past
+        # test session (nfcapd only prunes by its own retention window,
+        # not by "this script's" lifetime) -- confirmed on the VM: an
+        # unfiltered read here mixed in reply records from hours-old
+        # sessions as if they were this run's own "before the block"
+        # baseline. Only records from at or after this run's own start
+        # are this test's.
+        records = [
+            r for r in _decode_nfcapd_dir(settings.PEERING_NFCAPD_DIR, settings.PEERING_NFDUMP_BIN)
+            if r[0] >= run_start
+        ]
         replies = [
             r for r in records
             if r[1] == CENTRAL_SERVER_IP and r[2] == EXTERNAL_PEER_IP
