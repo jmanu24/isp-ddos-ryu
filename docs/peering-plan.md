@@ -396,6 +396,33 @@ declarar la fase E completa mientras falte:
   requerir un cambio de arquitectura (p. ej. que `collectors/peering_flow_collector.py` lea con
   seguridad el archivo aún abierto de `nfcapd` vía un chequeo de antigüedad por `mtime`, en vez
   de siempre saltarse el último), no más ajuste de timeouts.
+
+  **Ese cambio de arquitectura, implementado (2026-09-11):**
+  `collectors/peering_flow_collector.py` ya no espera a que exista una rotación SUBSIGUIENTE
+  para confiar en un archivo -- confía en cualquier archivo que `nfcapd` ya no esté llamando
+  `nfcapd.current.<pid>` (esa convención de renombrado atómico al cerrar ya garantiza que está
+  completo, confirmado empíricamente por los archivos huérfanos `nfcapd.current.<PID>`
+  documentados arriba). `validate_peering.py` ajustado a esperar solo una rotación, no dos.
+
+  **Pero surgió un segundo problema real, más profundo, al probar el cambio:** con el flood
+  corto (2s) de `validate_peering.py`, el collector seguía viendo `[]` incluso con la nueva
+  lógica y esperas mucho más largas (hasta 25s) que evitan por completo el flush forzado por
+  `SIGTERM` del teardown. El log de `nfcapd` mostraba hasta 7 rotaciones internas completadas,
+  pero solo 2-3 nombres de archivo únicos sobrevivían en disco. Causa raíz: `nfdump -V` confirmó
+  que esta VM corre **nfdump/nfcapd 1.6.18** -- una versión anterior al fix upstream (~1.7.x)
+  que extiende el nombre de archivo para incluir segundos cuando el intervalo de rotación es
+  menor a 60s. En 1.6.18, el nombre siempre es `nfcapd.YYYYMMDDhhmm` (solo minuto), así que con
+  `NFCAPD_ROTATE_SECONDS=5`, cualquier par de rotaciones que caiga dentro del mismo minuto de
+  reloj **se sobrescribe entre sí** en silencio -- si el flood aterriza en una rotación que
+  luego una rotación vacía posterior (dentro del mismo minuto) sobrescribe, los datos reales se
+  pierden sin ningún error visible. Este riesgo **siempre existió**, incluso con el diseño
+  original del collector (que por pura suerte de timing rara vez lo exponía, dado que
+  `validate_peering_effect.py`'s ataques de 100+s casi siempre cruzan un límite de minuto de
+  forma segura) -- el rediseño del collector y los tiempos de espera más cortos simplemente lo
+  hicieron mucho más visible con el flood corto de `validate_peering.py`. **Fix:**
+  `deploy/install_bgp_peering.sh` ahora compila `nfdump` 1.7.4 desde código fuente (el paquete
+  de apt de Ubuntu 20.04 sigue fijo en 1.6.18), eliminando por completo el riesgo de colisión y
+  permitiendo mantener una rotación rápida (2-5s) de forma segura.
 - ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Caso formal
   completo confirmado (2026-09-11):** `bgp` / SYN / DoS monofuente, ataque real desde `peer_ext`
   contra `central_server`, motor de detección real (no `validate_peering.py`):
