@@ -163,6 +163,8 @@ flowchart LR
    `attach_peering_uplink_to_r1`), y el ciclo `announce`→regla real en `nft list ruleset`
    dentro de `r1`→`withdraw`→regla removida, confirmado con `r1.cmd("nft list ruleset")`
    antes y después. Teardown (`peering.stop()` + `net.stop()`) limpio, sin errores.
+   Formalizado como `validate_peering.py` (raíz del repo, mismo patrón que
+   `validate_phase1.py`) — `sudo python3 validate_peering.py` reproduce esta validación.
 5. Actualizar los 3 puntos de código existente (§4) y el webtool. **Hecho** salvo
    `webtool/static/app.js` (sin cambios necesarios, ver nota en §4).
 6. Escenario de ataque end-to-end contra el dominio peering (uno de los "24 casos básicos"
