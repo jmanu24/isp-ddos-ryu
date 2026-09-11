@@ -1,0 +1,18 @@
+2026-09-11 18:59:54 INFO [webtool] CONTROLLER_STATUS: status=starting
+2026-09-11 18:59:55 INFO [webtool] CONTROLLER_STATUS: status=running
+2026-09-11 18:59:55 INFO [webtool] TOPOLOGY_STATUS: status=starting
+2026-09-11 19:00:07 INFO [webtool] TOPOLOGY_STATUS: status=running
+2026-09-11 19:00:07 INFO [webtool] ATTACK_START: scenario=matrix_bgp_SYN_DoS domain=bgp switches=[] tipo=SYN target=10.99.0.1 attack_id=ffe2f996-b947-44c5-b90e-d64040ed6665
+2026-09-11 19:00:37 INFO [webtool] ATTACK_STOP: scenario=matrix_bgp_SYN_DoS domain=bgp switches=[] tipo=SYN target=10.99.0.1 attack_id=ffe2f996-b947-44c5-b90e-d64040ed6665
+2026-09-11 19:01:37 INFO [webtool] ATTACK_START: scenario=matrix_bgp_SYN_DDoS domain=bgp switches=[] tipo=SYN target=10.99.0.1 attack_id=6512d24e-e4e2-4bf3-8e76-06c9f67d7743
+2026-09-11 19:02:07 INFO [webtool] ATTACK_STOP: scenario=matrix_bgp_SYN_DDoS domain=bgp switches=[] tipo=SYN target=10.99.0.1 attack_id=6512d24e-e4e2-4bf3-8e76-06c9f67d7743
+2026-09-11 19:03:07 INFO [webtool] ATTACK_START: scenario=matrix_bgp_UDP_DoS domain=bgp switches=[] tipo=UDP target=10.99.0.1 attack_id=339fa1be-1ca4-4944-9364-d603608a174e
+2026-09-11 19:03:37 INFO [webtool] ATTACK_STOP: scenario=matrix_bgp_UDP_DoS domain=bgp switches=[] tipo=UDP target=10.99.0.1 attack_id=339fa1be-1ca4-4944-9364-d603608a174e
+2026-09-11 19:04:37 INFO [webtool] ATTACK_START: scenario=matrix_bgp_UDP_DDoS domain=bgp switches=[] tipo=UDP target=10.99.0.1 attack_id=fbde6527-e5fb-4f69-8868-76db98769aa6
+2026-09-11 19:05:07 INFO [webtool] ATTACK_STOP: scenario=matrix_bgp_UDP_DDoS domain=bgp switches=[] tipo=UDP target=10.99.0.1 attack_id=fbde6527-e5fb-4f69-8868-76db98769aa6
+2026-09-11 19:06:07 INFO [webtool] ATTACK_START: scenario=matrix_bgp_ICMP_DoS domain=bgp switches=[] tipo=ICMP target=10.99.0.1 attack_id=6b297282-5782-48cb-8fa4-2093ffedf1cf
+2026-09-11 19:06:37 INFO [webtool] ATTACK_STOP: scenario=matrix_bgp_ICMP_DoS domain=bgp switches=[] tipo=ICMP target=10.99.0.1 attack_id=6b297282-5782-48cb-8fa4-2093ffedf1cf
+2026-09-11 19:07:37 INFO [webtool] ATTACK_START: scenario=matrix_bgp_ICMP_DDoS domain=bgp switches=[] tipo=ICMP target=10.99.0.1 attack_id=95531906-66a7-4585-9ce6-fc554ed025ae
+2026-09-11 19:08:07 INFO [webtool] ATTACK_STOP: scenario=matrix_bgp_ICMP_DDoS domain=bgp switches=[] tipo=ICMP target=10.99.0.1 attack_id=95531906-66a7-4585-9ce6-fc554ed025ae
+2026-09-11 19:09:12 INFO [webtool] TOPOLOGY_STATUS: status=stopped
+2026-09-11 19:09:12 INFO [webtool] CONTROLLER_STATUS: status=stopped

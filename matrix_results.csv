@@ -1,0 +1,7 @@
+domain,vector,mode,scenario,Td_s,Tm_s,Tu_s,note
+bgp,SYN,DoS,matrix_bgp_SYN_DoS,6.0,0.0,60.0,
+bgp,SYN,DDoS,matrix_bgp_SYN_DDoS,1.0,0.0,69.0,
+bgp,UDP,DoS,matrix_bgp_UDP_DoS,6.0,0.0,60.0,
+bgp,UDP,DDoS,matrix_bgp_UDP_DDoS,1.0,0.0,,
+bgp,ICMP,DoS,matrix_bgp_ICMP_DoS,2.0,0.0,0.0,
+bgp,ICMP,DDoS,matrix_bgp_ICMP_DDoS,1.0,0.0,79.0,
