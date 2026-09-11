@@ -330,9 +330,29 @@ declarar la fase E completa mientras falte:
   activo (el UDP, aún corriendo, se re-detectó 9s después del retiro y se re-bloqueó con su
   propia ventana fresca, retirada de nuevo a los 60s exactos) -- ciclo completo
   detección→anuncio→bloqueo→expiración→re-detección→re-bloqueo confirmado.
-- Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
-  a cero mientras la regla está activa (las pruebas hasta ahora confirman que la regla existe
-  en `nftables`, no que descarta tráfico real observado end-to-end).
+- ~~Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
+  a cero mientras la regla está activa~~ **Confirmado en la VM (2026-09-11) con
+  `validate_peering_effect.py`** (nuevo script, automatiza todo el ciclo: arranca el
+  controlador real + topología, lanza un flood SYN real desde `peer_ext` contra
+  `central_server`, deja que el motor de detección decida por sí solo, y compara el tráfico de
+  **respuesta** de `central_server` -- los RST de TCP que el kernel genera solo si el paquete
+  llega a entrega local -- antes/durante/después del bloqueo). El tráfico entrante del atacante
+  no sirve como señal de efecto real: `softflowd` lo captura en `r1-ext0` *antes* de que
+  `nftables` decida, así que se ve igual con o sin bloqueo (la misma razón por la que `bgp`
+  necesitó `PRESENCE_BLIND_DOMAINS`, ver arriba). El script además vigila `nft list ruleset` en
+  vivo (cada 1s) durante toda la espera, no solo confía en los timestamps del log.
+  **Resultado de la corrida más limpia:** la regla apareció exactamente junto con
+  `BGP_FLOWSPEC_DISCARD`, se mantuvo presente sin interrupciones observadas, y el tráfico de
+  respuesta cayó a **cero** registros mientras estuvo activa (vs. 233,870 paquetes normales
+  fuera de la ventana). Dos corridas anteriores, menos controladas (arrancadas sin una limpieza
+  completa entre pruebas consecutivas, una de ellas tras un reintento de topología por
+  `RTNETLINK`), mostraron una ráfaga de respuesta a volumen completo colándose ~45-48s dentro de
+  la ventana de bloqueo -- no se pudo reproducir en la corrida limpia e instrumentada con el
+  polling de `nft list ruleset`, así que la hipótesis más plausible es contaminación de estado
+  entre pruebas (p. ej. un `nfcapd`/`softflowd`/`flow` residual de una sesión anterior, como el
+  `nfcapd.current.<PID>` huérfano documentado en §2.3), no una falla real del bloqueo -- pero
+  esto queda anotado honestamente como no descartado del todo con una sola corrida limpia de
+  respaldo.
 - ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Camino
   detección→mitigación confirmado (§2.4, 2026-09-11)**: `ATTACK_DETECTED SYN_FLOOD` →
   `FLOWSPEC_ANNOUNCED` → `BGP_FLOWSPEC_DISCARD` disparado por el motor de detección real (no
