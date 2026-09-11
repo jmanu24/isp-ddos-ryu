@@ -53,7 +53,21 @@ class PeeringFlowCollector:
         self.capture_dir = capture_dir or settings.PEERING_NFCAPD_DIR
         self.nfdump_bin = nfdump_bin or settings.PEERING_NFDUMP_BIN
         self.logger = logger or logging.getLogger(__name__)
-        self._processed_files = set()
+        # Seed with whatever's already on disk -- "tail -f" semantics, not
+        # "read everything ever captured". Without this, a fresh controller
+        # start replays hours-old capture files from an unrelated earlier
+        # test session as if they were a live attack: confirmed on the VM,
+        # where a stray nfcapd file from an earlier validate_peering.py run
+        # fired a real (bogus) BGP_FLOWSPEC_DISCARD mitigation attempt the
+        # moment ryu-manager booted, before the topology (and thus flow/
+        # exabgp) even existed to receive it.
+        self._processed_files = set(self._existing_files())
+
+    def _existing_files(self) -> List[str]:
+        try:
+            return [f for f in os.listdir(self.capture_dir) if f.startswith("nfcapd.")]
+        except OSError:
+            return []
 
     def poll(self) -> List[Dict]:
         """Return flow records from every unread, fully-rotated capture file."""
