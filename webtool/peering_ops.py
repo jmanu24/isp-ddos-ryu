@@ -168,7 +168,16 @@ class PeeringLifecycle:
                 ["softflowd", "-d",
                  "-i", EXTERNAL_PEER_IFACE_R1,
                  "-n", f"127.0.0.1:{NFCAPD_PORT}",
-                 "-v", "9",
+                 # NetFlow v5, not v9/v10: softflowd 1.0.0 has a confirmed
+                 # upstream bug where ICMP packets are silently dropped
+                 # (0 processed despite libpcap receiving them) when
+                 # exporting as v9/v10 -- reproduced on the VM via
+                 # `softflowctl statistics` showing "Packets received by
+                 # libpcap" > 0 but "Packets processed: 0" for a plain
+                 # ping. v5 has no such issue (redmine.pfsense.org/issues
+                 # /10436, forum.netgate.com/topic/172943) and nfdump's
+                 # own CSV output schema is identical either way.
+                 "-v", "5",
                  # softflowd doesn't export a flow record until it
                  # expires (default general timeout is much longer than
                  # this project's detection cadence) -- confirmed on the
