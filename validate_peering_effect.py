@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-validate_peering_effect.py -- confirms the BGP Peering domain's FlowSpec
-mitigation has a REAL effect on traffic, not just that an nftables rule
-exists (docs/peering-plan.md §6's outstanding "efecto medido" criterion).
+validate_peering_effect.py -- the formal end-to-end test case for the
+BGP Peering domain's basic single-source SYN/DoS scenario
+(docs/peering-plan.md §5, punto 6; one of the "24 combinaciones
+basicas" cuatro-dominios x tres-vectores x DoS/DDoS matrix in
+docs/thesis-revision-plan.md §4.3-4.4.3). Confirms the FlowSpec
+mitigation has a REAL effect on traffic, not just that an nftables
+rule exists, and reports all four formal timing metrics from
+docs/thesis-revision-plan.md §4.5-4.6's table: Tiempo de deteccion
+(Td), Tiempo de despacho (Tm), Tiempo de aplicacion, Tiempo hasta
+efecto.
 
 Unlike validate_peering.py (which drives mitigation/peering_backend.py's
 announce()/withdraw() directly, bypassing detection entirely), this
@@ -30,13 +37,16 @@ nfcapd captures during the block window, and reappear once the
 BGP_FLOWSPEC_DISCARD route auto-expires (config.settings' bgp TTL,
 see docs/peering-plan.md §6)?
 
-Also reports the formal Td/Tm/Tu timing metrics (docs/peering-plan.md
-§6's other outstanding item) via analysis/parse_timing_stats.py's own
-functions -- that script already computes these generically per domain
-from the same two log files this run produces, it just needed
+Td and Tm come from analysis/parse_timing_stats.py's own functions --
+that script already computes these generically per domain from the
+same two log files this run produces, it just needed
 BGP_FLOWSPEC_DISCARD added alongside BLOCK/THROTTLE as a recognized
 mitigation-action string (its regex only knew about the other domains'
-action names).
+action names). Tiempo de aplicacion and Tiempo hasta efecto are
+derived here from data this script already collects for the effect
+measurement above (the nft-ruleset poll timeline and the reply-traffic
+timeline, respectively) -- see _t_apply()/_t_efecto()'s own docstrings
+for exactly how each is defined and bounded.
 
 Prerequisites: same as webtool/app.py -- run as root, deploy/
 install_bgp_peering.sh already run, and the usual stale-process
@@ -82,6 +92,19 @@ POST_ATTACK_WAIT_S = 15
 # where this gets used) -- cheap enough to run every second without
 # meaningfully perturbing anything.
 RULE_POLL_INTERVAL_S = 1.0
+# Minimum gap with zero reply-direction records to count as a genuine,
+# persistent traffic reduction for Tefecto (docs/thesis-revision-plan.md
+# §4.5-4.6's "Tiempo hasta efecto": "primera reduccion que cumple
+# criterio persistente menos inicio del ataque"). Comfortably above the
+# ~2-3s spacing normal continuous traffic produces under softflowd's
+# general=1/maxlife=2 timeouts (see webtool/peering_ops.py), comfortably
+# below the ~45s mark of the known, unresolved leak (docs/peering-plan.md
+# §6) -- a real block-onset gap (tens of seconds) registers as
+# "sustained" long before that leak could interrupt it; a short-lived
+# leak that breaks up what should be one long gap into shorter pieces
+# will correctly fail to qualify until past it, which is the honest
+# behavior wanted here, not a bug to work around.
+EFFECT_GAP_THRESHOLD_S = 8.0
 
 _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 _FMT = "%Y-%m-%d %H:%M:%S"
@@ -159,6 +182,43 @@ def _decode_nfcapd_dir(capture_dir: str, nfdump_bin: str):
                 continue
             records.append((ts, sa, da, td, ipkt, ibyt, path.name))
     return records
+
+
+def _t_apply(discard_ts, rule_transitions):
+    """
+    Tiempo de aplicacion (docs/thesis-revision-plan.md §4.5-4.6):
+    "instalacion comprobada menos envio". `discard_ts` is when the
+    controller decided+sent the announcement (BGP_FLOWSPEC_DISCARD in
+    its own log); the first RULE_PRESENT transition at or after that is
+    the earliest confirmed installation this script observed. Bounded
+    below by RULE_POLL_INTERVAL_S -- report that explicitly rather than
+    implying sub-second precision the polling can't actually back up.
+    """
+    for ts, state in rule_transitions:
+        if state == "RULE_PRESENT" and ts >= discard_ts:
+            return (ts - discard_ts).total_seconds()
+    return None
+
+
+def _t_efecto(attack_start, replies):
+    """
+    Tiempo hasta efecto (docs/thesis-revision-plan.md §4.5-4.6):
+    "primera reduccion que cumple criterio persistente menos inicio del
+    ataque". Walks the reply-direction timeline in order and returns the
+    timestamp where the first gap of at least EFFECT_GAP_THRESHOLD_S
+    with zero reply records begins, provided at least one reply was
+    already seen before it (confirming there was real traffic to reduce
+    in the first place, not just an empty window). Returns None if no
+    such persistent gap is found in the observed data.
+    """
+    reply_times = sorted(r[0] for r in replies if r[0] >= attack_start)
+    if not reply_times:
+        return None
+    for i in range(len(reply_times) - 1):
+        gap = (reply_times[i + 1] - reply_times[i]).total_seconds()
+        if gap >= EFFECT_GAP_THRESHOLD_S:
+            return (reply_times[i] - attack_start).total_seconds()
+    return None
 
 
 def main() -> bool:
@@ -293,14 +353,14 @@ def main() -> bool:
             for ts, sa, da, td, ipkt, ibyt, fname in replies_inside:
                 print(f"      {ts}  {sa} -> {da}  td={td:.3f}s ipkt={ipkt} ibyt={ibyt}  ({fname})")
 
-        print("\n=== 6. Metricas formales de tiempo (Td/Tm/Tu) ===")
+        print("\n=== 6. Metricas formales de tiempo (docs/thesis-revision-plan.md §4.5-4.6) ===")
         # Reuses analysis/parse_timing_stats.py's own generic, per-domain
         # computation against the exact same two log files this run just
-        # produced -- Td (ataque->deteccion), Tm (deteccion->mitigacion,
-        # i.e. Tdispatch/Tapply), Tu (mitigacion->desbloqueo, i.e. Tefecto's
-        # own time-to-release). That script only needed
-        # BGP_FLOWSPEC_DISCARD recognized alongside BLOCK/THROTTLE as a
-        # mitigation-action string to already work for this domain.
+        # produced -- Td (ataque->deteccion) and Tm (deteccion->mitigacion,
+        # i.e. "Tiempo de despacho": envio de orden menos decision). That
+        # script only needed BGP_FLOWSPEC_DISCARD recognized alongside
+        # BLOCK/THROTTLE as a mitigation-action string to already work
+        # for this domain.
         attack_starts_ts = parse_events_log(EVENTS_LOG_PATH)
         ts_detections, ts_mitigations, ts_unblocks = parse_ryu_log(CONTROLLER_LOG_PATH)
         timing_records = compute_stats(attack_starts_ts, ts_detections, ts_mitigations, ts_unblocks)
@@ -311,6 +371,31 @@ def main() -> bool:
             any(r["Td_s"] != "" and r["Tm_s"] != "" for r in bgp_timing_records),
         )
         summarize(timing_records)
+
+        t_apply = _t_apply(discards[0][0], rule_transitions) if discards else None
+        t_efecto = _t_efecto(run_start, replies)
+
+        print("    Reporte formal (caso: bgp / SYN / DoS monofuente, ataque real via peer_ext):")
+        if bgp_timing_records:
+            r0 = bgp_timing_records[0]
+            print(f"      Tiempo de deteccion (Td):    {r0['Td_s']}s")
+            print(f"      Tiempo de despacho (Tm):     {r0['Tm_s']}s")
+        if t_apply is not None:
+            print(f"      Tiempo de aplicacion:        {t_apply:.3f}s "
+                  f"(cota superior -- resolucion de polling {RULE_POLL_INTERVAL_S}s)")
+        else:
+            print("      Tiempo de aplicacion:        sin dato (no se observo RULE_PRESENT tras el DISCARD)")
+        if t_efecto is not None:
+            print(f"      Tiempo hasta efecto:         {t_efecto:.3f}s "
+                  f"(primer hueco >= {EFFECT_GAP_THRESHOLD_S:.0f}s sin trafico de respuesta)")
+        else:
+            print(f"      Tiempo hasta efecto:         sin dato (ningun hueco >= "
+                  f"{EFFECT_GAP_THRESHOLD_S:.0f}s encontrado -- ver hallazgo de la fuga en "
+                  f"docs/peering-plan.md §6 si esto ocurre en una corrida por lo demas limpia)")
+        all_ok &= check(
+            "Tiempo de aplicacion y Tiempo hasta efecto calculados",
+            t_apply is not None and t_efecto is not None,
+        )
 
     finally:
         print("\n=== 7. Apagando (stop_topology + stop_controller) ===")
