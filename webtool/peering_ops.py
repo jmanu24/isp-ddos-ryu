@@ -168,7 +168,16 @@ class PeeringLifecycle:
                 ["softflowd", "-d",
                  "-i", EXTERNAL_PEER_IFACE_R1,
                  "-n", f"127.0.0.1:{NFCAPD_PORT}",
-                 "-v", "9"],
+                 "-v", "9",
+                 # softflowd doesn't export a flow record until it
+                 # expires (default general timeout is much longer than
+                 # this project's detection cadence) -- confirmed on the
+                 # VM: nfcapd logged "Flows: 0" for a real ping burst
+                 # that finished well before the default timeout could
+                 # have fired. -t general=1 forces near-immediate export
+                 # once a flow goes idle for 1s, matching
+                 # NFCAPD_ROTATE_SECONDS' own reasoning.
+                 "-t", "general=1", "-t", "maxlife=2"],
                 stdout=softflowd_log, stderr=subprocess.STDOUT,
             )
 
