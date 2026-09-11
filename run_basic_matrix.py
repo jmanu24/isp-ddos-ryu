@@ -145,7 +145,21 @@ def main() -> bool:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--csv", metavar="FILE", default="matrix_results.csv",
                     help="Ruta del CSV de resultados (default: matrix_results.csv)")
+    ap.add_argument("--domains", metavar="D1,D2,...",
+                    help=f"Subconjunto de dominios a correr, separados por coma "
+                         f"(default: los {len(DOMAINS)}: {','.join(DOMAINS)}). "
+                         f"Util para re-correr solo un dominio tras un fix, sin "
+                         f"esperar los ~{TOTAL_WAIT_S * len(VECTORS) * len(MODES) * len(DOMAINS) // 60} "
+                         f"min de la matriz completa.")
     args = ap.parse_args()
+
+    domains = DOMAINS
+    if args.domains:
+        domains = tuple(d.strip() for d in args.domains.split(","))
+        unknown = set(domains) - set(DOMAINS)
+        if unknown:
+            print(f"ERROR: dominio(s) desconocido(s) {sorted(unknown)} -- validos: {DOMAINS}")
+            return False
 
     all_ok = True
     orchestrator = Orchestrator()
@@ -163,7 +177,7 @@ def main() -> bool:
         orchestrator.stop_controller()
         return False
 
-    combos = [(d, v, m) for d in DOMAINS for v in VECTORS for m in MODES]
+    combos = [(d, v, m) for d in domains for v in VECTORS for m in MODES]
     print(f"\n=== 3. Corriendo {len(combos)} combinaciones, una a la vez "
           f"({ATTACK_DURATION_S}s de ataque + espera hasta {TOTAL_WAIT_S}s total c/u) ===")
 
