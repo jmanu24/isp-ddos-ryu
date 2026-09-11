@@ -128,6 +128,15 @@ class PeeringFlowCollector:
                     "pps": packets / duration_s,
                     "bps": byte_count / duration_s,
                 })
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, TypeError):
+                # TypeError specifically: nfdump's CSV output appends a
+                # trailing "Summary" section (a different, shorter
+                # column set) after the per-flow rows. DictReader maps
+                # its short rows onto our original flow header by
+                # position, so columns past the summary's own width
+                # (e.g. ipkt) land as None via restval -- int(None)
+                # raises TypeError, not caught by the other two. Only
+                # surfaced once a capture file had real flow data ahead
+                # of that trailing block to reach this far.
                 continue
         return records
