@@ -330,10 +330,11 @@ declarar la fase E completa mientras falte:
   activo (el UDP, aún corriendo, se re-detectó 9s después del retiro y se re-bloqueó con su
   propia ventana fresca, retirada de nuevo a los 60s exactos) -- ciclo completo
   detección→anuncio→bloqueo→expiración→re-detección→re-bloqueo confirmado.
-- ~~Medir el *efecto* real: tráfico generado hacia el destino bajo mitigación efectivamente cae
-  a cero mientras la regla está activa~~ **Confirmado en la VM (2026-09-11) con
-  `validate_peering_effect.py`** (nuevo script, automatiza todo el ciclo: arranca el
-  controlador real + topología, lanza un flood SYN real desde `peer_ext` contra
+- **Medido en la VM (2026-09-11) con `validate_peering_effect.py`, resultado parcial -- ver
+  hallazgo abajo.** El criterio pedía confirmar que el tráfico generado hacia el destino bajo
+  mitigación efectivamente cae a cero mientras la regla está activa; el script nuevo automatiza
+  todo el ciclo: arranca el controlador real + topología, lanza un flood SYN real desde
+  `peer_ext` contra
   `central_server`, deja que el motor de detección decida por sí solo, y compara el tráfico de
   **respuesta** de `central_server` -- los RST de TCP que el kernel genera solo si el paquete
   llega a entrega local -- antes/durante/después del bloqueo). El tráfico entrante del atacante
@@ -341,23 +342,37 @@ declarar la fase E completa mientras falte:
   `nftables` decida, así que se ve igual con o sin bloqueo (la misma razón por la que `bgp`
   necesitó `PRESENCE_BLIND_DOMAINS`, ver arriba). El script además vigila `nft list ruleset` en
   vivo (cada 1s) durante toda la espera, no solo confía en los timestamps del log.
-  **Resultado de la corrida más limpia:** la regla apareció exactamente junto con
-  `BGP_FLOWSPEC_DISCARD`, se mantuvo presente sin interrupciones observadas, y el tráfico de
-  respuesta cayó a **cero** registros mientras estuvo activa (vs. 233,870 paquetes normales
-  fuera de la ventana). Dos corridas anteriores, menos controladas (arrancadas sin una limpieza
-  completa entre pruebas consecutivas, una de ellas tras un reintento de topología por
-  `RTNETLINK`), mostraron una ráfaga de respuesta a volumen completo colándose ~45-48s dentro de
-  la ventana de bloqueo -- no se pudo reproducir en la corrida limpia e instrumentada con el
-  polling de `nft list ruleset`, así que la hipótesis más plausible es contaminación de estado
-  entre pruebas (p. ej. un `nfcapd`/`softflowd`/`flow` residual de una sesión anterior, como el
-  `nfcapd.current.<PID>` huérfano documentado en §2.3), no una falla real del bloqueo -- pero
-  esto queda anotado honestamente como no descartado del todo con una sola corrida limpia de
-  respaldo.
+  **Resultado (4 corridas, 2026-09-11):** en 3 de 4 corridas independientes apareció una ráfaga
+  de respuesta a volumen completo (~120,000 paquetes, el mismo orden que el tráfico sin
+  bloquear) colándose en una ventana de ~3-6s ubicada consistentemente entre los segundos 45 y
+  51 de cada ventana de bloqueo de 60s. La cuarta corrida no mostró fuga alguna (cero tráfico de
+  respuesta durante todo el bloqueo). **Dato clave que descarta la hipótesis inicial** (que era
+  contaminación de estado entre sesiones de prueba): la corrida más reciente, con arranque
+  limpio de un solo intento, volvió a mostrar la fuga (48-51s) -- y esta vez el polling en vivo
+  de `nft list ruleset` (cada 1s durante toda la ventana) confirmó que **la regla nunca
+  desapareció del kernel** (`RULE_PRESENT` continuo desde el `BGP_FLOWSPEC_DISCARD` hasta el
+  `FLOWSPEC_WITHDRAWN`, sin ninguna transición a `RULE_ABSENT` en medio). Esto descarta que
+  `flow` esté quitando y reinstalando la regla de forma detectable a resolución de 1 segundo.
+  La hipótesis más plausible ahora: `flow`/`exabgp` tienen algún ciclo interno (refresco de
+  sesión BGP, resincronización de rutas, o similar) que retira y reinstala la regla más rápido
+  de lo que un muestreo de 1s puede capturar, dejando pasar tráfico real durante ese hueco
+  submuestreado -- consistente con la propia advertencia de honestidad de `flow` en §2.2 ("has
+  yet to be tested thoroughly and not suitable for production for now"). **No resuelto**;
+  seguiría siendo necesario un polling de mayor frecuencia (sub-segundo) o correlacionar contra
+  los logs internos de `flow`/`exabgp` en esa ventana exacta para confirmar la causa raíz
+  precisa. Documentado aquí como limitación real y reproducible de la herramienta, no como una
+  falla del diseño de instrumentación del proyecto.
+- ~~Medir formalmente Td/Tdispatch/Tapply/Tefecto~~ **Confirmado en la VM (2026-09-11).**
+  `analysis/parse_timing_stats.py` (ya existente para los otros dominios) solo necesitó
+  reconocer `BGP_FLOWSPEC_DISCARD` junto a `BLOCK`/`THROTTLE` como acción de mitigación válida
+  -- el resto de su cómputo de Td/Tm/Tu ya era genérico por dominio. Integrado directamente en
+  `validate_peering_effect.py` (paso 6), que reporta ambos criterios pendientes en una sola
+  corrida. Resultado real: **Td (ataque→detección) = 15.0s**, **Tm (detección→mitigación) =
+  0.0s** (ambas ocurren en el mismo ciclo de log), **Tu (mitigación→desbloqueo) = 60.0s**
+  (exacto al `MitigationAction.duration` por defecto).
 - ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Camino
   detección→mitigación confirmado (§2.4, 2026-09-11)**: `ATTACK_DETECTED SYN_FLOOD` →
   `FLOWSPEC_ANNOUNCED` → `BGP_FLOWSPEC_DISCARD` disparado por el motor de detección real (no
   solo `validate_peering.py`), atacando `central_server` desde `peer_ext` vía el webtool
   (atacar cualquier otro destino de la topología se sigue mitigando como bloqueo OpenFlow de
-  red completa, no como `BGP_FLOWSPEC_DISCARD` — ver §2.4). Falta aún medir
-  Td/Tdispatch/Tapply/Tefecto con las métricas formales del proyecto, no solo confirmar que el
-  log dispara.
+  red completa, no como `BGP_FLOWSPEC_DISCARD` — ver §2.4).
