@@ -2,15 +2,18 @@
 mitigation/peering_backend.py — BGP FlowSpec speaker for the Peering domain.
 
 Talks to a locally running `exabgp` process, which holds the actual BGP
-session to r1's FRR (bgpd + zebra). exabgp's own config wires an `api`
-process section that reads commands -- one per line, ExaBGP's own
-route-announcement syntax -- from a named pipe (FIFO); this module only
-ever writes to that FIFO. It does not implement BGP itself.
+session to r1's FRR (bgpd + zebra). exabgp does NOT create or manage
+this FIFO itself -- deploy/spike_flowspec_frr.sh (and, eventually, the
+real deployment config) must `mkfifo` it and point exabgp's own config
+at it via a `process` block that runs `cat <fifo path>`, whose stdout
+exabgp reads as commands. This module only ever writes to that FIFO; it
+does not implement BGP itself, nor does it manage the exabgp process.
 
 CAPABILITY STATUS -- read before trusting a True return here: this
 announces a FlowSpec discard route. Whether r1's FRR actually translates
-a received FlowSpec route into a real nftables/iptables rule is
-UNVERIFIED (see docs/peering-plan.md §2, the FlowSpec dataplane spike).
+a received FlowSpec route into a real iptables/ipset rule (via FRR's PBR
+integration) is UNVERIFIED (see docs/peering-plan.md §2, the FlowSpec
+dataplane spike, and deploy/spike_flowspec_frr.sh).
 apply()/announce()/withdraw() report success based on the FIFO write
 succeeding, which only proves the announcement was handed to exabgp --
 NOT that traffic is actually being dropped. Per implementation-design.md

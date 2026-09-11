@@ -87,6 +87,15 @@ else
   fi
 
   sudo systemctl enable frr >/dev/null 2>&1 || warn "no se pudo habilitar el servicio frr (systemd no disponible?)"
+
+  # FRR's own FlowSpec-to-dataplane translation goes through PBR, which
+  # programs real iptables/ipset rules. Per FRR's own FlowSpec docs: if
+  # either tool is missing, that installation step fails SILENTLY --
+  # `show bgp ipv4 flowspec` still shows the received route, giving no
+  # indication anything is wrong. Installing both explicitly here so
+  # deploy/spike_flowspec_frr.sh isn't the first place this gets noticed.
+  sudo apt-get install -y -qq iptables ipset
+  ok "iptables/ipset instalados (requeridos por la instalación de FlowSpec en el plano de datos)"
 fi
 
 # ---------------------------------------------------------------------
@@ -111,13 +120,16 @@ else
   fi
 
   # mitigation/peering_backend.py writes to PEERING_EXABGP_FIFO
-  # (config/settings.py) -- exabgp's own `api` process section is what
-  # actually creates the FIFO when it starts, but the parent directory
-  # needs to exist with permissions the controller process can write
-  # under, ahead of that.
+  # (config/settings.py). exabgp does NOT create this FIFO itself --
+  # its config needs a `process` block that runs `cat <this path>`,
+  # whose stdout exabgp reads as commands (see the ExaBGP wiki's
+  # "Controlling ExaBGP: using a named PIPE"). Created here so it
+  # exists ahead of that config being written; harmless to pre-create
+  # even though the real deployment's exabgp.conf is still pending.
   sudo mkdir -p /run/exabgp
   sudo chmod 1777 /run/exabgp
-  ok "/run/exabgp preparado (exabgp crea el FIFO en sí al arrancar)"
+  [ -p /run/exabgp/exabgp.in ] || sudo mkfifo -m 666 /run/exabgp/exabgp.in
+  ok "/run/exabgp/exabgp.in (FIFO) preparado"
 fi
 
 # ---------------------------------------------------------------------

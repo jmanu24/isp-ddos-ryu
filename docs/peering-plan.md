@@ -18,19 +18,23 @@ ya resueltas para este dominio:
 
 ## 2. Riesgo técnico a validar primero (spike, antes de construir el pipeline)
 
-El soporte de FRR para traducir una ruta BGP FlowSpec recibida/originada en una regla real
-de `nftables`/`iptables` sobre la interfaz de `r1` es una característica relativamente
-reciente y menos madura que el BGP básico. **No construir el pipeline completo sin antes
-confirmar esto**, siguiendo la misma disciplina que exige `thesis-revision-plan.md`
-(capacidad declarada vs. capacidad comprobada en el build desplegado).
+El soporte de FRR para traducir una ruta BGP FlowSpec recibida en una regla real de
+`iptables`/`ipset` (vía su integración PBR) es una característica relativamente reciente y
+menos madura que el BGP básico. Por diseño de FRR, la ruta debe venir de un speaker BGP
+externo — "FRR is a FlowSpec client only"; no se puede inyectar por CLI. **No construir el
+pipeline completo sin antes confirmar esto**, siguiendo la misma disciplina que exige
+`thesis-revision-plan.md` (capacidad declarada vs. capacidad comprobada en el build
+desplegado).
 
-**Spike propuesto (manual, antes de escribir código):**
-1. Instalar FRR en `r1`, habilitar `bgpd` con `address-family ipv4 flowspec`.
-2. Inyectar manualmente una ruta FlowSpec de descarte vía `vtysh` (match dst=IP de prueba,
-   proto=tcp, puerto=80; acción descarte).
-3. Verificar en `r1` que aparece una regla real (`nft list ruleset` / `iptables -L`) — no
-   solo que la ruta aparece en `show bgp ipv4 flowspec`.
-4. Verificar que un paquete de prueba hacia esa IP/puerto efectivamente se descarta.
+**Spike automatizado:** `deploy/spike_flowspec_frr.sh` (requiere haber corrido
+`deploy/install_bgp_peering.sh` primero). Corre FRR y `exabgp` sobre loopback en la propia
+VM (desacoplado de la topología Mininet a propósito — primero se valida la capacidad del
+software, luego se conecta a `r1`), configura `bgpd` con `address-family ipv4 flowspec`,
+levanta `exabgp` como el otro extremo BGP, anuncia una ruta FlowSpec de descarte real vía
+su FIFO, y verifica con `show pbr ipset`/`show pbr iptable` y `iptables -S`/`ipset list`
+si la regla llegó al plano de datos — no solo que aparece en `show bgp ipv4 flowspec`.
+Imprime PASS/FAIL explícito al final. `sudo ./deploy/spike_flowspec_frr.sh --cleanup` revierte
+la configuración de prueba.
 
 **Si el spike falla:** FlowSpec queda documentado como capacidad no comprobada en este
 build de FRR, y el plan cae a RTBH (`bgp_blackhole` original) como mecanismo de mitigación
