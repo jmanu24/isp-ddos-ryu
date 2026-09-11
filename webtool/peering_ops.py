@@ -55,20 +55,28 @@ NFCAPD_PORT = 9995
 # nfcapd's own default rotation interval is 300s -- far too slow given
 # this project's sub-second detection cadence (COLLECT_INTERVAL, see
 # config/settings.py); attack traffic wouldn't show up in a readable
-# capture file for up to 5 minutes otherwise. This is nfcapd's own
-# documented floor (2s, per its manpage) -- deliberately the fastest
-# supported value, not just "fast enough": Td (attack start -> real
-# detection) is dominated by this constant, since
-# collectors/peering_flow_collector.py never reads a file until a
-# SUBSEQUENT rotation exists (it treats the lexicographically-last file
-# as nfcapd's still-open current one). Confirmed on the VM across
-# several validate_peering_effect.py runs: Td ranged 12-21s at
-# NFCAPD_ROTATE_SECONDS=5; lowering to nfcapd's actual floor should
-# roughly halve that latency floor, at the cost of more, smaller files
-# for collectors/peering_flow_collector.py to nfdump-decode per second
-# of attack -- an acceptable trade for detection speed over decode
-# overhead.
-NFCAPD_ROTATE_SECONDS = 2
+# capture file for up to 5 minutes otherwise.
+#
+# REVERTED from nfcapd's documented floor (2) back to 5: lowering it
+# was meant to shrink Td (attack start -> real detection), reasoning
+# that Td is bounded below by how long until a file rotates and becomes
+# readable. Measured the OPPOSITE on the VM -- Td got WORSE (41s, then
+# 59s) after lowering this, not better, even with softflowd's own
+# expint tightened too. softflowd's own nfcapd-reported packet counts
+# stayed continuous and healthy throughout those runs (no capture-side
+# starvation), which points elsewhere: ryu-manager runs under eventlet,
+# and a plain subprocess.run() call (collectors/peering_flow_collector.py's
+# own nfdump invocation) blocks the WHOLE process, not just one green
+# thread, for its duration -- confirmed earlier this session while
+# chasing an unrelated apparent "freeze". Cutting the rotation interval
+# from 5s to 2s roughly triples how many files (and therefore blocking
+# nfdump calls) collectors/peering_flow_collector.py's poll() needs per
+# unit of attack time, which can delay the controller's own cycle --
+# for every domain, not just bgp -- more than the faster rotation ever
+# saved. Reverted pending a real fix (e.g. eventlet-friendly subprocess
+# handling, or batching multiple files into fewer nfdump invocations)
+# rather than trading file-count overhead for latency blindly.
+NFCAPD_ROTATE_SECONDS = 5
 
 # Same AS numbers validated end-to-end in deploy/spike_flowspec_flow.sh
 # (docs/peering-plan.md §2.2) -- kept identical here rather than
