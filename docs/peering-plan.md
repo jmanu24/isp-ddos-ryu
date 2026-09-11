@@ -359,13 +359,57 @@ declarar la fase E completa mientras falte:
   en otro punto del camino del paquete: posible evaluación intermitente de la regla por parte
   del propio kernel bajo esa tasa de paquetes (cientos de miles por segundo), algún efecto de
   coalescencia GRO/GSO, o un hueco sutil en el criterio de coincidencia de la regla instalada
-  por `flow` que no se manifiesta con tráfico de prueba más liviano. **No resuelto**; el
-  siguiente paso razonable sería inspeccionar los contadores de la regla `nftables` en sí
-  (agregar `counter` explícito a la regla instalada, si `flow` lo permite) o revisar el estado
-  de `conntrack` durante la ventana exacta de la fuga, en vez de seguir afinando el polling de
-  presencia/ausencia de la regla (ya llevado a 0.2s sin encontrar nada). Documentado aquí como
-  limitación real y reproducible del camino de mitigación, no como una falla del diseño de
-  instrumentación del proyecto.
+  por `flow` que no se manifiesta con tráfico de prueba más liviano.
+
+  **RESUELTO (2026-09-11) — causa raíz real encontrada.** La pista correcta terminó siendo
+  exactamente la sugerida arriba (contadores/estructura real de la regla `nftables`, no más
+  ajuste de resolución de polling): un `nft list ruleset` completo y **sin filtrar** (los
+  chequeos anteriores de este proyecto solo hacían `CENTRAL_SERVER_IP in ruleset`, nunca
+  imprimían el ruleset entero) mostró:
+  ```
+  table inet flowspecs {
+          chain flowspecs {
+                  ip daddr 10.99.0.1 meta l4proto { tcp } th dport { 443 } drop comment "0"
+          }
+  }
+  ```
+  Esa `chain flowspecs` **no tiene ninguna línea `type filter hook ...; priority ...;`** -- no
+  es una base chain, nunca está enganchada a netfilter. En nftables, una regla dentro de una
+  chain sin hook nunca se evalúa a menos que otra base chain le haga `jump`/`goto`, y en ningún
+  punto de este proyecto se creó tal salto. Confirmado en el código fuente de `flow`
+  (`hack3ric/flow`, `src/kernel/linux/mod.rs`, struct `KernelArgs`):
+  ```rust
+  /// Attach flowspec rules to nftables input hook.
+  ///
+  /// If not set, the nftables rule must be `jump`ed or `goto`ed from a base
+  /// (hooked) chain in the same table to take effect.
+  #[arg(long)]
+  pub hooked: bool,
+  ```
+  `webtool/peering_ops.py`'s invocación de `flow run` nunca pasaba `--hooked` (default `false`
+  en `clap`). Es decir: la ruta de descarte **jamás tuvo efecto real sobre el tráfico, desde el
+  principio** -- no era una fuga intermitente a los ~45-54s, era que el bloqueo nunca funcionó,
+  punto. El motivo de que antes pareciera "casi funcionar, con una fuga tardía" es simplemente
+  volumen/muestreo de la telemetría: con `NFCAPD_ROTATE_SECONDS=5` y ataques largos, casi todo
+  el tráfico de respuesta caía dentro de archivos ya vistos/descartados por el propio diseño de
+  medición, y solo una fracción del tráfico (siempre sin bloqueo real) terminaba visible como
+  "la fuga". **Fix:** se agregó `"--hooked"` a la invocación de `flow run`
+  (`webtool/peering_ops.py`) -- engancha la chain directamente al hook `input` de nftables, que
+  es además el hook correcto para esta topología (`central_server` es una interfaz `dummy`
+  local a `r1`, no un host enrutado por separado -- ver `topologies/star_topology.py`'s
+  `add_central_server()` -- así que el tráfico hacia él se entrega localmente en `r1`, hook
+  `input`, no `forward`).
+
+  **Verificado con `validate_peering_effect.py` tras el fix:** el tráfico de respuesta dentro
+  de la ventana de bloqueo cayó de ~3.6 millones de paquetes (bloqueo 100% inefectivo, corrida
+  de referencia justo antes del fix) a ~22,000 paquetes repartidos en dos ráfagas muy breves,
+  ambas exactamente en los bordes de transición de la regla (2s antes de un `WITHDRAWN`, y en
+  el instante mismo de un `DISCARD` siguiente) -- consistente con jitter normal de sincronización
+  al instalar/retirar la regla, no con el bypass sistemático que había antes. `Tiempo hasta
+  efecto` pasó de "sin dato" (ningún hueco ≥8s sin tráfico, porque nunca dejaba de fluir) a
+  **2.458s**, medible y rápido. Documentado aquí como el hallazgo central de esta fase --
+  confirma que "el corte" nunca fue una falla sutil de timing, sino una bandera de arranque
+  faltante en la integración con `flow`.
 - ~~Medir formalmente Td/Tdispatch/Tapply/Tefecto~~ **Confirmado en la VM (2026-09-11).**
   `analysis/parse_timing_stats.py` (ya existente para los otros dominios) solo necesitó
   reconocer `BGP_FLOWSPEC_DISCARD` junto a `BLOCK`/`THROTTLE` como acción de mitigación válida
@@ -423,14 +467,35 @@ declarar la fase E completa mientras falte:
   `deploy/install_bgp_peering.sh` ahora compila `nfdump` 1.7.4 desde código fuente (el paquete
   de apt de Ubuntu 20.04 sigue fijo en 1.6.18), eliminando por completo el riesgo de colisión y
   permitiendo mantener una rotación rápida (2-5s) de forma segura.
+
+  **`NFCAPD_ROTATE_SECONDS=2` reintentado tras el fix de nfdump (2026-09-11) -- esta vez sí
+  funcionó.** La medición original que motivó revertir a 5s (arriba: 41s/59s, peor que el
+  baseline de 12-21s) estaba confundida por el bug de colisión de nombres de 1.6.18: a
+  `rotate=2`, la ventana de colisión por minuto era mucho más agresiva, así que gran parte de
+  esa "degradación de Td" era en realidad datos perdidos por sobrescritura, no el costo real de
+  más rotaciones/más llamadas a `nfdump` bajo `eventlet`. Con nfdump 1.7.4 (nombres de archivo
+  con resolución de segundos, sin colisiones) y `rotate=2` de nuevo, Td se midió en **5.0s-6.0s**
+  en corridas repetidas -- una mejora real y sustancial sobre el piso de 12-21s documentado
+  antes, no una regresión. `NFCAPD_ROTATE_SECONDS = 2` (`webtool/peering_ops.py`) queda como el
+  valor confirmado, con `general=1`/`maxlife=2` de `softflowd` sin cambios (variable única
+  aislada en este reintento). La hipótesis de bloqueo por `eventlet` sigue siendo válida en
+  principio pero no se manifestó de forma medible en este rango; si se intenta bajar aún más
+  el intervalo en el futuro, sigue siendo el sospechoso a revisar primero.
 - ~~El escenario de ataque end-to-end (§5, punto 6) debe atacar `central_server`~~ **Caso formal
   completo confirmado (2026-09-11):** `bgp` / SYN / DoS monofuente, ataque real desde `peer_ext`
   contra `central_server`, motor de detección real (no `validate_peering.py`):
   `ATTACK_DETECTED SYN_FLOOD` → `FLOWSPEC_ANNOUNCED` → `BGP_FLOWSPEC_DISCARD` →
-  (60s después) `FLOWSPEC_WITHDRAWN`. Métricas de una corrida representativa: **Td = 21.0s**,
-  **Tiempo de despacho = 0.0s** (mismo ciclo de log que la detección), **Tiempo de aplicación =
-  0.92s** (cota superior, limitada por la resolución de polling de 1s), **Tiempo hasta efecto =
-  8.49s** (primer hueco ≥8s sin tráfico de respuesta) -- con la salvedad de la fuga de ~45-48s
-  documentada arriba, que rompe la persistencia total del efecto durante el resto de la ventana
-  de bloqueo. Atacar cualquier otro destino de la topología se sigue mitigando como bloqueo
-  OpenFlow de red completa, no como `BGP_FLOWSPEC_DISCARD` — ver §2.4.
+  (60s después) `FLOWSPEC_WITHDRAWN`. Atacar cualquier otro destino de la topología se sigue
+  mitigando como bloqueo OpenFlow de red completa, no como `BGP_FLOWSPEC_DISCARD` — ver §2.4.
+
+  **Métricas finales, tras el fix de `--hooked` y `NFCAPD_ROTATE_SECONDS=2` (2026-09-11):**
+  **Td = 5.0s**, **Tiempo de despacho = 0.0s**, **Tiempo de aplicación = 0.659s** (cota
+  superior, resolución de polling 1s), **Tiempo hasta efecto = 2.458s** (primer hueco ≥8s sin
+  tráfico de respuesta). Las cuatro métricas mejoraron sustancialmente frente a la corrida
+  anterior al fix (Td=21.0s, Tefecto=8.49s con la fuga de ~45-48s rompiendo la persistencia del
+  efecto) -- ver el hallazgo de causa raíz de la fuga arriba (`--hooked` faltante en `flow run`).
+  Queda un remanente pequeño y reproducible: ~22,000 paquetes de respuesta en dos ráfagas
+  breves, ambas en los bordes exactos de transición de la regla (justo antes de un `WITHDRAWN`
+  y justo en el `DISCARD` siguiente) -- jitter de sincronización normal al instalar/retirar la
+  regla, tres órdenes de magnitud menor que el bypass sistemático de antes del fix. No se
+  considera bloqueante para el criterio de salida de esta fase.
