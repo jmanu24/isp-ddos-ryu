@@ -37,7 +37,7 @@ sys.path.insert(0, str(REPO_DIR))
 import config.settings as settings  # noqa: E402
 from topologies.star_topology import (  # noqa: E402
     build_topology, add_central_server, _disable_rp_filter_star,
-    attach_bng_gateway_to_r1, CENTRAL_SERVER_IP,
+    attach_bng_gateway_to_r1, attach_external_peer, CENTRAL_SERVER_IP,
     ROLE_ENTERPRISE, ROLE_MOBILE_GNB, ROLE_FIXED,
 )
 from simulation.gnb_pool import GnbManager  # noqa: E402
@@ -114,6 +114,7 @@ class Orchestrator:
         self.gnb_manager: Optional[GnbManager] = None
         self.bng: Optional[BngLifecycle] = None
         self.peering: Optional[PeeringLifecycle] = None
+        self.peer_ext = None
         self.monitor_proc = None
         self.enterprise_benign: Dict[int, object] = {}  # switch_index -> proc
 
@@ -216,6 +217,8 @@ class Orchestrator:
                 self.bng = BngLifecycle(target_ip=CENTRAL_SERVER_IP)
                 self.bng.start_baseline()
 
+                self.peer_ext = attach_external_peer(self.net, self.r1)
+
                 self.peering = PeeringLifecycle(self.r1)
                 self.peering.start()
 
@@ -241,6 +244,11 @@ class Orchestrator:
                 "role": "server", "ip": CENTRAL_SERVER_IP,
             },
         }
+        if self.peer_ext is not None:
+            nodes["peer_ext"] = {
+                "id": "peer_ext", "domain": "bgp", "switch_index": None,
+                "role": "external_peer", "ip": self.peer_ext.IP(),
+            }
         role_domain = {ROLE_ENTERPRISE: "enterprise", ROLE_MOBILE_GNB: "mobile", ROLE_FIXED: "broadband"}
         for i, roles in hosts.items():
             for role_key, domain in role_domain.items():
@@ -274,6 +282,7 @@ class Orchestrator:
             if self.net is not None:
                 self.net.stop()
             self.net = self.r1 = self.switches = None
+            self.peer_ext = None
             self.host_map = {}
 
             webtool_state.set_topology_status("stopped")

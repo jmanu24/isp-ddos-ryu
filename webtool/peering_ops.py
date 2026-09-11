@@ -16,9 +16,18 @@ Ryu controller's own Python process:
     it's the BGP speaker mitigation/peering_backend.py's FIFO writes
     ultimately reach. exabgp does not create its own command FIFO (see
     that module's docstring); this class creates it before exabgp starts.
+  - `softflowd` + `nfcapd`, BOTH started inside r1's own namespace (like
+    `flow`) via r1.popen() -- softflowd sniffs r1's external-facing
+    interface (topologies/star_topology.py's EXTERNAL_PEER_IFACE_R1,
+    the link to peer_ext) and exports NetFlow to nfcapd over r1's own
+    loopback, entirely within r1's namespace so no cross-namespace UDP
+    delivery is needed. nfcapd writes its rotated capture files to
+    PEERING_NFCAPD_DIR (config/settings.py) on the shared filesystem --
+    collectors/peering_flow_collector.py (root namespace) reads them
+    from there via `nfdump`, same as this class's own file paths do.
 
 Mirrors webtool/bng_ops.py's BngLifecycle shape (explicit start()/stop()
-driven by webtool/orchestrator.py, not a menu loop), adapted for two
+driven by webtool/orchestrator.py, not a menu loop), adapted for four
 real subprocesses instead of one in-process session object.
 """
 import subprocess
@@ -28,13 +37,29 @@ from typing import Optional
 
 import config.settings as settings
 from topologies.star_topology import (
-    PEERING_UPLINK_ROOT_IP, PEERING_UPLINK_R1_IP,
+    PEERING_UPLINK_ROOT_IP, PEERING_UPLINK_R1_IP, EXTERNAL_PEER_IFACE_R1,
     attach_peering_uplink_to_r1, detach_peering_uplink,
 )
 
 FLOW_LOG_PATH = "/tmp/webtool_peering_flow.log"
 EXABGP_LOG_PATH = "/tmp/webtool_peering_exabgp.log"
 EXABGP_CONF_PATH = "/tmp/webtool_peering_exabgp.conf"
+SOFTFLOWD_LOG_PATH = "/tmp/webtool_peering_softflowd.log"
+NFCAPD_LOG_PATH = "/tmp/webtool_peering_nfcapd.log"
+
+# softflowd -> nfcapd export target -- both run inside r1's own
+# namespace, so this is r1's own loopback, never reachable/relevant
+# from the root namespace.
+NFCAPD_PORT = 9995
+
+# nfcapd's own default rotation interval is 300s -- far too slow given
+# this project's sub-second detection cadence (COLLECT_INTERVAL, see
+# config/settings.py); attack traffic wouldn't show up in a readable
+# capture file for up to 5 minutes otherwise. 5s (nfcapd's minimum
+# supported interval is 2s, per its manpage) still batches enough flow
+# records per file to be worth nfdump's per-file decode overhead in
+# collectors/peering_flow_collector.py.
+NFCAPD_ROTATE_SECONDS = 5
 
 # Same AS numbers validated end-to-end in deploy/spike_flowspec_flow.sh
 # (docs/peering-plan.md §2.2) -- kept identical here rather than
@@ -85,6 +110,8 @@ class PeeringLifecycle:
         self.r1 = r1
         self.flow_proc = None
         self.exabgp_proc = None
+        self.softflowd_proc = None
+        self.nfcapd_proc = None
 
     def start(self) -> None:
         attach_peering_uplink_to_r1(self.r1)
@@ -124,21 +151,37 @@ class PeeringLifecycle:
                 stdout=exabgp_log, stderr=subprocess.STDOUT,
             )
 
-    def stop(self) -> None:
-        if self.exabgp_proc is not None:
-            self.exabgp_proc.terminate()
-            try:
-                self.exabgp_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.exabgp_proc.kill()
-            self.exabgp_proc = None
+        # nfcapd first -- it must already be listening before softflowd
+        # sends its first export, otherwise those initial UDP datagrams
+        # are just dropped (no retry/buffering on softflowd's side).
+        Path(settings.PEERING_NFCAPD_DIR).mkdir(parents=True, exist_ok=True)
+        with open(NFCAPD_LOG_PATH, "wb") as nfcapd_log:
+            self.nfcapd_proc = self.r1.popen(
+                ["nfcapd", "-w", "-l", settings.PEERING_NFCAPD_DIR,
+                 "-p", str(NFCAPD_PORT), "-t", str(NFCAPD_ROTATE_SECONDS)],
+                stdout=nfcapd_log, stderr=subprocess.STDOUT,
+            )
+        time.sleep(1)
 
-        if self.flow_proc is not None:
-            self.flow_proc.terminate()
+        with open(SOFTFLOWD_LOG_PATH, "wb") as softflowd_log:
+            self.softflowd_proc = self.r1.popen(
+                ["softflowd", "-d",
+                 "-i", EXTERNAL_PEER_IFACE_R1,
+                 "-n", f"127.0.0.1:{NFCAPD_PORT}",
+                 "-v", "9"],
+                stdout=softflowd_log, stderr=subprocess.STDOUT,
+            )
+
+    def stop(self) -> None:
+        for attr in ("softflowd_proc", "nfcapd_proc", "exabgp_proc", "flow_proc"):
+            proc = getattr(self, attr)
+            if proc is None:
+                continue
+            proc.terminate()
             try:
-                self.flow_proc.wait(timeout=5)
+                proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self.flow_proc.kill()
-            self.flow_proc = None
+                proc.kill()
+            setattr(self, attr, None)
 
         detach_peering_uplink()

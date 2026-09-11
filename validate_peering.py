@@ -28,10 +28,12 @@ sys.path.insert(0, str(REPO_DIR))
 
 from topologies.star_topology import (  # noqa: E402
     build_topology, add_central_server, _disable_rp_filter_star,
+    attach_external_peer, R1_EXTERNAL_IP,
 )
 from webtool.peering_ops import (  # noqa: E402
-    PeeringLifecycle, FLOW_LOG_PATH, EXABGP_LOG_PATH,
+    PeeringLifecycle, FLOW_LOG_PATH, EXABGP_LOG_PATH, NFCAPD_ROTATE_SECONDS,
 )
+from collectors.peering_flow_collector import PeeringFlowCollector  # noqa: E402
 
 TEST_DST = "198.51.100.99"  # TEST-NET-2 (RFC 5737) -- never a real host
 FIFO = "/run/exabgp/exabgp.in"
@@ -56,8 +58,9 @@ def main() -> bool:
     net, r1, switches, hosts = build_topology()
     add_central_server(r1)
     _disable_rp_filter_star(r1, len(switches))
+    peer_ext = attach_external_peer(net, r1)
 
-    print("\n=== 2. Arrancando flow (en r1) + exabgp (namespace raiz) ===")
+    print("\n=== 2. Arrancando flow (en r1) + exabgp (namespace raiz) + softflowd/nfcapd ===")
     peering = PeeringLifecycle(r1)
     try:
         peering.start()
@@ -96,7 +99,28 @@ def main() -> bool:
             TEST_DST not in after_withdraw,
         )
 
-    print("\n=== 6. Apagando (peering.stop() + net.stop()) ===")
+    print(f"\n=== 6. Telemetria real: trafico desde peer_ext ({peer_ext.IP()}) hacia r1 ===")
+    # Real ICMP packets crossing r1's external-facing interface
+    # (EXTERNAL_PEER_IFACE_R1) -- exactly what softflowd is watching.
+    ping_result = peer_ext.cmd(f"ping -c5 -i0.2 {R1_EXTERNAL_IP}")
+    all_ok &= check("ping peer_ext -> r1 tuvo respuestas", "0 received" not in ping_result)
+
+    wait_s = NFCAPD_ROTATE_SECONDS + 3
+    print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
+    time.sleep(wait_s)
+
+    collector = PeeringFlowCollector()
+    records = collector.poll()
+    saw_traffic = any(r["src_ip"] == peer_ext.IP() or r["dst_ip"] == peer_ext.IP() for r in records)
+    all_ok &= check(
+        f"collectors/peering_flow_collector.py vio trafico real de {peer_ext.IP()} "
+        f"(via softflowd -> nfcapd -> nfdump)",
+        saw_traffic,
+    )
+    if not saw_traffic:
+        print(f"    registros vistos por el collector: {records}")
+
+    print("\n=== 7. Apagando (peering.stop() + net.stop()) ===")
     peering.stop()
     net.stop()
     check("teardown completado", True)

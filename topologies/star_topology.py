@@ -62,6 +62,20 @@ PEERING_UPLINK_ROOT_CIDR = "10.98.0.1/24"
 PEERING_UPLINK_R1_IP = "10.98.0.2"
 PEERING_UPLINK_R1_CIDR = "10.98.0.2/24"
 
+# BGP Peering domain's external/upstream side (docs/peering-plan.md §5):
+# a real Mininet host (peer_ext) linked DIRECTLY to r1 -- not through
+# any switch -- representing traffic entering from outside the SP
+# network, the same conceptual role ent_i/gnb_i/fixed_i each play for
+# their own domain. softflowd watches r1's side of this specific link
+# (deploy/install_bgp_peering.sh / webtool/peering_ops.py); test attack
+# traffic for the peering domain should originate from peer_ext.
+# 10.97.0.0/24 -- distinct from every other reserved range in this file.
+EXTERNAL_PEER_IFACE_R1 = "r1-ext0"
+EXTERNAL_PEER_IP = "10.97.0.2"
+EXTERNAL_PEER_CIDR = "10.97.0.2/24"
+R1_EXTERNAL_IP = "10.97.0.1"
+R1_EXTERNAL_CIDR = "10.97.0.1/24"
+
 ROLE_ENTERPRISE = "enterprise"
 ROLE_MOBILE_GNB = "mobile_gnb"
 ROLE_FIXED = "fixed"
@@ -189,6 +203,36 @@ def attach_bng_gateway_to_r1(
     r1.cmd(f'ip addr add {addr_cidr} dev {network_peer}')
     print(f"*** {network_peer} movido al namespace de r1 ({addr_cidr}) -- "
           f"r1 es ahora el gateway de BNGBlaster")
+
+
+def attach_external_peer(net, r1):
+    """
+    Adds peer_ext, a real Mininet host linked directly to r1 (no
+    switch in between), representing the BGP Peering domain's
+    external/upstream side (docs/peering-plan.md §5) -- see
+    EXTERNAL_PEER_IFACE_R1's module-level comment for why.
+
+    Dynamic host+link addition AFTER net.start() -- Mininet supports
+    this (net.addHost()/net.addLink() aren't tied to the start()
+    call), which keeps build_topology()'s own signature and every
+    existing caller (webtool/orchestrator.py, validate_phase1.py,
+    validate_peering.py) unchanged rather than growing its return
+    tuple. Explicit intfName1/intfName2 avoid having to guess which
+    of r1's interfaces Mininet auto-assigned to the new link.
+
+    Returns the peer_ext Host so the caller can launch attack traffic
+    from it later.
+    """
+    peer_ext = net.addHost('peer_ext', ip=EXTERNAL_PEER_CIDR, defaultRoute=f'via {R1_EXTERNAL_IP}')
+    net.addLink(r1, peer_ext, intfName1=EXTERNAL_PEER_IFACE_R1, intfName2='peer_ext-eth0')
+
+    r1.cmd(f'ip link set {EXTERNAL_PEER_IFACE_R1} up')
+    r1.cmd(f'ip addr add {R1_EXTERNAL_CIDR} dev {EXTERNAL_PEER_IFACE_R1}')
+    peer_ext.cmd('ip link set peer_ext-eth0 up')
+
+    print(f"*** peer_ext ({EXTERNAL_PEER_IP}) agregado -- enlazado directo a r1 "
+          f"via {EXTERNAL_PEER_IFACE_R1} ({R1_EXTERNAL_IP})")
+    return peer_ext
 
 
 def attach_peering_uplink_to_r1(r1) -> None:

@@ -152,11 +152,20 @@ flowchart LR
 
 1. ~~Spike de validación FlowSpec en FRR~~ **Resuelto (§2): FRR descartado, `flow`
    confirmado con una regla real en `nftables`.**
-2. Instalar y configurar `softflowd` en la interfaz externa de `r1`; confirmar que exporta
-   IPFIX visible con una herramienta de inspección simple (`nfcapd`/tcpdump del tráfico UDP
-   de exportación) antes de escribir el parser en Python.
-3. `collectors/peering_flow_collector.py` + `telemetry/bgp_adapter.py` (telemetría real,
-   sin mitigación todavía) — validar que el detection engine ve tráfico de peering real.
+2. ~~Instalar y configurar `softflowd` en la interfaz externa de `r1`~~ **Código escrito
+   (§4a): nuevo host `peer_ext` (`topologies/star_topology.py`'s `attach_external_peer`,
+   enlazado directo a `r1`, no vía switch — representa tráfico externo/upstream, la misma
+   decisión de diseño que `ent_i`/`gnb_i`/`fixed_i` para sus propios dominios) +
+   `softflowd`/`nfcapd` corriendo dentro del namespace de `r1` (`webtool/peering_ops.py`,
+   igual que `flow`), exportando por loopback interno de `r1` con rotación cada 5s (no los
+   300s por defecto de `nfcapd` — demasiado lento para la cadencia de detección del
+   proyecto). Pendiente de validar en la VM (`validate_peering.py`, paso 6).**
+3. `collectors/peering_flow_collector.py` + `telemetry/bgp_adapter.py`: **ya existían** desde
+   la instrumentación inicial (ver §3) — lo nuevo es la validación de que `nfdump -o csv`
+   realmente produce el formato que el parser asume (campos `sa`/`da`/`dp`/`pr`/`td`/`ipkt`/
+   `ibyt`), probado hasta ahora solo con datos sintéticos, no con `nfdump` real. Paso 6 de
+   `validate_peering.py` corre el pipeline completo (`peer_ext` → `softflowd` → `nfcapd` →
+   `PeeringFlowCollector.poll()`) para confirmarlo.
 4. ~~Integrar `flow` dentro de la topología Mininet~~ **Confirmado en la VM (2026-09-11):**
    `build_topology()` + `PeeringLifecycle.start()` real (sin FRR, sin namespace aislado) —
    sesión `exabgp`↔`flow` establecida sobre `10.98.0.1`↔`10.98.0.2` (el enlace de
