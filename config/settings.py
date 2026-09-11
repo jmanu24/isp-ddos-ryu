@@ -163,3 +163,21 @@ PEERING_NFDUMP_BIN = "nfdump"
 # -- not FRR, whose own FlowSpec-to-dataplane bridge never installs the
 # rule for real (see docs/peering-plan.md §2.1).
 PEERING_EXABGP_FIFO = "/run/exabgp/exabgp.in"
+
+# The only legitimate external attacker this domain's telemetry can ever
+# see. softflowd captures BOTH directions of traffic crossing r1-ext0, so
+# without this, telemetry/bgp_adapter.py would treat central_server's own
+# reply traffic (e.g. the kernel's automatic ICMP "port unreachable"
+# backscatter to a UDP flood hitting a closed port) as an inbound attack
+# too -- confirmed on the VM: a UDP flood from peer_ext produced a SECOND,
+# spurious ATTACK_DETECTED ICMP_FLOOD with central_server misattributed as
+# the source, and a BGP_FLOWSPEC_DISCARD issued against central_server's
+# own legitimate replies. Real FlowSpec is meant to stop traffic reaching
+# a victim FROM an external peer, never to have the router discard its
+# own outbound traffic -- so any record whose src_ip isn't this one is
+# never a valid bgp-domain attack, regardless of volume.
+# Must match topologies/star_topology.py's EXTERNAL_PEER_IP (peer_ext's
+# own address) -- duplicated here rather than imported, since that module
+# pulls in Mininet itself, which the controller process has no other
+# reason to depend on.
+PEERING_EXTERNAL_PEER_IP = "10.97.0.2"

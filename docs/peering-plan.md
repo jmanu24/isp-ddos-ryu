@@ -499,3 +499,30 @@ declarar la fase E completa mientras falte:
   y justo en el `DISCARD` siguiente) -- jitter de sincronización normal al instalar/retirar la
   regla, tres órdenes de magnitud menor que el bypass sistemático de antes del fix. No se
   considera bloqueante para el criterio de salida de esta fase.
+
+- **Hallazgo adicional, RESUELTO (2026-09-11): backscatter de `central_server` mal clasificado
+  como un segundo ataque.** Probando el escenario vía el webtool real (no un script de
+  validación) contra un flood UDP real desde `peer_ext`, el log del controlador mostró una
+  SEGUNDA detección espontánea e inesperada:
+  ```
+  [bgp] DETECTION: ATTACK_DETECTED ICMP_FLOOD source=10.99.0.1 destination=10.97.0.2:771/ICMP
+  ```
+  `10.99.0.1` es `central_server`, `10.97.0.2` es `peer_ext` -- es decir, el sistema reportó a
+  `central_server` como *atacando* a `peer_ext`. El "puerto" 771 no es un puerto real: `nfdump`
+  codifica type/code de ICMP como `type*256+code`, y `771 = 3*256+3` = **type 3 (Destination
+  Unreachable), code 3 (Port Unreachable)** -- exactamente el mensaje que el kernel de
+  `central_server` genera automáticamente por cada paquete UDP que llega a su puerto 123
+  (cerrado). Con el volumen del flood, ese backscatter cruza fácilmente `ICMP_THRESHOLD=150pps`
+  (`config/settings.py`). **Causa raíz:** `telemetry/bgp_adapter.py`'s `collect()` convertía
+  *cualquier* registro de `softflowd`/`nfcapd` en un `TelemetryEvent`, sin noción de dirección
+  ni de "esta fuente es infraestructura propia" -- `softflowd` captura ambas direcciones del
+  tráfico en `r1-ext0`, así que las respuestas legítimas de `central_server` hacia `peer_ext`
+  eran indistinguibles de tráfico entrante real. `detection/engine.py`'s `_classify()` agrega
+  por `dst_ip` sin validar la fuente, así que una vez cruzado el umbral atribuye el "ataque" a
+  quien tenga más pps -- en este caso, la propia víctima respondiendo. Semánticamente incorrecto
+  además de solo confuso: FlowSpec real se anuncia para que el *peer/upstream* descarte tráfico
+  entrante hacia una víctima, nunca para que el propio router descarte su propio tráfico
+  saliente. **Fix:** `telemetry/bgp_adapter.py`'s `collect()` ahora filtra los registros a
+  `src_ip == settings.PEERING_EXTERNAL_PEER_IP` antes de emitirlos como `TelemetryEvent` -- la
+  única fuente externa real que este dominio puede legítimamente considerar atacante, dado que
+  `peer_ext` es el único origen externo de esta topología.

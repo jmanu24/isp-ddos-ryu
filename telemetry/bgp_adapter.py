@@ -18,6 +18,7 @@ import logging
 import time
 from typing import List, Optional
 
+import config.settings as settings
 from collectors.peering_flow_collector import PeeringFlowCollector
 from core.log_format import log_line
 from core.models import MitigationAction, TelemetryEvent
@@ -69,6 +70,13 @@ class BGPPeeringAdapter(DomainAdapter):
                 timestamp=now,
             )
             for record in records
+            # softflowd captures BOTH directions of traffic on r1-ext0 --
+            # without this, a target's own reply traffic (e.g. the
+            # kernel's automatic ICMP "port unreachable" backscatter to a
+            # UDP flood hitting a closed port) gets treated as an inbound
+            # attack too. See PEERING_EXTERNAL_PEER_IP's own comment in
+            # config/settings.py for the real incident this fixes.
+            if record["src_ip"] == settings.PEERING_EXTERNAL_PEER_IP
         ]
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
