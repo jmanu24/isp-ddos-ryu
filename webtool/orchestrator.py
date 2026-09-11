@@ -38,7 +38,7 @@ import config.settings as settings  # noqa: E402
 from topologies.star_topology import (  # noqa: E402
     build_topology, add_central_server, _disable_rp_filter_star,
     attach_bng_gateway_to_r1, attach_external_peer, CENTRAL_SERVER_IP,
-    ROLE_ENTERPRISE, ROLE_MOBILE_GNB, ROLE_FIXED,
+    EXTERNAL_PEER_IP, ROLE_ENTERPRISE, ROLE_MOBILE_GNB, ROLE_FIXED,
 )
 from simulation.gnb_pool import GnbManager  # noqa: E402
 from webtool import enterprise_ops  # noqa: E402
@@ -247,7 +247,7 @@ class Orchestrator:
         if self.peer_ext is not None:
             nodes["peer_ext"] = {
                 "id": "peer_ext", "domain": "bgp", "switch_index": None,
-                "role": "external_peer", "ip": self.peer_ext.IP(),
+                "role": "external_peer", "ip": EXTERNAL_PEER_IP,
             }
         role_domain = {ROLE_ENTERPRISE: "enterprise", ROLE_MOBILE_GNB: "mobile", ROLE_FIXED: "broadband"}
         for i, roles in hosts.items():

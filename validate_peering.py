@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO_DIR))
 
 from topologies.star_topology import (  # noqa: E402
     build_topology, add_central_server, _disable_rp_filter_star,
-    attach_external_peer, R1_EXTERNAL_IP,
+    attach_external_peer, R1_EXTERNAL_IP, EXTERNAL_PEER_IP,
 )
 from webtool.peering_ops import (  # noqa: E402
     PeeringLifecycle, FLOW_LOG_PATH, EXABGP_LOG_PATH, NFCAPD_ROTATE_SECONDS,
@@ -99,11 +99,19 @@ def main() -> bool:
             TEST_DST not in after_withdraw,
         )
 
-    print(f"\n=== 6. Telemetria real: trafico desde peer_ext ({peer_ext.IP()}) hacia r1 ===")
+    print(f"\n=== 6. Telemetria real: trafico desde peer_ext ({EXTERNAL_PEER_IP}) hacia r1 ===")
+    print(f"    peer_ext-eth0: {peer_ext.cmd('ip addr show peer_ext-eth0')}")
     # Real ICMP packets crossing r1's external-facing interface
     # (EXTERNAL_PEER_IFACE_R1) -- exactly what softflowd is watching.
     ping_result = peer_ext.cmd(f"ping -c5 -i0.2 {R1_EXTERNAL_IP}")
-    all_ok &= check("ping peer_ext -> r1 tuvo respuestas", "0 received" not in ping_result)
+    # Exact "5 received" (or "5 packets received"), not just the absence
+    # of "0 received" -- that weaker check previously passed even when
+    # ping failed outright before printing any stats line at all (e.g.
+    # "Network is unreachable"), masking peer_ext having no IP assigned.
+    ping_ok = "5 received" in ping_result or "5 packets received" in ping_result
+    all_ok &= check("ping peer_ext -> r1 tuvo 5/5 respuestas", ping_ok)
+    if not ping_ok:
+        print(f"    salida completa del ping:\n{ping_result}")
 
     wait_s = NFCAPD_ROTATE_SECONDS + 3
     print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
@@ -111,9 +119,9 @@ def main() -> bool:
 
     collector = PeeringFlowCollector()
     records = collector.poll()
-    saw_traffic = any(r["src_ip"] == peer_ext.IP() or r["dst_ip"] == peer_ext.IP() for r in records)
+    saw_traffic = any(r["src_ip"] == EXTERNAL_PEER_IP or r["dst_ip"] == EXTERNAL_PEER_IP for r in records)
     all_ok &= check(
-        f"collectors/peering_flow_collector.py vio trafico real de {peer_ext.IP()} "
+        f"collectors/peering_flow_collector.py vio trafico real de {EXTERNAL_PEER_IP} "
         f"(via softflowd -> nfcapd -> nfdump)",
         saw_traffic,
     )

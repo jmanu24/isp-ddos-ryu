@@ -223,12 +223,24 @@ def attach_external_peer(net, r1):
     Returns the peer_ext Host so the caller can launch attack traffic
     from it later.
     """
-    peer_ext = net.addHost('peer_ext', ip=EXTERNAL_PEER_CIDR, defaultRoute=f'via {R1_EXTERNAL_IP}')
+    # ip=/defaultRoute= kwargs to addHost() only get applied by Mininet's
+    # own Node.configDefault(), which runs automatically for hosts that
+    # exist BEFORE net.start() -- since peer_ext is added dynamically
+    # AFTER it, that step never fires, silently leaving the interface
+    # with no address at all (confirmed: peer_ext.IP() returned None on
+    # a first attempt at this). Configuring everything explicitly here
+    # instead, same as this function already does for r1's own side,
+    # and the same pattern attach_bng_gateway_to_r1/
+    # attach_peering_uplink_to_r1 already use.
+    peer_ext = net.addHost('peer_ext')
     net.addLink(r1, peer_ext, intfName1=EXTERNAL_PEER_IFACE_R1, intfName2='peer_ext-eth0')
 
     r1.cmd(f'ip link set {EXTERNAL_PEER_IFACE_R1} up')
     r1.cmd(f'ip addr add {R1_EXTERNAL_CIDR} dev {EXTERNAL_PEER_IFACE_R1}')
+
     peer_ext.cmd('ip link set peer_ext-eth0 up')
+    peer_ext.cmd(f'ip addr add {EXTERNAL_PEER_CIDR} dev peer_ext-eth0')
+    peer_ext.cmd(f'ip route add default via {R1_EXTERNAL_IP}')
 
     print(f"*** peer_ext ({EXTERNAL_PEER_IP}) agregado -- enlazado directo a r1 "
           f"via {EXTERNAL_PEER_IFACE_R1} ({R1_EXTERNAL_IP})")
