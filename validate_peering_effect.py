@@ -30,6 +30,14 @@ nfcapd captures during the block window, and reappear once the
 BGP_FLOWSPEC_DISCARD route auto-expires (config.settings' bgp TTL,
 see docs/peering-plan.md §6)?
 
+Also reports the formal Td/Tm/Tu timing metrics (docs/peering-plan.md
+§6's other outstanding item) via analysis/parse_timing_stats.py's own
+functions -- that script already computes these generically per domain
+from the same two log files this run produces, it just needed
+BGP_FLOWSPEC_DISCARD added alongside BLOCK/THROTTLE as a recognized
+mitigation-action string (its regex only knew about the other domains'
+action names).
+
 Prerequisites: same as webtool/app.py -- run as root, deploy/
 install_bgp_peering.sh already run, and the usual stale-process
 cleanup (pkill -9 -f "flow run"/exabgp/softflowd/nfcapd/ryu-manager,
@@ -53,8 +61,11 @@ REPO_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_DIR))
 
 import config.settings as settings  # noqa: E402
+from analysis.parse_timing_stats import (  # noqa: E402
+    parse_events_log, parse_ryu_log, compute_stats, summarize,
+)
 from topologies.star_topology import CENTRAL_SERVER_IP, EXTERNAL_PEER_IP  # noqa: E402
-from webtool.orchestrator import Orchestrator, CONTROLLER_LOG_PATH  # noqa: E402
+from webtool.orchestrator import Orchestrator, CONTROLLER_LOG_PATH, EVENTS_LOG_PATH  # noqa: E402
 
 # Long enough to span: detection latency (~12s, see docs/peering-plan.md
 # §2.3), a full block window (config.settings' bgp MitigationAction
@@ -282,8 +293,27 @@ def main() -> bool:
             for ts, sa, da, td, ipkt, ibyt, fname in replies_inside:
                 print(f"      {ts}  {sa} -> {da}  td={td:.3f}s ipkt={ipkt} ibyt={ibyt}  ({fname})")
 
+        print("\n=== 6. Metricas formales de tiempo (Td/Tm/Tu) ===")
+        # Reuses analysis/parse_timing_stats.py's own generic, per-domain
+        # computation against the exact same two log files this run just
+        # produced -- Td (ataque->deteccion), Tm (deteccion->mitigacion,
+        # i.e. Tdispatch/Tapply), Tu (mitigacion->desbloqueo, i.e. Tefecto's
+        # own time-to-release). That script only needed
+        # BGP_FLOWSPEC_DISCARD recognized alongside BLOCK/THROTTLE as a
+        # mitigation-action string to already work for this domain.
+        attack_starts_ts = parse_events_log(EVENTS_LOG_PATH)
+        ts_detections, ts_mitigations, ts_unblocks = parse_ryu_log(CONTROLLER_LOG_PATH)
+        timing_records = compute_stats(attack_starts_ts, ts_detections, ts_mitigations, ts_unblocks)
+        bgp_timing_records = [r for r in timing_records if r["domain"] == "bgp"]
+        all_ok &= check(
+            f"al menos 1 registro de timing bgp con Td/Tm calculados "
+            f"({len(bgp_timing_records)} en total)",
+            any(r["Td_s"] != "" and r["Tm_s"] != "" for r in bgp_timing_records),
+        )
+        summarize(timing_records)
+
     finally:
-        print("\n=== 6. Apagando (stop_topology + stop_controller) ===")
+        print("\n=== 7. Apagando (stop_topology + stop_controller) ===")
         orchestrator.stop_topology()
         orchestrator.stop_controller()
         check("teardown completado", True)

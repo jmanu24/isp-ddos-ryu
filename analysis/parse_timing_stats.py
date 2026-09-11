@@ -59,7 +59,12 @@ _DETECTION_RE = re.compile(
     r"\s+destination=(?P<dst>[^:]+):(?P<port>\d+)/(?P<proto>\S+)"
 )
 
-_ACTION_RE  = re.compile(r"^(?P<action>BLOCK|THROTTLE|UNBLOCK|UNTHROTTLE)\s+(?P<attack_type>\S+)")
+# BGP_FLOWSPEC_DISCARD is the bgp domain's own mitigation action string
+# (see orchestration/controller.py's _action_for) -- functionally a
+# "block" for this script's purposes (paired with the same UNBLOCK line
+# every other PER_SOURCE_MITIGATION_DOMAINS member uses, see
+# config/settings.py).
+_ACTION_RE  = re.compile(r"^(?P<action>BLOCK|THROTTLE|BGP_FLOWSPEC_DISCARD|UNBLOCK|UNTHROTTLE)\s+(?P<attack_type>\S+)")
 _SRC_IP_RE  = re.compile(r"src_ip=(\S+)")
 _SOURCE_RE  = re.compile(r"source=(\S+)")
 _DST_RE     = re.compile(r"destination=([^:]+):(\d+)/(\S+)")
@@ -175,7 +180,7 @@ def parse_ryu_log(path: str):
                 if not parsed:
                     continue
                 entry = {"ts": ts, "domain": domain, **parsed}
-                if parsed["action"] in ("BLOCK", "THROTTLE"):
+                if parsed["action"] in ("BLOCK", "THROTTLE", "BGP_FLOWSPEC_DISCARD"):
                     mitigations.append(entry)
                 else:
                     unblocks.append(entry)
