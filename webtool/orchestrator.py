@@ -68,6 +68,8 @@ ATTACK_TYPE_TO_PROTOCOL = {"SYN": "TCP_SYN", "UDP": "UDP", "ICMP": "ICMP"}
 _BROADBAND_ATTACK_SCENARIO = {
     "SYN": "syn_flood", "UDP": "udp_flood", "ICMP": "icmp_flood",
     "SYN_DISTRIBUTED": "distributed_syn_flood",
+    "UDP_DISTRIBUTED": "distributed_udp_flood",
+    "ICMP_DISTRIBUTED": "distributed_icmp_flood",
 }
 
 
@@ -196,7 +198,9 @@ class Orchestrator:
 
             webtool_state.set_topology_status("starting")
             try:
-                self.net, self.r1, self.switches, hosts = build_topology()
+                self.net, self.r1, self.switches, hosts = build_topology(
+                    num_switches=settings.TOPOLOGY_NUM_SWITCHES
+                )
                 add_central_server(self.r1)
                 _disable_rp_filter_star(self.r1, len(self.switches))
 
@@ -362,23 +366,36 @@ class Orchestrator:
             return {"ok": True, "attack_id": attack_id}
 
     def start_peering_attack(self, attack_type: str, dst_port: int, target_ip: str,
-                              duration: Optional[float] = None, scenario: str = "manual") -> dict:
+                              duration: Optional[float] = None, scenario: str = "manual",
+                              spoofed: bool = False) -> dict:
         """
         The "external attacker" leg -- unlike enterprise/mobile/broadband,
-        this domain has exactly one possible source (peer_ext, the host
-        attach_external_peer() links directly to r1, no switch in
+        this domain has exactly one possible REAL source (peer_ext, the
+        host attach_external_peer() links directly to r1, no switch in
         between -- see topologies/star_topology.py), so there's no
         switch_indices selection at all. Reuses enterprise_ops'
         hping3_argv/start_attack/stop_attack unchanged -- launching a real
         hping3 flood from any single Mininet host is the same operation
         regardless of which domain that host belongs to.
+
+        spoofed=True adds hping3's --rand-source, the only way this
+        single-host domain can ever produce a DDOS_DISTRIBUTED-shaped
+        attack (>=DIST_MIN_SOURCES distinct src_ip, see
+        detection/engine.py) -- each packet gets a fresh random source
+        address instead of peer_ext's own real one. Relies on
+        telemetry/bgp_adapter.py's collect() filtering by DENYLIST (known-
+        local addresses only), not by allowlisting peer_ext's own IP --
+        see config/settings.py's PEERING_CENTRAL_SERVER_IP comment --
+        otherwise this traffic would be filtered out as unrecognized
+        rather than treated as a (spoofed) external attacker.
         """
         with self._lock:
             if self.peer_ext is None:
                 return {"ok": False, "error": "la topologia no esta corriendo"}
             protocol = ATTACK_TYPE_TO_PROTOCOL[attack_type]
             attack_id = str(uuid4())
-            proc = enterprise_ops.start_attack(self.peer_ext, protocol, dst_port, target_ip, ["--flood"])
+            rate_flags = ["--flood", "--rand-source"] if spoofed else ["--flood"]
+            proc = enterprise_ops.start_attack(self.peer_ext, protocol, dst_port, target_ip, rate_flags)
             self.enterprise_procs[attack_id] = [proc]
             self._attack_domain[attack_id] = "bgp"
             self._attack_scenario[attack_id] = scenario

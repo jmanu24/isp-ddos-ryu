@@ -526,3 +526,16 @@ declarar la fase E completa mientras falte:
   `src_ip == settings.PEERING_EXTERNAL_PEER_IP` antes de emitirlos como `TelemetryEvent` -- la
   única fuente externa real que este dominio puede legítimamente considerar atacante, dado que
   `peer_ext` es el único origen externo de esta topología.
+
+  **Revisado (2026-09-11) -- de allowlist a denylist, para soportar DDoS con spoofing.** Al
+  automatizar la matriz de 24 escenarios (`run_basic_matrix.py`), el único mecanismo posible
+  para que `bgp` (una sola fuente externa real, `peer_ext`) produzca algo que el motor de
+  detección clasifique como `DDOS_DISTRIBUTED` es spoofing de IP origen (`hping3
+  --rand-source`) -- pero eso choca directamente con el fix anterior: un filtro que solo
+  permite `src_ip == PEERING_EXTERNAL_PEER_IP` descarta exactamente el tráfico spoofeado que
+  la variante DDoS necesita, ya que cada paquete lleva una IP origen aleatoria distinta a la
+  real de `peer_ext`. **Fix:** el filtro pasó de allowlist (permitir solo la IP real conocida)
+  a denylist (excluir solo las direcciones locales conocidas: `PEERING_CENTRAL_SERVER_IP` y
+  `PEERING_R1_EXTERNAL_IP`, nuevas constantes en `config/settings.py`) -- cualquier otra
+  `src_ip`, real o spoofeada, se trata como posible atacante externo, preservando el fix del
+  backscatter sin bloquear el nuevo escenario DDoS.

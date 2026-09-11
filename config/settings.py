@@ -1,3 +1,20 @@
+# Number of OVS switches (and therefore real enterprise/mobile/broadband
+# hosts, one of each per switch) topologies/star_topology.py's
+# build_topology() creates. Was a hardcoded default of 4 -- raised so
+# enterprise's own DDoS cell (docs/thesis-revision-plan.md's 24-scenario
+# matrix, 4 domains x 3 vectors x DoS/DDoS) can actually cross
+# DIST_MIN_SOURCES (below): enterprise attacks are real, unspoofed
+# per-host traffic (webtool/enterprise_ops.py), one distinct source IP
+# per switch, so 4 switches structurally capped enterprise at 4 distinct
+# sources -- one short of the distributed-detection threshold, a gap
+# docs/thesis-revision-plan.md's own review already flagged ("cuatro
+# fuentes frente a un umbral de cinco... no valida esa capacidad").
+# mobile/broadband don't need this (mobile spoofs extra sources per gNB
+# via count_per_gnb, broadband uses dedicated multi-session BNGBlaster
+# scenarios), but they get a free 5th real host too since they're built
+# from the same per-switch host set.
+TOPOLOGY_NUM_SWITCHES = 5
+
 FLOW_WINDOW = 20
 
 # Pipeline cadence (controller/ryu_controller_2.py's _monitor loop): how
@@ -164,20 +181,36 @@ PEERING_NFDUMP_BIN = "nfdump"
 # rule for real (see docs/peering-plan.md §2.1).
 PEERING_EXABGP_FIFO = "/run/exabgp/exabgp.in"
 
-# The only legitimate external attacker this domain's telemetry can ever
-# see. softflowd captures BOTH directions of traffic crossing r1-ext0, so
-# without this, telemetry/bgp_adapter.py would treat central_server's own
-# reply traffic (e.g. the kernel's automatic ICMP "port unreachable"
-# backscatter to a UDP flood hitting a closed port) as an inbound attack
-# too -- confirmed on the VM: a UDP flood from peer_ext produced a SECOND,
-# spurious ATTACK_DETECTED ICMP_FLOOD with central_server misattributed as
-# the source, and a BGP_FLOWSPEC_DISCARD issued against central_server's
-# own legitimate replies. Real FlowSpec is meant to stop traffic reaching
-# a victim FROM an external peer, never to have the router discard its
-# own outbound traffic -- so any record whose src_ip isn't this one is
-# never a valid bgp-domain attack, regardless of volume.
-# Must match topologies/star_topology.py's EXTERNAL_PEER_IP (peer_ext's
-# own address) -- duplicated here rather than imported, since that module
-# pulls in Mininet itself, which the controller process has no other
-# reason to depend on.
+# peer_ext's own fixed address -- the single real (unspoofed) external
+# source this domain's basic DoS scenario uses. Kept as a named constant
+# for scripts/tests that want to address peer_ext specifically, but NOT
+# used to filter telemetry (see PEERING_LOCAL_IPS below) -- a DDoS-style
+# scenario legitimately sends spoofed traffic FROM peer_ext with many
+# different (fake) source IPs, none of which equal this one.
+# Must match topologies/star_topology.py's EXTERNAL_PEER_IP -- duplicated
+# here rather than imported, since that module pulls in Mininet itself,
+# which the controller process has no other reason to depend on.
 PEERING_EXTERNAL_PEER_IP = "10.97.0.2"
+
+# softflowd captures BOTH directions of traffic crossing r1-ext0, so
+# without filtering, telemetry/bgp_adapter.py would treat these two
+# addresses' own outbound traffic as an inbound attack too -- confirmed
+# on the VM: a UDP flood from peer_ext produced a SECOND, spurious
+# ATTACK_DETECTED ICMP_FLOOD with central_server misattributed as the
+# source (the kernel's automatic ICMP "port unreachable" backscatter to
+# the flood hitting a closed port), and a BGP_FLOWSPEC_DISCARD issued
+# against central_server's own legitimate replies. Real FlowSpec is meant
+# to stop traffic reaching a victim FROM an external peer, never to have
+# the router discard its own outbound traffic.
+# A DENYLIST (exclude known-local addresses), not an ALLOWLIST of the one
+# known real peer_ext IP -- a DDoS scenario needs peer_ext's spoofed
+# (--rand-source) traffic, with essentially none of it actually equal to
+# PEERING_EXTERNAL_PEER_IP above, to still pass through as legitimate
+# external attack telemetry. Only central_server (the usual victim, whose
+# own replies are the actual backscatter problem) and r1's own external-
+# facing address (which could similarly emit e.g. ICMP errors) are ever
+# excluded -- everything else, real or spoofed, is treated as a possible
+# external attacker.
+# Must match topologies/star_topology.py's CENTRAL_SERVER_IP/R1_EXTERNAL_IP.
+PEERING_CENTRAL_SERVER_IP = "10.99.0.1"
+PEERING_R1_EXTERNAL_IP = "10.97.0.1"

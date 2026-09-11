@@ -59,7 +59,11 @@ from typing import Optional
 
 ATTACK_ICMP_GROUP_ID = 200
 
-SCENARIOS = ("syn_flood", "udp_flood", "icmp_flood", "distributed_syn_flood", "low_and_slow")
+SCENARIOS = (
+    "syn_flood", "udp_flood", "icmp_flood",
+    "distributed_syn_flood", "distributed_udp_flood", "distributed_icmp_flood",
+    "low_and_slow",
+)
 
 # Per-scenario (session_count, per-session pps, kind). pps values are
 # picked the same way ul_traffic_simulator.py's scenario_* functions
@@ -98,6 +102,24 @@ _SCENARIO_PARAMS = {
     # 8 sessions (>= DIST_MIN_SOURCES=5), 5 pps each -> ~40 pps aggregate
     # (> SYN_THRESHOLD=10), uniform per-session rate -> high entropy
     "distributed_syn_flood": dict(sessions=8, pps=5.0, kind="session-traffic", protocol="TCP_SYN", dst_port=443),
+    # Same pattern as distributed_syn_flood, sized against UDP_THRESHOLD=200
+    # instead: 8 sessions x 60 pps = 480 aggregate (score ~2.4x threshold,
+    # same "comfortably past, not just barely" margin the other distributed
+    # scenarios use) -- detection/engine.py's _build_result() computes
+    # is_distributed's confidence from entropy alone (min(entropy *
+    # MULTIDOMAIN_BOOST, 1.0)), not score/10 like the single-source path,
+    # so unlike plain udp_flood this doesn't need an extreme pps value to
+    # clear DECISION_THRESHOLD -- uniform per-session rate already gives
+    # near-1.0 entropy on its own.
+    "distributed_udp_flood": dict(sessions=8, pps=60.0, kind="session-traffic", protocol="UDP", dst_port=0),
+    # Same pattern, sized against ICMP_THRESHOLD=150: 8 sessions x 50 req/s
+    # (interval=0.02) = 400 aggregate (score ~2.7x threshold). Unlike plain
+    # icmp_flood (which needs ~3300 req/s from a SINGLE session to clear
+    # the single-source score/10 confidence formula, see that entry's own
+    # comment), the distributed path's entropy-based confidence means a
+    # far more modest per-session rate is already enough once summed
+    # across >=DIST_MIN_SOURCES=5 uniform sources.
+    "distributed_icmp_flood": dict(sessions=8, interval=0.02, kind="icmp", protocol="ICMP", dst_port=0),
     # 8 sessions (>= LOW_SLOW_MOBILE_MIN_SOURCES=5), each well under
     # LOW_SLOW_MOBILE_MAX_PPS=8.0 -- deliberately not a flood
     "low_and_slow":          dict(sessions=8, pps=1.0, kind="session-traffic", protocol="TCP_SYN", dst_port=443),

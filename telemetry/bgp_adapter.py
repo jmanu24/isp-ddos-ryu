@@ -74,9 +74,14 @@ class BGPPeeringAdapter(DomainAdapter):
             # without this, a target's own reply traffic (e.g. the
             # kernel's automatic ICMP "port unreachable" backscatter to a
             # UDP flood hitting a closed port) gets treated as an inbound
-            # attack too. See PEERING_EXTERNAL_PEER_IP's own comment in
+            # attack too. Denylist, not an allowlist of the one known real
+            # peer_ext address -- a DDoS scenario needs spoofed traffic
+            # from many different (fake) source IPs to still pass through.
+            # See PEERING_CENTRAL_SERVER_IP's own comment in
             # config/settings.py for the real incident this fixes.
-            if record["src_ip"] == settings.PEERING_EXTERNAL_PEER_IP
+            if record["src_ip"] not in (
+                settings.PEERING_CENTRAL_SERVER_IP, settings.PEERING_R1_EXTERNAL_IP,
+            )
         ]
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
