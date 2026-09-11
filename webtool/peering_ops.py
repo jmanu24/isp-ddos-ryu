@@ -177,7 +177,30 @@ class PeeringLifecycle:
                  "-l", str(FLOW_LOCAL_AS),
                  "-r", str(EXABGP_LOCAL_AS),
                  "-i", PEERING_UPLINK_R1_IP,
-                 "-a", PEERING_UPLINK_ROOT_IP],
+                 "-a", PEERING_UPLINK_ROOT_IP,
+                 # ROOT CAUSE of the long-unresolved "traffic leak" finding
+                 # (docs/peering-plan.md §6): without --hooked, `flow`
+                 # creates its `inet flowspecs { chain flowspecs {...} }`
+                 # as a REGULAR (non-base) nftables chain -- confirmed via
+                 # a full, un-grepped `nft list ruleset` on the VM showing
+                 # no `type filter hook ...; priority ...;` line on it at
+                 # all. Per flow's own source
+                 # (src/kernel/linux/mod.rs, KernelArgs::hooked's doc
+                 # comment): "If not set, the nftables rule must be
+                 # `jump`ed or `goto`ed from a base (hooked) chain in the
+                 # same table to take effect." Nothing in this project ever
+                 # added such a jump/goto, so the discard rule has existed
+                 # in nftables (passing every earlier "rule present" check
+                 # this project used) WITHOUT EVER BEING EVALUATED BY THE
+                 # KERNEL, the entire time -- not an intermittent leak, no
+                 # actual blocking effect at all. --hooked attaches it
+                 # directly to nftables' own `input` hook (matches this
+                 # project's own topology: central_server is a dummy
+                 # interface local to r1, see topologies/star_topology.py's
+                 # add_central_server(), so traffic to it is locally
+                 # delivered -- the `input` hook, not `forward`, is the
+                 # correct one and also flow's own --hooked default).
+                 "--hooked"],
                 stdout=flow_log, stderr=subprocess.STDOUT,
             )
         # Give flow a moment to bind before exabgp's first connection
