@@ -208,7 +208,14 @@ class PeeringLifecycle:
         Path(settings.PEERING_NFCAPD_DIR).mkdir(parents=True, exist_ok=True)
         with open(NFCAPD_LOG_PATH, "wb") as nfcapd_log:
             self.nfcapd_proc = self.r1.popen(
-                ["nfcapd", "-w", "-l", settings.PEERING_NFCAPD_DIR,
+                # nfdump 1.7.x renamed the output-directory flag: 1.6.18's
+                # `-w` (bare "sync writes" boolean) + `-l <dir>` became a
+                # single `-w <dir>` (confirmed via `nfcapd -h` on the VM --
+                # `-l` no longer appears in the 1.7.4 usage text at all).
+                # The old two-flag form silently fails: -w now expects an
+                # argument, so it swallows the following "-l" token as its
+                # directory and errors "path does not exist: -l".
+                ["nfcapd", "-w", settings.PEERING_NFCAPD_DIR,
                  "-p", str(NFCAPD_PORT), "-t", str(NFCAPD_ROTATE_SECONDS)],
                 stdout=nfcapd_log, stderr=subprocess.STDOUT,
             )
