@@ -113,6 +113,9 @@ def main() -> bool:
     if not ping_ok:
         print(f"    salida completa del ping:\n{ping_result}")
 
+    print("\n    --- diagnostico temporal: softflowctl statistics ---")
+    print(f"    {r1.cmd('softflowctl statistics')}")
+
     wait_s = NFCAPD_ROTATE_SECONDS + 3
     print(f"    esperando {wait_s}s a que nfcapd rote un archivo de captura...")
     time.sleep(wait_s)
