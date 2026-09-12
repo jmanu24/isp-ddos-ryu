@@ -135,6 +135,27 @@ APKCACHEOPTS="none"
 """
     (vm_dir / "answerfile").write_text(answerfile)
 
+    # Lightweight post-clone customization -- NOT a re-run of setup-alpine.
+    # Confirmed on a real ESXi host: re-running full setup-alpine against
+    # an already-installed disk tries to redo the WHOLE install (re-
+    # partition, re-download all base packages), which both fails outright
+    # (no internet access yet on these brand-new internal VLANs -- DNS to
+    # the apk mirror can't resolve) and is unnecessary anyway, since a
+    # cloned disk already has every package the golden template had.
+    # This just edits the 2 files that actually need to differ per clone.
+    apply_sh = f"""#!/bin/sh
+# Paste this into the VM's WEB CONSOLE (not SSH -- there's no network
+# reachability yet, that's the whole point of running this) after first
+# boot of a clone of {vm['role']}'s golden template.
+echo "{vm['name']}" > /etc/hostname
+hostname "{vm['name']}"
+cat > /etc/network/interfaces <<'IFACES_EOF'
+{chr(10).join(iface_lines)}
+IFACES_EOF
+rc-service networking restart
+"""
+    (vm_dir / "apply.sh").write_text(apply_sh)
+
 
 def render_ansible_inventory(vms: list, out_dir: Path) -> None:
     by_role: dict = {}

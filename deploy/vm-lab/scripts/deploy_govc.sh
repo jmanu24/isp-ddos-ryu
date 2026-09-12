@@ -1,21 +1,48 @@
 #!/usr/bin/env bash
 #
-# deploy_govc.sh -- clones the 16 VMs from their golden templates directly
-# onto a standalone ESXi host (no vCenter needed -- govc talks to ESXi's
-# own API), sizing each per ../topology.yaml (via generated/govc/vms.csv,
-# see scripts/render_topology.py) and injecting its per-VM cloud-init
+# deploy_govc.sh -- provisions the 16 VMs from their golden templates
+# directly on a standalone ESXi host (no vCenter), sizing each per
+# ../topology.yaml (via generated/govc/vms.csv, see
+# scripts/render_topology.py) and injecting its per-VM cloud-init
 # (Ubuntu/Debian) via VMware guestinfo.
 #
+# CLONING METHOD: NOT govc vm.clone. Confirmed against a real ESXi 7.0.3
+# host (and independently confirmed by a govmomi maintainer:
+# https://github.com/vmware/govmomi/issues/1469#issuecomment-...) that
+# standalone ESXi does not support the CloneVM_Task API at all --
+# regardless of license -- it is vCenter-only. This script instead uses
+# the standard bare-ESXi workaround: copy the golden template's VMDK at
+# the datastore level via `vmkfstools -i` (over SSH to the host's own
+# shell -- this is NOT exposed through the vSphere API/govc, hence the
+# SSH requirement below), then `govc vm.register` the copied disk as a
+# new VM. Also confirmed the REST/vAPI login (`/rest/com/vmware/cis/
+# session`, `/api/session`) that `packer`'s vsphere-iso builder hard-
+# requires is unavailable here too (CIS session auth is fundamentally a
+# vCenter/PSC concept) -- so the 3 golden templates themselves were built
+# by hand via the ESXi web console, not by this script or Packer.
+#
 # Prerequisites:
-#   - govc installed (https://github.com/vmware/govmomi/tree/main/govc)
+#   - govc installed (https://github.com/vmware/govmomi/releases)
+#   - sshpass installed (`apt install sshpass`) -- for non-interactive
+#     SSH to the ESXi host's own shell (vmkfstools has no API equivalent)
+#   - SSH enabled on the ESXi host (TSM-SSH service) -- `govc
+#     host.service.ls | grep ssh` to check, enable via the DCUI or web UI
+#     if not already on
 #   - The 3 golden templates (tpl-alpine, tpl-ubuntu-2204, tpl-debian-13)
-#     already built via ../packer/*.pkr.hcl and present on the ESXi host
+#     already built BY HAND (see ../README.md's "Known risk areas") and
+#     present on the ESXi host, powered off
 #   - python3 scripts/render_topology.py already run (needs generated/ to exist)
-#   - GOVC_URL / GOVC_INSECURE exported, or passed via --host below
+#   - GOVC_URL / GOVC_INSECURE / GOVC_DATASTORE exported
+#   - ESXI_HOST and ESXI_SSH_PASSWORD exported (root's SSH password --
+#     yes, the same credential as GOVC_URL's; kept separate rather than
+#     parsed out of GOVC_URL to avoid fragile URL-parsing for a password
+#     that may itself contain `@`/`:`/other URL-special characters)
 #
 # Usage:
-#   export GOVC_URL="https://root:PASSWORD@ESXI_HOST/sdk"
-#   export GOVC_INSECURE=1
+#   export GOVC_URL="https://192.168.18.135/sdk"
+#   export GOVC_USERNAME=root GOVC_PASSWORD='...' GOVC_INSECURE=1
+#   export GOVC_DATASTORE=datastore1
+#   export ESXI_HOST=192.168.18.135 ESXI_SSH_PASSWORD='...'
 #   ./deploy_govc.sh                    # deploy all 16
 #   ./deploy_govc.sh br ran             # deploy only these VMs (re-run/repair)
 #   ./deploy_govc.sh --portgroups       # just print the portgroup names this
@@ -27,8 +54,17 @@
 # (portgroup names VLAN-MGMT, VLAN-BB-ACCESS, VLAN-PEERING, VLAN-RAN,
 # VLAN-ENT-LAN). Create them yourself first (`govc host.portgroup.add` or
 # the ESXi host UI) -- this script only wires VMs to networks that already
-# exist, it does not create switches/port groups (those are a one-time,
-# host-level decision this script shouldn't make for you).
+# exist, it does not create switches/port groups.
+#
+# NOTE ON THE CONTROL NODE (wherever this script and ansible-playbook
+# actually run from): it needs its own IP address on EVERY one of the 5
+# VLANs above to reach every VM directly (SSH/Ansible), not just VLAN-MGMT
+# -- confirmed necessary on a real run once VMs on VLAN-BB-ACCESS/
+# PEERING/RAN/ENT-LAN turned out unreachable from a control node that only
+# had an MGMT-side address. If the control node is itself a VM on this
+# same ESXi host, give it one additional vNIC per VLAN (`govc
+# vm.network.add`) and a static IP in each (this script does not do that
+# for you -- it's a one-time setup step, not a per-VM-deploy operation).
 
 set -euo pipefail
 
@@ -58,7 +94,15 @@ if [ ! -f "$VMS_CSV" ]; then
 fi
 
 command -v govc >/dev/null 2>&1 || { echo "ERROR: govc no está en PATH -- https://github.com/vmware/govmomi/releases" >&2; exit 1; }
-: "${GOVC_URL:?export GOVC_URL=\"https://root:PASSWORD@ESXI_HOST/sdk\" primero}"
+command -v sshpass >/dev/null 2>&1 || { echo "ERROR: sshpass no está en PATH -- sudo apt install sshpass" >&2; exit 1; }
+: "${GOVC_URL:?export GOVC_URL primero}"
+: "${ESXI_HOST:?export ESXI_HOST=<ip del host ESXi> primero}"
+: "${ESXI_SSH_PASSWORD:?export ESXI_SSH_PASSWORD='...' primero (password de root para SSH al host ESXi)}"
+
+esxi_ssh() {
+  sshpass -p "$ESXI_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "root@${ESXI_HOST}" "$@"
+}
 
 FILTER=("$@")
 
@@ -102,7 +146,18 @@ deploy_one() {
     return
   fi
 
-  govc vm.clone -vm "$source_vm" -on=false -c="$vcpu" -m="$ram_mb" -ds="$DATASTORE" "$name"
+  echo "  clonando disco vía SSH (vmkfstools -i, standalone ESXi no soporta CloneVM_Task)..."
+  esxi_ssh "
+    set -e
+    mkdir -p /vmfs/volumes/${DATASTORE}/${name}
+    vmkfstools -i /vmfs/volumes/${DATASTORE}/${source_vm}/${source_vm}.vmdk -d thin /vmfs/volumes/${DATASTORE}/${name}/${name}.vmdk
+    cp /vmfs/volumes/${DATASTORE}/${source_vm}/${source_vm}.vmx /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
+    sed -i 's/${source_vm}/${name}/g' /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
+    sed -i '/^uuid\\.\\|^vc\\.uuid/d' /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
+    echo 'answer.msg.uuid.altered = \"I copied it\"' >> /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
+  "
+  govc vm.register "${name}/${name}.vmx"
+  govc vm.change -vm "$name" -c "$vcpu" -m "$ram_mb"
   govc vm.disk.change -vm "$name" -disk.name disk-1000-0 -size "${disk_gb}G" 2>/dev/null \
     || echo "  (aviso: no se pudo redimensionar el disco automaticamente -- ajustalo a mano si hace falta)"
 
@@ -141,8 +196,10 @@ for i in meta['interfaces']:
       echo "  AVISO: no se encontro ${ud_file} -- corre render_topology.py primero"
     fi
   elif [ "$os_family" = "alpine" ]; then
-    echo "  Alpine: aplica ${ALPINE_DIR}/${name}/answerfile a mano tras el primer arranque"
-    echo "          (scp + 'setup-alpine -f answerfile', o reconstruye desde ISO -- ver README.md)"
+    echo "  Alpine: tras encender, aplica hostname+red a mano por la CONSOLA WEB"
+    echo "          (no por SSH -- el clon aun tiene la IP/hostname del template,"
+    echo "          y no hay DHCP en las VLANs nuevas). Ver:"
+    echo "          ${ALPINE_DIR}/${name}/apply.sh -- pega su contenido en la consola."
   fi
 
   govc vm.power -on "$name"
@@ -163,5 +220,6 @@ for i in meta['interfaces']:
 } < "$VMS_CSV"
 
 echo ""
-echo "Listo. Para Alpine, aplica los answerfiles pendientes y luego corre:"
+echo "Listo. Para cada VM Alpine, aplica generated/alpine/<vm>/apply.sh por la"
+echo "consola web (no SSH) y luego corre:"
 echo "  ansible-playbook -i ../generated/ansible/inventory.ini ../ansible/site.yml"

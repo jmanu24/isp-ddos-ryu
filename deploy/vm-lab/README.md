@@ -7,18 +7,76 @@ element, sized to actually cross `DIST_MIN_SOURCES=5` per domain with
 traffic honest to each domain's own design (spoofed only where the
 domain already spoofs -- mobile, bgp -- never in enterprise).
 
-**Everything here is best-effort, unverified against a real ESXi host.**
-No ESXi environment was available to test any of this end-to-end -- every
-command/version/config is either (a) copied verbatim from this
-project's own already-working scripts (`deploy/install_bgp_peering.sh`,
-`deploy/install_bngblaster.sh`), or (b) fetched directly from srsRAN
-Project's own official, current documentation (fetched live via `gh api`
-against `srsran/srsRAN_Project_docs`, not from memory). Nothing was
-invented and presented as fact -- where something is a genuine guess or
-an extension beyond what's officially documented, it's flagged inline as
-such (search for "NOT from the original docs", "unverified", "riskiest").
-Budget real debugging time on your first run, especially for the
-RIC/RAN/Core/UE stack (see "Known risk areas" below).
+**Status: partially verified against a real ESXi 7.0.3 host (Enterprise
+Plus licensed, standalone, no vCenter).** The govc-based VM lifecycle
+(register/resize/network/power) and one full Alpine clone (`victim`)
+were confirmed working end-to-end on real hardware. Packer and
+`govc vm.clone` were NOT usable at all -- see "Confirmed standalone-ESXi
+limitations" below, a load-bearing section, read it before doing
+anything else. The RIC/RAN/Core/UE software stack itself (FlexRIC,
+srsRAN, Open5GS) remains unverified beyond individual config files
+fetched verbatim from srsRAN's own docs -- budget real debugging time
+there specifically (see "Known risk areas" below).
+
+## Confirmed standalone-ESXi limitations (read this first)
+
+Three separate vCenter-only restrictions were hit and confirmed on a
+real host -- none are bugs in this repo's scripts, all are hard platform
+limits with no config workaround:
+
+1. **No REST/vAPI session auth.** `/rest/com/vmware/cis/session` and
+   `/api/session` both return an empty `400 Bad Request` on a bare ESXi
+   host, confirmed via plain `curl`, independent of Packer. CIS session
+   management is fundamentally an SSO/PSC (vCenter) concept a standalone
+   host doesn't implement the same way, regardless of license tier
+   (confirmed against a real **Enterprise Plus** license -- this is not
+   a "buy the free tier a license" problem). Packer's `vsphere-iso`
+   builder hard-requires this login with no way to skip it
+   (`packer-plugin-vsphere`'s `NewDriver()` always calls it) -- **Packer
+   cannot build anything against standalone ESXi, period.**
+2. **No `MarkAsTemplate`.** Confirmed via `govc vm.markastemplate`:
+   `ServerFaultCode: The operation is not supported on the object.`
+   Templates as a distinct object type from a VM are a vCenter inventory
+   feature. Not needed anyway -- `vm.clone`/manual copying works from any
+   powered-off VM regardless of template status.
+3. **No `CloneVM_Task`.** Confirmed via `govc vm.clone`: the same "not
+   supported on the object" error. Confirmed independently by a
+   `govmomi` maintainer: *"ESXi does not support the `CloneVM` method,
+   regardless of license. Only supported by vCenter."*
+   (github.com/vmware/govmomi/issues/1469#issuecomment).
+
+**What this means practically:**
+- The 3 golden templates (`tpl-ubuntu-2204`, `tpl-debian-13`,
+  `tpl-alpine`) must be built **by hand**, once each, via the ESXi web
+  console (`https://<esxi-host>/ui/`) -- upload the ISO, `govc vm.create`
+  the shell (scripted, see below), install interactively through the
+  console. Not automatable without vCenter.
+- `deploy_govc.sh` clones the 16 lab VMs via the standard bare-ESXi
+  workaround instead of `vm.clone`: SSH to the ESXi host's own shell,
+  `vmkfstools -i` to copy the VMDK at the datastore level, then
+  `govc vm.register` the copy as a new VM. This means the script needs
+  **SSH access to the ESXi host itself** (`TSM-SSH` service, check with
+  `govc host.service.ls | grep ssh`), not just the vSphere API.
+- Alpine clones can't be customized over SSH the way Ubuntu/Debian's
+  cloud-init can -- a clone boots with the template's old hostname/IP,
+  and there's no DHCP on these new internal VLANs to reach it any other
+  way. `generated/alpine/<vm>/apply.sh` (see `scripts/render_topology.py`)
+  has the fix -- paste it into the VM's **web console**, not SSH. It is
+  deliberately NOT a re-run of `setup-alpine`: that tries to redo the
+  *entire* install (repartition, re-download every base package), which
+  both fails outright (no internet on a brand-new isolated VLAN yet) and
+  is unnecessary -- the cloned disk already has everything installed.
+  `apply.sh` only edits `/etc/hostname` and `/etc/network/interfaces`.
+
+**Also confirmed necessary, not ESXi-specific:** whichever machine
+actually runs `ansible-playbook`/`deploy_govc.sh` (the "control node")
+needs its own IP address on **every one of the 5 lab VLANs**, not just
+the one hosting the orchestrator -- otherwise most of the 16 VMs are
+simply unreachable for configuration. If the control node is itself a VM
+on the same ESXi host, give it one additional vNIC per VLAN
+(`govc vm.network.add -vm <control-vm> -net <portgroup> -net.adapter vmxnet3`,
+repeated 5x) and a static IP in each -- this is a one-time setup step on
+the control node itself, not something `deploy_govc.sh` does for you.
 
 ## Layout
 
@@ -37,20 +95,23 @@ generated/                  # ALL derived from topology.yaml -- never hand-edit,
 
 ## Prerequisites
 
-- A standalone ESXi host (no vCenter needed) with 5 port groups already
-  created, matching `topology.yaml`'s `networks:` block. Check the exact
-  names/subnets any time with:
+- A standalone ESXi host with 5 port groups already created, matching
+  `topology.yaml`'s `networks:` block, and **SSH enabled** (`TSM-SSH`
+  service -- `govc host.service.ls | grep ssh`; enable via the DCUI or
+  web UI if off). Check the exact port group names/subnets any time with:
   ```bash
   python3 scripts/render_topology.py   # first, to populate generated/
   ./scripts/deploy_govc.sh --portgroups
   ```
-- [Packer](https://developer.hashicorp.com/packer/install) +
-  `packer plugins install github.com/hashicorp/vsphere`
 - [govc](https://github.com/vmware/govmomi/releases) (VMware's official
   CLI -- talks directly to ESXi, no vCenter required)
+- `sshpass` (`apt install sshpass`) -- for non-interactive SSH to the
+  ESXi host's own shell (`vmkfstools` has no vSphere API equivalent)
 - Python 3 + `pip install -r requirements.txt` (pyyaml, ansible-core)
 - `ansible-galaxy collection install community.general ansible.posix`
   (needed for the Alpine `apk` module and the sysctl module)
+- ~~Packer~~ -- **not usable against standalone ESXi at all**, see
+  above. The 3 golden templates are built by hand instead (step 2 below).
 
 ## Deployment flow
 
@@ -58,31 +119,42 @@ generated/                  # ALL derived from topology.yaml -- never hand-edit,
 # 1. Generate everything derived from topology.yaml
 python3 scripts/render_topology.py
 
-# 2. Build the 3 golden templates (once) -- EACH LIVES IN ITS OWN
-#    SUBDIRECTORY (packer/ubuntu-2204/, packer/debian-13/, packer/alpine/),
-#    not the shared packer/ root -- `packer init .` combines every
-#    .pkr.hcl file in one directory into a single template, so 3 files
-#    declaring the same variable names in the same directory collide.
-for t in ubuntu-2204 debian-13 alpine; do
-  (
-    cd "packer/$t"
-    packer init .
-    packer build -var esxi_host=YOUR_ESXI_IP -var esxi_password=YOUR_PASSWORD \
-                  -var datastore=YOUR_DATASTORE "$t.pkr.hcl"
-  )
-done
-
-# 3. Clone the 16 VMs from those templates, sized/networked per topology.yaml
-export GOVC_URL="https://root:YOUR_PASSWORD@YOUR_ESXI_IP/sdk"
-export GOVC_INSECURE=1
+export GOVC_URL="https://YOUR_ESXI_IP/sdk"
+export GOVC_USERNAME=root GOVC_PASSWORD='YOUR_PASSWORD' GOVC_INSECURE=1
 export GOVC_DATASTORE=YOUR_DATASTORE
+export ESXI_HOST=YOUR_ESXI_IP ESXI_SSH_PASSWORD='YOUR_PASSWORD'
+
+# 2. Build the 3 golden templates BY HAND (once each) -- Packer cannot do
+#    this against standalone ESXi (see above). For each template
+#    (tpl-alpine, tpl-ubuntu-2204, tpl-debian-13):
+#      a) Upload its ISO to the datastore:
+govc datastore.mkdir -p /isos
+govc datastore.upload /path/to/the.iso isos/the.iso
+#      b) Create the VM shell and attach the ISO:
+govc vm.create -on=false -c=1 -m=512 -disk=2G -net="VM Network" \
+               -net.adapter=vmxnet3 -g=other5xLinux64Guest tpl-alpine
+govc device.cdrom.add -vm tpl-alpine
+govc device.cdrom.insert -vm tpl-alpine -device cdrom-3000 isos/the.iso
+govc vm.power -on tpl-alpine
+#      c) Open https://YOUR_ESXI_IP/ui/ -> that VM -> Console, and
+#         install interactively (Alpine: root/no password -> setup-alpine,
+#         DHCP + openssh + PermitRootLogin yes; Ubuntu/Debian: normal
+#         installer, create a `labadmin` user with sudo, install
+#         openssh-server). When done, from the console:
+#           echo "PermitRootLogin yes" >> /etc/ssh/sshd_config  # Alpine
+#         then shut the VM down and eject its ISO:
+govc device.cdrom.eject -vm tpl-alpine
+
+# 3. Provision the 16 lab VMs (SSH+vmkfstools clone, resize, network,
+#    cloud-init injection -- see deploy_govc.sh's own header for exactly
+#    what this does and why it's not govc vm.clone)
 ./scripts/deploy_govc.sh
 
-# 4. Alpine VMs (7 of them) need their static-IP answerfile applied by hand
-#    after first boot -- deploy_govc.sh prints exactly which ones and reminds
-#    you at the end. For each:
-scp generated/alpine/<vm-name>/answerfile root@<temp-dhcp-ip>:/tmp/answerfile
-ssh root@<temp-dhcp-ip> "setup-alpine -f /tmp/answerfile"
+# 4. Alpine VMs need hostname+static-IP applied by hand via the WEB
+#    CONSOLE (not SSH -- no DHCP on these VLANs yet). deploy_govc.sh
+#    tells you which ones at the end; for each, open its console and
+#    paste the contents of:
+cat generated/alpine/<vm-name>/apply.sh
 
 # 5. Install and configure the real software on all 16
 cd ansible
@@ -91,7 +163,8 @@ ansible-playbook site.yml
 
 Re-run step 5 any time (idempotent); re-run step 1 any time
 `topology.yaml` changes (resizing a VM, changing an IP) and re-apply
-steps 3-5 for whatever changed.
+steps 3-5 for whatever changed. Step 2 only needs to happen once, ever,
+per golden template.
 
 ## Known risk areas (read before you start troubleshooting blind)
 
