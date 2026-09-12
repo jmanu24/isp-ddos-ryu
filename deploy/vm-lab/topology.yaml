@@ -13,7 +13,11 @@
 networks:
   MGMT:        {portgroup: "VLAN-MGMT",       cidr: "10.10.0.0/24",  gateway: "10.10.0.1"}
   BB_ACCESS:   {portgroup: "VLAN-BB-ACCESS",  cidr: "10.20.0.0/24",  gateway: "10.20.0.1"}
-  PEERING:     {portgroup: "VLAN-PEERING",    cidr: "10.30.0.0/30",  gateway: null}
+  # /29, not the textbook /30 for a point-to-point eBGP link -- the
+  # control node (wherever `ansible-playbook`/`govc` actually runs from)
+  # also needs its own address on every one of these segments to reach
+  # br/peer-router directly, and a /30 has no room left for a 3rd host.
+  PEERING:     {portgroup: "VLAN-PEERING",    cidr: "10.30.0.0/29",  gateway: null}
   RAN:         {portgroup: "VLAN-RAN",        cidr: "10.40.0.0/24",  gateway: "10.40.0.1"}
   ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.50.0.0/24",  gateway: null}
 
