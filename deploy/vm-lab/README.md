@@ -24,7 +24,8 @@ RIC/RAN/Core/UE stack (see "Known risk areas" below).
 
 ```
 topology.yaml              # SINGLE SOURCE OF TRUTH -- 16 VMs, specs, addressing
-packer/                    # 3 golden-image templates (Alpine, Ubuntu 22.04, Debian 13)
+packer/                    # 3 golden-image templates, ONE SUBDIRECTORY EACH
+  ubuntu-2204/, debian-13/, alpine/   # (packer combines all .pkr.hcl in one dir into one template)
 scripts/
   render_topology.py       # topology.yaml -> generated/ (cloud-init, answerfiles, Ansible inventory)
   deploy_govc.sh            # generated/ -> actual VMs on ESXi, via govc
@@ -57,16 +58,19 @@ generated/                  # ALL derived from topology.yaml -- never hand-edit,
 # 1. Generate everything derived from topology.yaml
 python3 scripts/render_topology.py
 
-# 2. Build the 3 golden templates (once)
-cd packer
-packer init .
-packer build -var esxi_host=YOUR_ESXI_IP -var esxi_password=YOUR_PASSWORD \
-              -var datastore=YOUR_DATASTORE ubuntu-2204.pkr.hcl
-packer build -var esxi_host=YOUR_ESXI_IP -var esxi_password=YOUR_PASSWORD \
-              -var datastore=YOUR_DATASTORE debian-13.pkr.hcl
-packer build -var esxi_host=YOUR_ESXI_IP -var esxi_password=YOUR_PASSWORD \
-              -var datastore=YOUR_DATASTORE alpine.pkr.hcl
-cd ..
+# 2. Build the 3 golden templates (once) -- EACH LIVES IN ITS OWN
+#    SUBDIRECTORY (packer/ubuntu-2204/, packer/debian-13/, packer/alpine/),
+#    not the shared packer/ root -- `packer init .` combines every
+#    .pkr.hcl file in one directory into a single template, so 3 files
+#    declaring the same variable names in the same directory collide.
+for t in ubuntu-2204 debian-13 alpine; do
+  (
+    cd "packer/$t"
+    packer init .
+    packer build -var esxi_host=YOUR_ESXI_IP -var esxi_password=YOUR_PASSWORD \
+                  -var datastore=YOUR_DATASTORE "$t.pkr.hcl"
+  )
+done
 
 # 3. Clone the 16 VMs from those templates, sized/networked per topology.yaml
 export GOVC_URL="https://root:YOUR_PASSWORD@YOUR_ESXI_IP/sdk"

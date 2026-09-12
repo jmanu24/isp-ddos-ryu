@@ -79,7 +79,7 @@ source "vsphere-iso" "ubuntu" {
   # user-data/meta-data from this NoCloud datasource, so the whole OS
   # install (partitioning, user, ssh keys, package updates) needs zero
   # interactive input.
-  http_directory = "http/ubuntu"
+  http_directory = "http"
 
   boot_wait = "5s"
   boot_command = [

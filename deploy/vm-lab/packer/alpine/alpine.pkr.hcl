@@ -68,7 +68,7 @@ source "vsphere-iso" "alpine" {
   iso_url      = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-virt-3.24.1-x86_64.iso"
   iso_checksum = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-virt-3.24.1-x86_64.iso.sha256"
 
-  http_directory = "http/alpine"
+  http_directory = "http"
 
   boot_wait = "30s"
   boot_command = [
