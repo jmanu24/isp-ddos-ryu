@@ -20,13 +20,33 @@ packer {
   }
 }
 
-variable "esxi_host"     { type = string }
-variable "esxi_user"     { type = string, default = "root" }
-variable "esxi_password" { type = string, sensitive = true }
-variable "datastore"     { type = string }
-variable "network"       { type = string, default = "VM Network" }
-variable "iso_datastore" { type = string, default = null } # falls back to `datastore`
-variable "ssh_password"  { type = string, sensitive = true, default = "srslab-temp" }
+variable "esxi_host" {
+  type = string
+}
+variable "esxi_user" {
+  type    = string
+  default = "root"
+}
+variable "esxi_password" {
+  type      = string
+  sensitive = true
+}
+variable "datastore" {
+  type = string
+}
+variable "network" {
+  type    = string
+  default = "VM Network"
+}
+variable "iso_datastore" {
+  type    = string
+  default = null # falls back to `datastore`
+}
+variable "ssh_password" {
+  type      = string
+  sensitive = true
+  default   = "srslab-temp"
+}
 
 source "vsphere-iso" "ubuntu" {
   vcenter_server      = var.esxi_host
