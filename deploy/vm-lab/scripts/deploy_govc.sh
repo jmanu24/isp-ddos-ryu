@@ -100,8 +100,14 @@ command -v sshpass >/dev/null 2>&1 || { echo "ERROR: sshpass no está en PATH --
 : "${ESXI_SSH_PASSWORD:?export ESXI_SSH_PASSWORD='...' primero (password de root para SSH al host ESXi)}"
 
 esxi_ssh() {
+  # `</dev/null` is load-bearing, not decoration: the main loop below
+  # reads $VMS_CSV via `while read ... < "$VMS_CSV"`, so every command in
+  # its body inherits that same fd 0 unless redirected. Without this,
+  # confirmed on a real run: ssh (via sshpass) silently consumed the rest
+  # of the CSV's bytes as its own stdin, so the loop only ever processed
+  # the FIRST requested VM and exited clean with no error for the rest.
   sshpass -p "$ESXI_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "root@${ESXI_HOST}" "$@"
+    "root@${ESXI_HOST}" "$@" < /dev/null
 }
 
 FILTER=("$@")
