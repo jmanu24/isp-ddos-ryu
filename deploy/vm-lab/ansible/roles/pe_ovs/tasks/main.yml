@@ -1,0 +1,32 @@
+---
+# pe_ovs role -- Open vSwitch, controlled by the orchestrator's own
+# ryu-manager over OpenFlow -- this is the real "Ryu <-> switch" path the
+# thesis review's own table names for the enterprise domain.
+- name: Install packages
+  community.general.apk:
+    name: [openvswitch, openssh]
+    state: present
+    update_cache: true
+
+- name: Enable and start ovsdb-server + ovs-vswitchd
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [ovsdb-server, ovs-vswitchd]
+
+- name: Create the bridge (idempotent -- ovs-vsctl no-ops if it exists)
+  ansible.builtin.command:
+    cmd: ovs-vsctl --may-exist add-br br-ent
+
+- name: Attach the enterprise-LAN NIC to the bridge
+  ansible.builtin.command:
+    cmd: "ovs-vsctl --may-exist add-port br-ent {{ ent_lan_iface | default('eth1') }}"
+
+- name: Point the bridge at the orchestrator's OpenFlow controller
+  ansible.builtin.command:
+    cmd: "ovs-vsctl set-controller br-ent tcp:{{ orchestrator_addr | default('10.10.0.1') }}:6653"
+
+- name: Set OpenFlow13 (matches controller/ryu_controller_2.py's own OFP_VERSIONS)
+  ansible.builtin.command:
+    cmd: ovs-vsctl set bridge br-ent protocols=OpenFlow13

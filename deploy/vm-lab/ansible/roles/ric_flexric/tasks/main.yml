@@ -1,0 +1,79 @@
+---
+# ric_flexric role -- FlexRIC on the `br-flexric` branch (commit 1a3903a7),
+# confirmed by srsRAN Project's own official application note as the
+# branch that interoperates with a REAL srsRAN gNB's native E2 interface
+# (E2SM_KPM + E2SM_RC). Deliberately NOT the `oie-ric-taap-xapps` branch
+# used by this repo's earlier, abandoned deploy/setup_ns_oran_flexric.sh
+# attempt (ns-3 simulation + Orange's ns-O-RAN-flexric fork) -- that path
+# had real, confirmed bugs (a heap buffer overflow in the ns-3 fork's own
+# ASN.1 measurement-name encoding, a bad_any_cast on Test Condition
+# Value, PRB-threshold gating) entirely inside Orange's ns-3 integration
+# layer, none of them in FlexRIC itself. This role never touches ns-3,
+# e2sim-kpmv3, or mmwave-LENA-oran at all.
+#
+# CRITICAL: this FlexRIC branch only builds with gcc-10, not Ubuntu
+# 22.04's default gcc-11 -- the compiler-alternative switch below is not
+# optional.
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - swig
+      - libsctp-dev
+      - python3
+      - python3-dev
+      - cmake-curses-gui
+      - pkg-config
+      - libconfig-dev
+      - libconfig++-dev
+      - gcc-10
+      - g++-10
+      - git
+    state: present
+    update_cache: true
+
+- name: Register gcc-10/g++-10 as update-alternatives choices
+  community.general.alternatives:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    priority: 100
+  loop:
+    - {name: gcc, path: /usr/bin/gcc-10}
+    - {name: g++, path: /usr/bin/g++-10}
+
+- name: Clone FlexRIC
+  ansible.builtin.git:
+    repo: https://gitlab.eurecom.fr/mosaic5g/flexric.git
+    dest: /opt/flexric
+    version: br-flexric
+    force: false
+
+- name: Pin to the confirmed-working commit
+  ansible.builtin.command:
+    cmd: git checkout 1a3903a7
+    chdir: /opt/flexric
+
+- name: Create build directory
+  ansible.builtin.file:
+    path: /opt/flexric/build
+    state: directory
+
+- name: Configure FlexRIC (cmake)
+  ansible.builtin.command:
+    cmd: cmake -DKPM_VERSION=KPM_V3_00 -DXAPP_DB=NONE_XAPP ..
+    chdir: /opt/flexric/build
+    creates: /opt/flexric/build/CMakeCache.txt
+
+- name: Build FlexRIC
+  # NOTE: no `creates:` idempotency marker here -- the exact output binary
+  # path/name for this branch isn't independently confirmed. `make` itself
+  # is already incremental, so re-running this task on a second play is
+  # safe (just not a no-op at the Ansible-task level).
+  ansible.builtin.command:
+    cmd: make -j{{ ansible_processor_vcpus | default(2) }}
+    chdir: /opt/flexric/build
+
+- name: Install FlexRIC
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /opt/flexric/build
+  become: true

@@ -1,0 +1,33 @@
+---
+# bng role -- Alpine, broadband access gateway (routing + DHCP for the
+# suscriptor segment). Deliberately minimal: real per-VLAN DHCP config
+# (as the Mininet-based BB-ACCESS setup already does in
+# deploy/setup_bng_netns.sh) is topology/session-count specific -- adapt
+# templates/dnsmasq.conf.j2 once you know how many subscriber
+# sessions/VLANs this VM actually needs to serve.
+- name: Install packages
+  community.general.apk:
+    name: [dnsmasq, iproute2, nftables, openssh]
+    state: present
+    update_cache: true
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Deploy dnsmasq config
+  ansible.builtin.template:
+    src: dnsmasq.conf.j2
+    dest: /etc/dnsmasq.conf
+    mode: "0644"
+  notify: restart dnsmasq
+
+- name: Enable and start dnsmasq
+  ansible.builtin.service:
+    name: dnsmasq
+    enabled: true
+    state: started

@@ -1,0 +1,41 @@
+---
+# victim role -- the shared protected asset every domain's test scenario
+# targets. A plain HTTP echo service is enough: what matters for
+# detection/mitigation testing is that it's a REAL listening service (so
+# a SYN flood gets real SYN-ACKs, a closed port gets real RST/ICMP-
+# unreachable backscatter -- see the whole backscatter-misattribution
+# investigation this session had for the bgp domain, which relied on
+# exactly this kind of real kernel behavior).
+- name: Install packages
+  community.general.apk:
+    name: [python3, openssh]
+    state: present
+    update_cache: true
+
+- name: Deploy a minimal OpenRC service running Python's http.server
+  ansible.builtin.copy:
+    content: |
+      #!/sbin/openrc-run
+      name="victim-http"
+      command="/usr/bin/python3"
+      command_args="-m http.server 80 --directory /var/www"
+      command_background="yes"
+      pidfile="/run/${RC_SVCNAME}.pid"
+    dest: /etc/init.d/victim-http
+    mode: "0755"
+
+- name: Create the served directory
+  ansible.builtin.file:
+    path: /var/www
+    state: directory
+
+- name: Drop a trivial index page
+  ansible.builtin.copy:
+    content: "victim server -- if you can read this, port 80 is reachable.\n"
+    dest: /var/www/index.html
+
+- name: Enable and start victim-http
+  ansible.builtin.service:
+    name: victim-http
+    enabled: true
+    state: started

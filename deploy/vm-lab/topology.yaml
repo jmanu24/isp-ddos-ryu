@@ -1,0 +1,183 @@
+# topology.yaml -- single source of truth for the 16-VM ESXi lab
+# (docs/thesis-revision-plan.md SS4.1.1-4.1.2's "topologia con limites de VM,
+# interfaces y puntos de medicion reales").
+#
+# Every other file under deploy/vm-lab/ is DERIVED from this one:
+#   - scripts/render_topology.py reads it to generate per-VM cloud-init
+#     user-data / Alpine answerfiles and the Ansible inventory.
+#   - scripts/deploy_govc.sh reads it to clone+size+network each VM on ESXi.
+#
+# Edit THIS file when adding/resizing a VM -- never hand-edit the generated
+# ansible/inventory.ini or the per-VM cloud-init files under generated/.
+
+networks:
+  MGMT:        {portgroup: "VLAN-MGMT",       cidr: "10.10.0.0/24",  gateway: "10.10.0.1"}
+  BB_ACCESS:   {portgroup: "VLAN-BB-ACCESS",  cidr: "10.20.0.0/24",  gateway: "10.20.0.1"}
+  PEERING:     {portgroup: "VLAN-PEERING",    cidr: "10.30.0.0/30",  gateway: null}
+  RAN:         {portgroup: "VLAN-RAN",        cidr: "10.40.0.0/24",  gateway: "10.40.0.1"}
+  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.50.0.0/24",  gateway: null}
+
+templates:
+  alpine:  {source_vm: "tpl-alpine",       os_family: "alpine"}
+  ubuntu:  {source_vm: "tpl-ubuntu-2204",  os_family: "ubuntu"}
+  debian:  {source_vm: "tpl-debian-13",    os_family: "debian"}
+
+vms:
+  - name: orchestrator
+    role: orchestrator
+    template: debian
+    vcpu: 2
+    ram_mb: 2048
+    disk_gb: 10
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.1"}
+
+  - name: bng
+    role: bng
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 6
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.2"}
+      - {network: BB_ACCESS, ip: "10.20.0.1"}
+
+  - name: suscriptor
+    role: suscriptor
+    template: ubuntu
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 8
+    interfaces:
+      - {network: BB_ACCESS, ip: "10.20.0.2"}
+
+  - name: br
+    role: br
+    template: ubuntu
+    vcpu: 2
+    ram_mb: 3072
+    disk_gb: 10
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.3"}
+      - {network: PEERING, ip: "10.30.0.1"}
+
+  - name: peer-router
+    role: peer_router
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: PEERING, ip: "10.30.0.2"}
+
+  - name: ric
+    role: ric_flexric
+    template: ubuntu
+    vcpu: 2
+    ram_mb: 4096
+    disk_gb: 15
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.4"}
+
+  - name: core5g
+    role: core5g_open5gs
+    template: ubuntu
+    vcpu: 2
+    ram_mb: 4096
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.5"}
+      - {network: RAN, ip: "10.40.0.1"}
+
+  - name: ran
+    role: ran_srsran
+    template: ubuntu
+    vcpu: 4
+    ram_mb: 4096
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.6"}
+      - {network: RAN, ip: "10.40.0.2"}
+
+  - name: ue
+    role: ue_srsue
+    template: ubuntu
+    vcpu: 2
+    ram_mb: 2048
+    disk_gb: 10
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.8"}
+      - {network: RAN, ip: "10.40.0.3"}
+
+  - name: pe
+    role: pe_ovs
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.7"}
+      - {network: ENT_LAN, ip: null}   # bridged by OVS, no L3 address of its own
+
+  - name: ent-site-1
+    role: enterprise_site
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: ENT_LAN, ip: "10.50.0.11"}
+
+  - name: ent-site-2
+    role: enterprise_site
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: ENT_LAN, ip: "10.50.0.12"}
+
+  - name: ent-site-3
+    role: enterprise_site
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: ENT_LAN, ip: "10.50.0.13"}
+
+  - name: ent-site-4
+    role: enterprise_site
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: ENT_LAN, ip: "10.50.0.14"}
+
+  - name: ent-site-5
+    role: enterprise_site
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: ENT_LAN, ip: "10.50.0.15"}
+
+  - name: victim
+    role: victim
+    template: alpine
+    vcpu: 1
+    ram_mb: 1024
+    disk_gb: 4
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.100"}
+
+# BGP AS numbers for the one real eBGP session in this lab (br <-> peer-router).
+# Deliberately distinct from FLOW_LOCAL_AS/EXABGP_LOCAL_AS (65001/65002 --
+# see webtool/peering_ops.py) which stay reserved for the INTERNAL flow<->exabgp
+# FlowSpec control channel on the orchestrator/br pair -- this is a separate,
+# real BGP session for genuine route exchange, not FlowSpec.
+bgp:
+  br_as: 65000
+  peer_router_as: 64512

@@ -1,0 +1,18 @@
+# Managed by Ansible (roles/peer_router) -- real eBGP with br.
+router id 10.30.0.2;
+
+protocol device {}
+
+protocol static default_route {
+    ipv4;
+    route 0.0.0.0/0 via 10.30.0.1;
+}
+
+protocol bgp br {
+    local as {{ bgp_peer_router_as }};
+    neighbor 10.30.0.1 as {{ bgp_br_as }};
+    ipv4 {
+        import none;
+        export where source = RTS_STATIC;  # announce only the default route
+    };
+}

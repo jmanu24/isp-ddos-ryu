@@ -1,0 +1,56 @@
+---
+# ran_srsran role -- srsRAN Project gNB (CU+DU+RU fused, no F1 split),
+# ZMQ RF driver (no SDR hardware), built with the E2 interface enabled --
+# this is what the ric_flexric role's FlexRIC actually talks to.
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - cmake
+      - make
+      - gcc
+      - g++
+      - pkg-config
+      - libfftw3-dev
+      - libmbedtls-dev
+      - libsctp-dev
+      - libyaml-cpp-dev
+      - libgtest-dev
+      - libzmq3-dev
+      - git
+    state: present
+    update_cache: true
+
+- name: Clone srsRAN_Project
+  ansible.builtin.git:
+    repo: https://github.com/srsran/srsRAN_Project.git
+    dest: /opt/srsRAN_Project
+    version: main
+    force: false
+
+- name: Create build directory
+  ansible.builtin.file:
+    path: /opt/srsRAN_Project/build
+    state: directory
+
+- name: Configure (cmake, ZMQ + export/E2 enabled)
+  ansible.builtin.command:
+    cmd: cmake ../ -DENABLE_EXPORT=ON -DENABLE_ZEROMQ=ON
+    chdir: /opt/srsRAN_Project/build
+    creates: /opt/srsRAN_Project/build/CMakeCache.txt
+
+- name: Build (this takes a while -- gNB + all libraries)
+  ansible.builtin.command:
+    cmd: make -j{{ ansible_processor_vcpus | default(4) }}
+    chdir: /opt/srsRAN_Project/build
+
+- name: Install
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /opt/srsRAN_Project/build
+  become: true
+
+- name: Deploy gNB ZMQ config (multi-UE, matches ric_flexric's E2 subscription expectations)
+  ansible.builtin.template:
+    src: gnb_zmq.yaml.j2
+    dest: /etc/srsran/gnb_zmq.yaml
+    mode: "0644"

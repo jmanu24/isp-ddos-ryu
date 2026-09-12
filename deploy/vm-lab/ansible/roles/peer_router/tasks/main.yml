@@ -1,0 +1,22 @@
+---
+# peer_router role -- Alpine, the "upstream AS" side of the one real eBGP
+# session in this lab (see br role). bird2, not FRR -- lighter, and
+# actually packaged for Alpine (FRR is not).
+- name: Install packages
+  community.general.apk:
+    name: [hping3, bird, openssh]
+    state: present
+    update_cache: true
+
+- name: Deploy bird config (eBGP with br)
+  ansible.builtin.template:
+    src: bird.conf.j2
+    dest: /etc/bird.conf
+    mode: "0644"
+  notify: restart bird
+
+- name: Enable and start bird
+  ansible.builtin.service:
+    name: bird
+    enabled: true
+    state: started

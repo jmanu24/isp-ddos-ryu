@@ -1,0 +1,42 @@
+---
+# orchestrator role -- ryu-manager + exabgp, exactly matching this repo's
+# own requirements.txt pins (do not drift from these without also
+# updating the main repo's requirements.txt -- they must stay identical).
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [python3, python3-venv, python3-pip, git, curl]
+    state: present
+    update_cache: true
+
+- name: Clone Tesis_Controller
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
+    force: false
+
+- name: Create venv
+  ansible.builtin.command:
+    cmd: python3 -m venv /opt/Tesis_Controller/venv
+    creates: /opt/Tesis_Controller/venv/bin/python
+
+- name: Install pinned Python deps (from the repo's own requirements.txt)
+  ansible.builtin.pip:
+    requirements: /opt/Tesis_Controller/requirements.txt
+    virtualenv: /opt/Tesis_Controller/venv
+
+- name: Install exabgp (not in requirements.txt -- not consistently packaged across distros)
+  ansible.builtin.pip:
+    name: exabgp
+    virtualenv: /opt/Tesis_Controller/venv
+
+- name: Create exabgp FIFO directory
+  ansible.builtin.file:
+    path: /run/exabgp
+    state: directory
+    mode: "1777"
+
+- name: Create exabgp FIFO
+  ansible.builtin.command:
+    cmd: mkfifo -m 666 /run/exabgp/exabgp.in
+    creates: /run/exabgp/exabgp.in

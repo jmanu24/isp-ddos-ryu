@@ -1,0 +1,16 @@
+! Managed by Ansible (roles/br) -- real eBGP with peer-router, SEPARATE
+! from flow<->exabgp's own internal FlowSpec control channel.
+frr version 8.0
+frr defaults traditional
+hostname br
+!
+router bgp {{ bgp_br_as }}
+ bgp router-id 10.30.0.1
+ neighbor 10.30.0.2 remote-as {{ bgp_peer_router_as }}
+ !
+ address-family ipv4 unicast
+  network 10.10.0.0/24
+ exit-address-family
+!
+line vty
+!

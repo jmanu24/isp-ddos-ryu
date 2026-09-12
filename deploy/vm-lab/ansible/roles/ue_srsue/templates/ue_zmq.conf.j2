@@ -1,0 +1,84 @@
+# Managed by Ansible (roles/ue_srsue) -- UE {{ item }}.
+# Based VERBATIM on srsRAN Project's own official multi-UE application
+# note configs (ue1/ue2/ue3_zmq.conf), extended from their documented 3
+# UEs to 5 following the SAME port arithmetic they use
+# (tx=2000+100*n+1, rx=2000+100*n). UE4/UE5's IMSI/k/imei values below are
+# NOT from the original docs (which only cover 3) -- they follow the same
+# style as ue2/ue3's own values, but you must add matching rows to
+# core5g_open5gs's subscriber_db.csv yourself (see that role's files/
+# directory) before UE4/UE5 can ever attach.
+
+[rf]
+freq_offset = 0
+tx_gain = 50
+rx_gain = 40
+srate = 11.52e6
+nof_antennas = 1
+
+device_name = zmq
+device_args = tx_port=tcp://127.0.0.1:{{ 2000 + item * 100 + 1 }},rx_port=tcp://127.0.0.1:{{ 2000 + item * 100 }},base_srate=11.52e6
+
+[rat.eutra]
+dl_earfcn = 2850
+nof_carriers = 0
+
+[rat.nr]
+bands = 3
+nof_carriers = 1
+max_nof_prb = 52
+nof_prb = 52
+
+[pcap]
+enable = none
+mac_filename = /tmp/ue{{ item }}_mac.pcap
+mac_nr_filename = /tmp/ue{{ item }}_mac_nr.pcap
+nas_filename = /tmp/ue{{ item }}_nas.pcap
+
+[log]
+all_level = info
+phy_lib_level = none
+all_hex_limit = 32
+filename = /tmp/ue{{ item }}.log
+file_max_size = -1
+
+[usim]
+mode = soft
+algo = milenage
+opc  = 63bfa50ee6523365ff14c1f45f88737d
+{% if item == 1 -%}
+k    = 00112233445566778899aabbccddeeff
+imsi = 001010123456780
+imei = 353490069873319
+{%- elif item == 2 -%}
+k    = 00112233445566778899aabbccddef00
+imsi = 001010123456790
+imei = 353490069873318
+{%- elif item == 3 -%}
+k    = 00112233445566778899aabbccddef01
+imsi = 001010123456791
+imei = 353490069873312
+{%- elif item == 4 -%}
+k    = 00112233445566778899aabbccddef02
+imsi = 001010123456792
+imei = 353490069873313
+{%- else -%}
+k    = 00112233445566778899aabbccddef03
+imsi = 001010123456793
+imei = 353490069873314
+{%- endif %}
+
+[rrc]
+release = 15
+ue_category = 4
+
+[nas]
+apn = srsapn
+apn_protocol = ipv4
+
+[gw]
+netns = ue{{ item }}
+ip_devname = tun_srsue
+ip_netmask = 255.255.255.0
+
+[gui]
+enable = false

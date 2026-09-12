@@ -1,0 +1,72 @@
+---
+# core5g_open5gs role -- Open5GS, dockerized via srsRAN_Project's OWN
+# docker/ directory (not a standalone Open5GS install) -- this is
+# deliberate: it's the exact combination srsRAN's own application notes
+# validate their gNB against, avoiding independent Open5GS<->srsRAN
+# version-compatibility guesswork.
+- name: Install Docker prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg, git]
+    state: present
+    update_cache: true
+
+- name: Add Docker's official GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+    force: false
+
+- name: Add Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+    filename: docker
+
+- name: Install Docker Engine + Compose plugin
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+    state: present
+    update_cache: true
+
+- name: Clone srsRAN_Project (for its bundled docker/open5gs setup)
+  ansible.builtin.git:
+    repo: https://github.com/srsran/srsRAN_Project.git
+    dest: /opt/srsRAN_Project
+    version: main
+    force: false
+
+- name: Deploy the 5-UE subscriber DB (real srsRAN docs' 3 UEs + 2 more, see file's own header comment)
+  ansible.builtin.copy:
+    src: subscriber_db.csv
+    dest: /opt/srsRAN_Project/docker/open5gs/subscriber_db.csv
+    mode: "0644"
+
+- name: Deploy open5gs.env (cross-VM AMF/UPF address -- see template's own comment for the real risk here)
+  ansible.builtin.template:
+    src: open5gs.env.j2
+    dest: /opt/srsRAN_Project/docker/open5gs/open5gs.env
+    mode: "0644"
+
+- name: Deploy systemd unit for the 5GC docker-compose stack
+  ansible.builtin.template:
+    src: open5gs-5gc.service.j2
+    dest: /etc/systemd/system/open5gs-5gc.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start 5GC
+  ansible.builtin.service:
+    name: open5gs-5gc
+    enabled: true
+    state: started
+
+- name: Note about the subscriber DB -- how to actually load it
+  ansible.builtin.debug:
+    msg: >-
+      subscriber_db.csv is deployed to disk, but Open5GS's own docker
+      image reads it into MongoDB only via its WebUI or API, not directly
+      from the file, on every fresh container start -- confirm the 5 UEs
+      show up at http://{{ core5g_addr }}:9999 (admin/1423) after the
+      open5gs-5gc service comes up; add any missing IMSI by hand there if
+      the CSV import didn't pick it up.

@@ -1,0 +1,43 @@
+---
+# enterprise_site role -- one of 5 identical "CPE+Firewall" sites, each a
+# real, distinct traffic source needed to cross DIST_MIN_SOURCES=5 for
+# enterprise DDoS (enterprise never spoofs -- see the conversation history
+# in docs/peering-plan.md and config/settings.py's TOPOLOGY_NUM_SWITCHES
+# comment for the full reasoning). Deliberately unspoofed, matching
+# webtool/enterprise_ops.py's own "an enterprise host attacks as itself"
+# design.
+- name: Install packages
+  community.general.apk:
+    name: [hping3, nftables, iproute2, openssh]
+    state: present
+    update_cache: true
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Deploy a basic nftables ruleset (default accept -- this VM IS the
+        attacker in most test scenarios, a restrictive firewall would
+        defeat the point)
+  ansible.builtin.copy:
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input   { type filter hook input priority 0; policy accept; }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output  { type filter hook output priority 0; policy accept; }
+      }
+    dest: /etc/nftables.nft
+    mode: "0644"
+  notify: reload nftables
+
+- name: Enable and start nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started

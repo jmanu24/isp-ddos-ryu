@@ -1,0 +1,26 @@
+---
+# suscriptor role -- BNGBlaster, reusing this repo's OWN installer script
+# rather than reimplementing its version-pinning/OS-detection logic here.
+# Version 0.9.17 specifically -- the confirmed-working release documented
+# in the project's own bngblaster_broadband_pipeline_status.md memory,
+# not "latest" (later releases are unvalidated against this project's
+# scenarios).
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [git, curl]
+    state: present
+    update_cache: true
+
+- name: Clone Tesis_Controller (for its deploy/install_bngblaster.sh)
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
+    force: false
+
+- name: Install BNGBlaster 0.9.17
+  ansible.builtin.command:
+    cmd: ./deploy/install_bngblaster.sh --version 0.9.17
+    chdir: /opt/Tesis_Controller
+    creates: /usr/sbin/bngblaster
+  become: true

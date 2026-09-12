@@ -1,0 +1,16 @@
+#
+# .csv to store UE's information in HSS
+# Kept in the following format: "Name,IMSI,Key,OP_Type,OP/OPc,AMF,QCI,IP_alloc"
+#
+# Base rows are VERBATIM from srsRAN's own official multi-UE application
+# note (3 UEs). ue03/ue04 rows appended here to reach this lab's 5 UEs --
+# NOT from the original docs, must stay in sync with
+# ansible/roles/ue_srsue/templates/ue_zmq.conf.j2's own per-UE
+# imsi/k values (item==4/item==5 branches).
+#
+ue00,001010123456780,00112233445566778899aabbccddeeff,opc,63bfa50ee6523365ff14c1f45f88737d,8000,9,10.45.1.2
+ue01,001010123456789,00112233445566778899aabbccddeeff,opc,63bfa50ee6523365ff14c1f45f88737d,9001,9,10.45.1.3
+ue02,001010123456790,00112233445566778899aabbccddef00,opc,63bfa50ee6523365ff14c1f45f88737d,9001,9,10.45.1.4
+ue03,001010123456791,00112233445566778899aabbccddef01,opc,63bfa50ee6523365ff14c1f45f88737d,9001,9,10.45.1.5
+ue04,001010123456792,00112233445566778899aabbccddef02,opc,63bfa50ee6523365ff14c1f45f88737d,9001,9,10.45.1.6
+ue05,001010123456793,00112233445566778899aabbccddef03,opc,63bfa50ee6523365ff14c1f45f88737d,9001,9,10.45.1.7

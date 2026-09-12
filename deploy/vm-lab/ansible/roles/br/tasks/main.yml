@@ -1,0 +1,53 @@
+---
+# br role -- flow (FlowSpec sink) + softflowd/nfcapd/nfdump 1.7.4 (all via
+# this repo's own deploy/install_bgp_peering.sh, exact versions already
+# validated this project) + FRR bgpd for the REAL eBGP session with
+# peer-router (distinct from flow<->exabgp's internal FlowSpec channel --
+# see topology.yaml's `bgp:` block and its own comment for why the AS
+# numbers are deliberately different).
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [git, curl]
+    state: present
+    update_cache: true
+
+- name: Clone Tesis_Controller (for its deploy/install_bgp_peering.sh)
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
+    force: false
+
+- name: Install flow 0.2.0 + softflowd + nfdump 1.7.4 (nfcapd/nfdump built from source)
+  ansible.builtin.command:
+    cmd: ./deploy/install_bgp_peering.sh --flow-version 0.2.0 --nfdump-version 1.7.4
+    chdir: /opt/Tesis_Controller
+    creates: /usr/local/bin/flow
+  become: true
+
+- name: Install FRR
+  ansible.builtin.apt:
+    name: frr
+    state: present
+
+- name: Enable bgpd in FRR
+  ansible.builtin.lineinfile:
+    path: /etc/frr/daemons
+    regexp: '^bgpd='
+    line: 'bgpd=yes'
+  notify: restart frr
+
+- name: Deploy FRR bgpd config (real eBGP with peer-router)
+  ansible.builtin.template:
+    src: bgpd.conf.j2
+    dest: /etc/frr/bgpd.conf
+    owner: frr
+    group: frr
+    mode: "0640"
+  notify: restart frr
+
+- name: Enable and start FRR
+  ansible.builtin.service:
+    name: frr
+    enabled: true
+    state: started

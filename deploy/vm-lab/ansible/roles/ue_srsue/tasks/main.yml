@@ -1,0 +1,89 @@
+---
+# ue_srsue role -- 5x srsUE instances (srsRAN_4G, since srsRAN_Project has
+# no UE app), each in its own network namespace, plus the GNU-Radio
+# broker that fans DL out to all 5 and sums UL back to the gNB. See
+# ../../../../deploy/vm-lab/README.md's "UE realism" section for the
+# caveats srsRAN's own docs give about this pattern (PoC-only, not
+# scalable/performant, srsUE's 5G bits are maintenance-only).
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - cmake
+      - make
+      - gcc
+      - g++
+      - libfftw3-dev
+      - libmbedtls-dev
+      - libboost-program-options-dev
+      - libconfig++-dev
+      - libsctp-dev
+      - libzmq3-dev
+      - gnuradio
+      - git
+    state: present
+    update_cache: true
+
+- name: Clone srsRAN_4G
+  ansible.builtin.git:
+    repo: https://github.com/srsran/srsRAN_4G.git
+    dest: /opt/srsRAN_4G
+    version: "23.11"   # earliest version the docs confirm 5G support on -- bump if a later tag is confirmed working, don't float on `master`
+    force: false
+
+- name: Create build directory
+  ansible.builtin.file:
+    path: /opt/srsRAN_4G/build
+    state: directory
+
+- name: Configure (cmake)
+  ansible.builtin.command:
+    cmd: cmake ../
+    chdir: /opt/srsRAN_4G/build
+    creates: /opt/srsRAN_4G/build/CMakeCache.txt
+
+- name: Build
+  ansible.builtin.command:
+    cmd: make -j{{ ansible_processor_vcpus | default(2) }}
+    chdir: /opt/srsRAN_4G/build
+
+- name: Install
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /opt/srsRAN_4G/build
+  become: true
+
+- name: Create one network namespace per UE
+  ansible.builtin.command:
+    cmd: "ip netns add ue{{ item }}"
+    creates: "/var/run/netns/ue{{ item }}"
+  loop: "{{ range(1, 6) | list }}"
+
+- name: Deploy per-UE config (distinct ZMQ ports/IMSI/namespace each)
+  ansible.builtin.template:
+    src: ue_zmq.conf.j2
+    dest: "/etc/srsran/ue{{ item }}_zmq.conf"
+    mode: "0644"
+  loop: "{{ range(1, 6) | list }}"
+
+- name: Deploy the GNU-Radio broker flow graph (REAL file, verbatim from
+        srsRAN's own docs repo -- .config/multi_ue/multi_ue_scenario.grc)
+  ansible.builtin.copy:
+    src: multi_ue_scenario.grc
+    dest: /etc/srsran/multi_ue_scenario.grc
+    mode: "0644"
+
+- name: Note about the 4th/5th UE and run order (manual steps)
+  ansible.builtin.debug:
+    msg: >-
+      TWO manual steps this role cannot automate: (1) the deployed .grc
+      only wires up 3 UEs (srsRAN's own documented limit for this
+      example) -- to actually use UE4/UE5, open
+      /etc/srsran/multi_ue_scenario.grc in `gnuradio-companion`, duplicate
+      UE3's signal-path blocks twice more, and rewire them to ports
+      2401/2400 and 2501/2500 (matching ue4/ue5_zmq.conf's own ports) --
+      this needs interactive GUI editing, not something worth
+      hand-patching blind in raw XML. (2) Per srsRAN's own application
+      note, the ONLY correct start order is: 5G Core -> gNB -> ALL 5
+      srsue instances -> the GNU-Radio broker LAST (then click Execute
+      inside gnuradio-companion). Starting the broker early is a common
+      failure mode.

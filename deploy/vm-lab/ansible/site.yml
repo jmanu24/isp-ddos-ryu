@@ -1,0 +1,58 @@
+---
+# site.yml -- configures all 16 VMs. Each play targets one Ansible group
+# from ../generated/ansible/inventory.ini (one group per topology.yaml
+# `role:`), running the one role that installs/configures that role's
+# real software stack.
+#
+# Usage:
+#   ansible-playbook site.yml                 # everything
+#   ansible-playbook site.yml --limit br,ric  # just these groups/hosts
+#   ansible-playbook site.yml --check         # dry run
+
+- name: Orchestrator (ryu-manager + exabgp)
+  hosts: orchestrator
+  roles: [orchestrator]
+
+- name: BNG (broadband access gateway)
+  hosts: bng
+  roles: [bng]
+
+- name: Suscriptor (BNGBlaster)
+  hosts: suscriptor
+  roles: [suscriptor]
+
+- name: BR (flow + softflowd/nfcapd + FRR eBGP)
+  hosts: br
+  roles: [br]
+
+- name: Peer Router (hping3 + bird2 eBGP)
+  hosts: peer_router
+  roles: [peer_router]
+
+- name: Near-RT RIC + xApp (FlexRIC br-flexric)
+  hosts: ric_flexric
+  roles: [ric_flexric]
+
+- name: 5G Core (Open5GS, dockerized via srsRAN_Project/docker)
+  hosts: core5g_open5gs
+  roles: [core5g_open5gs]
+
+- name: RAN (srsRAN Project gNB, ZMQ RF)
+  hosts: ran_srsran
+  roles: [ran_srsran]
+
+- name: UE (5x srsUE namespaces + GNU-Radio broker)
+  hosts: ue_srsue
+  roles: [ue_srsue]
+
+- name: PE (Open vSwitch, OpenFlow-controlled by the orchestrator)
+  hosts: pe_ovs
+  roles: [pe_ovs]
+
+- name: Enterprise sites (routing/NAT + nftables + hping3)
+  hosts: enterprise_site
+  roles: [enterprise_site]
+
+- name: Victim server
+  hosts: victim
+  roles: [victim]

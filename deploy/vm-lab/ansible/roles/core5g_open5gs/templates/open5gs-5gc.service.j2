@@ -1,0 +1,13 @@
+[Unit]
+Description=Open5GS 5G Core (srsRAN_Project docker-compose)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/opt/srsRAN_Project/docker
+ExecStart=/usr/bin/docker compose up --build 5gc
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
