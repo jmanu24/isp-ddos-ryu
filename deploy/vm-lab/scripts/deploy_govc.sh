@@ -93,7 +93,11 @@ deploy_one() {
 
   echo "== $name (de $source_vm, ${vcpu}vCPU/${ram_mb}MB/${disk_gb}GB) =="
 
-  if govc vm.info "$name" >/dev/null 2>&1; then
+  # `govc vm.info <name>` exits 0 even when nothing matches -- it just
+  # prints nothing -- confirmed empirically against a real ESXi host, so
+  # checking the exit code alone always thought every VM already existed
+  # and silently skipped creating all 16. Check for non-empty output instead.
+  if [ -n "$(govc vm.info "$name" 2>/dev/null)" ]; then
     echo "  ya existe -- se omite (borra la VM primero si quieres recrearla)"
     return
   fi
