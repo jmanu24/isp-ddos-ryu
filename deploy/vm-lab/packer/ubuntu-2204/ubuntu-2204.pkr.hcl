@@ -73,7 +73,7 @@ source "vsphere-iso" "ubuntu" {
   }
 
   iso_url      = "https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso"
-  iso_checksum = "https://releases.ubuntu.com/22.04/SHA256SUMS"
+  iso_checksum = "file:https://releases.ubuntu.com/22.04/SHA256SUMS"
 
   # Served over HTTP to the VM during boot -- subiquity's autoinstall reads
   # user-data/meta-data from this NoCloud datasource, so the whole OS
