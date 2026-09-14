@@ -32,13 +32,18 @@
     update_cache: true
 
 - name: Register gcc-10/g++-10 as update-alternatives choices
+  # link: is required here -- confirmed on a real run: without it the
+  # module fails with "missing the link" because no gcc/g++ alternatives
+  # group exists yet on a fresh install (this role doesn't pull in
+  # build-essential, which is normally what sets one up).
   community.general.alternatives:
     name: "{{ item.name }}"
     path: "{{ item.path }}"
+    link: "{{ item.link }}"
     priority: 100
   loop:
-    - {name: gcc, path: /usr/bin/gcc-10}
-    - {name: g++, path: /usr/bin/g++-10}
+    - {name: gcc, path: /usr/bin/gcc-10, link: /usr/bin/gcc}
+    - {name: g++, path: /usr/bin/g++-10, link: /usr/bin/g++}
 
 - name: Clone FlexRIC
   ansible.builtin.git:
