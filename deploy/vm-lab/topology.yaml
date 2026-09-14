@@ -29,7 +29,18 @@ templates:
 vms:
   - name: orchestrator
     role: orchestrator
-    template: debian
+    # ubuntu, not debian -- confirmed on a real run: ryu==4.34 (unmaintained
+    # since ~2021) cannot install on Debian 13's Python 3.13 under ANY
+    # setuptools pin. Old-enough setuptools to keep the easy_install hook
+    # ryu's setup.py needs lacks Python 3.13-compatible pkg_resources
+    # (needs pkgutil.ImpImporter, removed in 3.12); new-enough setuptools
+    # to run on 3.13 has dropped that easy_install hook entirely. No
+    # version satisfies both. Ubuntu 22.04's Python 3.10 still has both
+    # pkgutil.ImpImporter and stdlib distutils, so ryu installs cleanly
+    # with an ordinary `pip install -r requirements.txt` -- no pinning
+    # needed. tpl-debian-13 stays built (see README) in case a future
+    # role wants it; nothing currently depends on it.
+    template: ubuntu
     vcpu: 2
     ram_mb: 2048
     disk_gb: 10

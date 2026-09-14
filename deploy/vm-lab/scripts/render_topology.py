@@ -37,6 +37,12 @@ ROOT_PASSWORD_HASH = (
     "$6$a138b4a7baaaffef$FL199Um6qdvW1l4n2upNs2B44BmQmF74DxIYY2CkoXSCBLLL/"
     "kWyC6h2pqIDmtiOcYZgz3p6//r1fF6o4P2NP1"
 )
+LABADMIN_PASSWORD = "srslab-temp"  # plaintext of ROOT_PASSWORD_HASH above, for ansible_password
+
+# Set interactively during tpl-alpine's setup-alpine -- there's no answerfile
+# password field, so this can't be derived/generated here, it just has to
+# match whatever was actually typed when the golden template was built.
+ALPINE_ROOT_PASSWORD = "root"
 
 
 def _prefix_len(cidr: str) -> int:
@@ -157,13 +163,14 @@ rc-service networking restart
     (vm_dir / "apply.sh").write_text(apply_sh)
 
 
-def render_ansible_inventory(vms: list, out_dir: Path) -> None:
+def render_ansible_inventory(vms: list, templates: dict, out_dir: Path) -> None:
     by_role: dict = {}
     for vm in vms:
         by_role.setdefault(vm["role"], []).append(vm)
 
     lines = []
     for role, role_vms in sorted(by_role.items()):
+        os_family = templates[role_vms[0]["template"]]["os_family"]
         lines.append(f"[{role}]")
         for vm in role_vms:
             mgmt_ip = next(
@@ -175,9 +182,21 @@ def render_ansible_inventory(vms: list, out_dir: Path) -> None:
                 continue
             lines.append(f"{vm['name']} ansible_host={mgmt_ip}")
         lines.append("")
+        # Alpine golden images keep their interactively-set root password;
+        # Ubuntu/Debian clones get labadmin from cloud-init's user-data --
+        # different os_families need different SSH creds, so this can't be
+        # a single [all:vars] block (confirmed broken on a real run: every
+        # host tried labadmin, which doesn't exist on Alpine VMs at all).
+        lines.append(f"[{role}:vars]")
+        if os_family == "alpine":
+            lines.append("ansible_user=root")
+            lines.append(f"ansible_password={ALPINE_ROOT_PASSWORD}")
+        else:
+            lines.append("ansible_user=labadmin")
+            lines.append(f"ansible_password={LABADMIN_PASSWORD}")
+        lines.append("")
 
     lines.append("[all:vars]")
-    lines.append("ansible_user=labadmin")
     lines.append("ansible_ssh_common_args='-o StrictHostKeyChecking=no'")
 
     ansible_dir = out_dir / "ansible"
@@ -253,7 +272,7 @@ def main() -> None:
         else:
             raise ValueError(f"unknown os_family {os_family!r} for template {vm['template']!r}")
 
-    render_ansible_inventory(vms, OUT_DIR)
+    render_ansible_inventory(vms, templates, OUT_DIR)
     render_ansible_group_vars(topology, OUT_DIR)
     render_govc_csv(vms, OUT_DIR)
 

@@ -4,7 +4,12 @@
 # updating the main repo's requirements.txt -- they must stay identical).
 - name: Install base packages
   ansible.builtin.apt:
-    name: [python3, python3-venv, python3-pip, git, curl]
+    # python3-setuptools is load-bearing even though nothing here imports
+    # it directly -- confirmed on a real run: ansible.builtin.pip's module
+    # code itself needs pkg_resources on the SYSTEM python3 (not the venv
+    # it's installing into) to do its idempotency checks, and Debian 13
+    # doesn't install setuptools by default the way older distros did.
+    name: [python3, python3-venv, python3-pip, python3-setuptools, git, curl]
     state: present
     update_cache: true
 
@@ -21,6 +26,11 @@
     creates: /opt/Tesis_Controller/venv/bin/python
 
 - name: Install pinned Python deps (from the repo's own requirements.txt)
+  # Plain install, no setuptools pinning -- confirmed needed only on
+  # Debian 13/Python 3.13 (ryu==4.34 vs. removed pkgutil.ImpImporter /
+  # dropped easy_install internals, see topology.yaml's comment on why
+  # orchestrator is now templated on ubuntu, not debian). Ubuntu 22.04's
+  # Python 3.10 has neither problem.
   ansible.builtin.pip:
     requirements: /opt/Tesis_Controller/requirements.txt
     virtualenv: /opt/Tesis_Controller/venv
