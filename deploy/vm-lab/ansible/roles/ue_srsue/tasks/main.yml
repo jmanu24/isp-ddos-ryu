@@ -27,7 +27,12 @@
   ansible.builtin.git:
     repo: https://github.com/srsran/srsRAN_4G.git
     dest: /opt/srsRAN_4G
-    version: "23.11"   # earliest version the docs confirm 5G support on -- bump if a later tag is confirmed working, don't float on `master`
+    # release_23_11, not 23.11 -- confirmed via the repo's own tag list
+    # (gh api repos/srsran/srsRAN_4G/tags): "error: pathspec '23.11' did
+    # not match any file(s) known to git" on a real run. Earliest version
+    # the docs confirm 5G support on -- bump if a later tag is confirmed
+    # working, don't float on `master`.
+    version: "release_23_11"
     force: false
 
 - name: Create build directory
