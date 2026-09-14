@@ -30,11 +30,17 @@
     update_cache: true
 
 - name: Clone srsRAN_Project (for its bundled docker/open5gs setup)
+  # force: true -- confirmed on a real run: the tasks below overwrite
+  # subscriber_db.csv/open5gs.env, both files this repo ships tracked
+  # defaults for, so every re-run after the first dirties the checkout
+  # and a plain `force: false` re-run then fails with "Local modifications
+  # exist in the destination". Safe to force here -- nothing in this
+  # checkout is meant to be hand-edited or preserved between runs.
   ansible.builtin.git:
     repo: https://github.com/srsran/srsRAN_Project.git
     dest: /opt/srsRAN_Project
     version: main
-    force: false
+    force: true
 
 - name: Deploy the 5-UE subscriber DB (real srsRAN docs' 3 UEs + 2 more, see file's own header comment)
   ansible.builtin.copy:
