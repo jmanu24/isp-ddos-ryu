@@ -7,8 +7,13 @@
 # webtool/enterprise_ops.py's own "an enterprise host attacks as itself"
 # design.
 - name: Install packages
-  community.general.apk:
-    name: [hping3, nftables, iproute2, openssh]
+  # apt, not apk -- confirmed on a real run: hping3 was dropped from
+  # Alpine's stable repos entirely (only in edge/testing, unmaintained
+  # since 2017), so this role (and peer_router, and topology.yaml) moved
+  # to the ubuntu template. openssh-server isn't listed -- tpl-ubuntu-2204
+  # already has it, unlike tpl-alpine which needed it added explicitly.
+  ansible.builtin.apt:
+    name: [hping3, nftables, iproute2]
     state: present
     update_cache: true
 

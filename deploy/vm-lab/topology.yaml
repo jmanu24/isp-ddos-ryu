@@ -78,10 +78,15 @@ vms:
 
   - name: peer-router
     role: peer_router
-    template: alpine
+    # ubuntu, not alpine -- confirmed on a real run: hping3 (a hard
+    # dependency of webtool/enterprise_ops.py's real attack-generation
+    # code, not just this lab) was dropped from Alpine's stable repos
+    # entirely (only in edge/testing, last built 2017). Still packaged
+    # in Ubuntu's universe repo.
+    template: ubuntu
     vcpu: 1
-    ram_mb: 1024
-    disk_gb: 4
+    ram_mb: 2048
+    disk_gb: 10
     interfaces:
       - {network: PEERING, ip: "10.30.0.2"}
 
@@ -136,46 +141,48 @@ vms:
 
   - name: ent-site-1
     role: enterprise_site
-    template: alpine
+    # ubuntu, not alpine -- see peer-router's comment above (hping3
+    # unavailable on Alpine 3.24 stable).
+    template: ubuntu
     vcpu: 1
-    ram_mb: 1024
-    disk_gb: 4
+    ram_mb: 2048
+    disk_gb: 10
     interfaces:
       - {network: ENT_LAN, ip: "10.50.0.11"}
 
   - name: ent-site-2
     role: enterprise_site
-    template: alpine
+    template: ubuntu
     vcpu: 1
-    ram_mb: 1024
-    disk_gb: 4
+    ram_mb: 2048
+    disk_gb: 10
     interfaces:
       - {network: ENT_LAN, ip: "10.50.0.12"}
 
   - name: ent-site-3
     role: enterprise_site
-    template: alpine
+    template: ubuntu
     vcpu: 1
-    ram_mb: 1024
-    disk_gb: 4
+    ram_mb: 2048
+    disk_gb: 10
     interfaces:
       - {network: ENT_LAN, ip: "10.50.0.13"}
 
   - name: ent-site-4
     role: enterprise_site
-    template: alpine
+    template: ubuntu
     vcpu: 1
-    ram_mb: 1024
-    disk_gb: 4
+    ram_mb: 2048
+    disk_gb: 10
     interfaces:
       - {network: ENT_LAN, ip: "10.50.0.14"}
 
   - name: ent-site-5
     role: enterprise_site
-    template: alpine
+    template: ubuntu
     vcpu: 1
-    ram_mb: 1024
-    disk_gb: 4
+    ram_mb: 2048
+    disk_gb: 10
     interfaces:
       - {network: ENT_LAN, ip: "10.50.0.15"}
 

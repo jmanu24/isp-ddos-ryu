@@ -3,15 +3,22 @@
 # session in this lab (see br role). bird2, not FRR -- lighter, and
 # actually packaged for Alpine (FRR is not).
 - name: Install packages
-  community.general.apk:
-    name: [hping3, bird, openssh]
+  # apt/bird2, not apk/bird -- confirmed on a real run: hping3 was dropped
+  # from Alpine's stable repos entirely (only in edge/testing, unmaintained
+  # since 2017), so this role (and enterprise_site, and topology.yaml)
+  # moved to the ubuntu template. Ubuntu's bird2 package (2.0.8-2 on
+  # jammy/universe) installs a bird.service unit and reads
+  # /etc/bird/bird.conf (a directory), not Alpine's flat /etc/bird.conf.
+  # openssh-server isn't listed -- tpl-ubuntu-2204 already has it.
+  ansible.builtin.apt:
+    name: [hping3, bird2]
     state: present
     update_cache: true
 
 - name: Deploy bird config (eBGP with br)
   ansible.builtin.template:
     src: bird.conf.j2
-    dest: /etc/bird.conf
+    dest: /etc/bird/bird.conf
     mode: "0644"
   notify: restart bird
 
