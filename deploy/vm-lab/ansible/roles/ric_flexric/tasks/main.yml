@@ -63,8 +63,11 @@
     state: directory
 
 - name: Configure FlexRIC (cmake)
+  # KPM_V3, not KPM_V3_00 -- confirmed on a real run against this pinned
+  # commit's src/xApp/CMakeLists.txt: it only accepts the bare KPM_V2/
+  # KPM_V3 strings and fails with "Unknown KPM version" otherwise.
   ansible.builtin.command:
-    cmd: cmake -DKPM_VERSION=KPM_V3_00 -DXAPP_DB=NONE_XAPP ..
+    cmd: cmake -DKPM_VERSION=KPM_V3 -DXAPP_DB=NONE_XAPP ..
     chdir: /opt/flexric/build
     creates: /opt/flexric/build/CMakeCache.txt
 
