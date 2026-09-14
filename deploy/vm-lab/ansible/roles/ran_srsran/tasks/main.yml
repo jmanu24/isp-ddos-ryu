@@ -49,6 +49,15 @@
     chdir: /opt/srsRAN_Project/build
   become: true
 
+- name: Create /etc/srsran
+  # ansible.builtin.template doesn't create parent dirs -- confirmed on a
+  # real run: "Destination directory /etc/srsran does not exist" (the
+  # srsRAN Project build/install step doesn't create it either).
+  ansible.builtin.file:
+    path: /etc/srsran
+    state: directory
+    mode: "0755"
+
 - name: Deploy gNB ZMQ config (multi-UE, matches ric_flexric's E2 subscription expectations)
   ansible.builtin.template:
     src: gnb_zmq.yaml.j2
