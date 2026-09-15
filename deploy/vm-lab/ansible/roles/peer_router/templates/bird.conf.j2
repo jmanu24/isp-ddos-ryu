@@ -3,6 +3,26 @@ router id 10.30.0.2;
 
 protocol device {}
 
+protocol kernel {
+    # Confirmed missing on a real run: without this, bird's own routing
+    # table (both the static blackhole default AND the 10.99.0.1/32
+    # learned via BGP from br) never reaches the OS kernel table at all
+    # -- `ip route show` showed neither, only the unrelated manual
+    # default route added for this VM's own provisioning/apt access.
+    #
+    # Deliberately NOT `export all`: the static blackhole default route
+    # exists purely so bird has something valid to originate/export over
+    # BGP (see that protocol's own comment) -- pushing it into the
+    # kernel too would fight this VM's separate manual default route
+    # (`ip route ... via 10.30.0.3`, for its own provisioning/apt
+    # access), and a real network device wouldn't blackhole its own
+    # management traffic anyway. Only the learned-from-br route needs to
+    # actually affect real packet forwarding here.
+    ipv4 {
+        export where source = RTS_BGP;
+    };
+}
+
 protocol static default_route {
     ipv4;
     # blackhole, not `via 10.30.0.1` -- confirmed on a real run: that
