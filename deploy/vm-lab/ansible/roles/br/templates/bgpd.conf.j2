@@ -1,11 +1,20 @@
 ! Managed by Ansible (roles/br) -- real eBGP with peer-router, SEPARATE
 ! from flow<->exabgp's own internal FlowSpec control channel.
+!
+! `no bgp ebgp-requires-policy` is load-bearing, not decoration --
+! confirmed on a real run: without it, FRR 8.x's default RFC-8212
+! enforcement silently discards every inbound/outbound update on an
+! eBGP session with no route-map/prefix-list attached, even though the
+! session itself shows Established -- "show ip bgp neighbors" reported
+! "Inbound/Outbound updates discarded due to missing policy" and
+! "0 accepted prefixes" despite messages flowing normally.
 frr version 8.0
 frr defaults traditional
 hostname br
 !
 router bgp {{ bgp_br_as }}
  bgp router-id 10.30.0.1
+ no bgp ebgp-requires-policy
  neighbor 10.30.0.2 remote-as {{ bgp_peer_router_as }}
  !
  address-family ipv4 unicast
