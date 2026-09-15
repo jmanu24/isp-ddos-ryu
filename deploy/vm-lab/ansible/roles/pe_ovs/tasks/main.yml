@@ -3,8 +3,11 @@
 # ryu-manager over OpenFlow -- this is the real "Ryu <-> switch" path the
 # thesis review's own table names for the enterprise domain.
 - name: Install packages
+  # tcpdump -- pe IS the bridge under test for the whole ENT_DC redesign;
+  # needed to confirm ARP/traffic actually crosses it, not something to
+  # keep installing by hand every time this comes up.
   community.general.apk:
-    name: [openvswitch, openssh]
+    name: [openvswitch, openssh, tcpdump]
     state: present
     update_cache: true
 
