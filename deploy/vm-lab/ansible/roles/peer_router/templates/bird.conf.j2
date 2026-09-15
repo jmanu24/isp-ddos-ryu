@@ -5,7 +5,16 @@ protocol device {}
 
 protocol static default_route {
     ipv4;
-    route 0.0.0.0/0 via 10.30.0.1;
+    # blackhole, not `via 10.30.0.1` -- confirmed on a real run: that
+    # nexthop is br's OWN address, the exact eBGP neighbor we're
+    # advertising this default route TO, which is circular (peer-router
+    # is meant to model "the rest of the internet" upstream of br, not
+    # point back at it). Symptom was silent: `show route export br`
+    # correctly showed 0.0.0.0/0 in the computed export set, but the
+    # actual UPDATE sent on the wire on every fresh session (protocol
+    # restart AND full `systemctl restart bird`, ruling out a caching
+    # fluke) was a bare withdraw + End-of-RIB, never a real announcement.
+    route 0.0.0.0/0 blackhole;
 }
 
 protocol bgp br {
