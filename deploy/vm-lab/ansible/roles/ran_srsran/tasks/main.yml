@@ -1,7 +1,8 @@
 ---
-# ran_srsran role -- srsRAN Project gNB (CU+DU+RU fused, no F1 split),
-# ZMQ RF driver (no SDR hardware), built with the E2 interface enabled --
-# this is what the ric_flexric role's FlexRIC actually talks to.
+# ran_srsran role -- OCUDU gNB (srsRAN Project's successor as of this
+# lab's build; CU+DU+RU fused, no F1 split), ZMQ RF driver (no SDR
+# hardware), built with the E2 interface enabled -- this is what the
+# ric_flexric role's FlexRIC actually talks to.
 - name: Install build dependencies
   ansible.builtin.apt:
     name:
@@ -20,33 +21,42 @@
     state: present
     update_cache: true
 
-- name: Clone srsRAN_Project
+- name: Clone OCUDU (srsRAN Project's successor, Linux Foundation-governed)
+  # OCUDU replaces srsRAN_Project as of this lab's build -- confirmed via
+  # gitlab.com/ocudu/ocudu's own README/CMakeLists: same CU/CP/CU-UP/DU/
+  # gNB app layout, same ENABLE_EXPORT/ENABLE_ZEROMQ cmake options (both
+  # still option()-defined with identical names/semantics), same gnb
+  # binary name and YAML config schema (cu_cp/ru_sdr/cell_cfg) -- verified
+  # against OCUDU's own official "Using srsUE" tutorial, which pairs it
+  # with exactly the srsRAN_4G/srsUE this lab's ue_srsue role already
+  # builds (23.11+, matching our pinned release_23_11). No UE component
+  # exists in OCUDU itself -- ue_srsue stays on srsRAN_4G unchanged.
   ansible.builtin.git:
-    repo: https://github.com/srsran/srsRAN_Project.git
-    dest: /opt/srsRAN_Project
-    version: main
+    repo: https://gitlab.com/ocudu/ocudu.git
+    dest: /opt/ocudu
+    version: release_26_04
     force: false
 
 - name: Create build directory
   ansible.builtin.file:
-    path: /opt/srsRAN_Project/build
+    path: /opt/ocudu/build
     state: directory
 
 - name: Configure (cmake, ZMQ + export/E2 enabled)
   ansible.builtin.command:
     cmd: cmake ../ -DENABLE_EXPORT=ON -DENABLE_ZEROMQ=ON
-    chdir: /opt/srsRAN_Project/build
-    creates: /opt/srsRAN_Project/build/CMakeCache.txt
+    chdir: /opt/ocudu/build
+    creates: /opt/ocudu/build/CMakeCache.txt
 
 - name: Build (this takes a while -- gNB + all libraries)
   ansible.builtin.command:
     cmd: make -j{{ ansible_processor_vcpus | default(4) }}
-    chdir: /opt/srsRAN_Project/build
+    chdir: /opt/ocudu/build
 
 - name: Install
   ansible.builtin.command:
     cmd: make install
-    chdir: /opt/srsRAN_Project/build
+    chdir: /opt/ocudu/build
   become: true
 
 - name: Create /etc/srsran
