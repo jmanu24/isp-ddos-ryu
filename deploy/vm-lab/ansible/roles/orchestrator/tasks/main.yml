@@ -25,12 +25,29 @@
     cmd: python3 -m venv /opt/Tesis_Controller/venv
     creates: /opt/Tesis_Controller/venv/bin/python
 
+- name: Install ryu (from faucetsdn's fork, not PyPI -- see requirements.txt's own comment)
+  # Deliberately BEFORE the requirements.txt install below and NOT listed
+  # in that file -- confirmed on a real run: ryu's own setup.py hard-pins
+  # a stale eventlet==0.31.1 (that its wsgi.py doesn't actually need
+  # anymore, just never loosened) which pip's resolver refuses to
+  # reconcile against this project's eventlet==0.36.1 pin in a single
+  # `pip install -r requirements.txt` -- "ResolutionImpossible: ryu 4.34
+  # depends on eventlet==0.31.1". Installing it separately, first, lets
+  # its OTHER real dependencies (msgpack, netaddr, oslo.config, ovs,
+  # routes, six, tinyrpc, webob) resolve normally; the requirements.txt
+  # install right after then upgrades eventlet back to 0.36.1 on its own,
+  # with ryu no longer present in that resolution to fight it.
+  ansible.builtin.pip:
+    name: "git+https://github.com/faucetsdn/ryu.git@d6cda4f427ff8de82b94c58aa826824a106014c2#egg=ryu"
+    virtualenv: /opt/Tesis_Controller/venv
+
 - name: Install pinned Python deps (from the repo's own requirements.txt)
   # Plain install, no setuptools pinning -- confirmed needed only on
-  # Debian 13/Python 3.13 (ryu==4.34 vs. removed pkgutil.ImpImporter /
-  # dropped easy_install internals, see topology.yaml's comment on why
+  # Debian 13/Python 3.13 (ryu vs. removed pkgutil.ImpImporter / dropped
+  # easy_install internals, see topology.yaml's comment on why
   # orchestrator is now templated on ubuntu, not debian). Ubuntu 22.04's
-  # Python 3.10 has neither problem.
+  # Python 3.10 has neither problem. Also fixes eventlet back to 0.36.1
+  # (see the ryu install task right above for why it needs fixing at all).
   ansible.builtin.pip:
     requirements: /opt/Tesis_Controller/requirements.txt
     virtualenv: /opt/Tesis_Controller/venv
