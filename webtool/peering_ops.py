@@ -139,6 +139,21 @@ def _ensure_active_on_br(unit: str) -> None:
         )
 
 
+def _ensure_active_local(unit: str) -> None:
+    """Local equivalent of _ensure_active_on_br() -- for services managed
+    on THIS host (exabgp, in distributed mode -- see deploy/vm-lab/
+    ansible/roles/orchestrator). No SSH needed, it's the same machine."""
+    result = subprocess.run(
+        ["systemctl", "is-active", unit], capture_output=True, text=True,
+    )
+    if result.stdout.strip() != "active":
+        raise RuntimeError(
+            f"{unit} is not active on this host (deploy/vm-lab/ansible/roles/"
+            f"orchestrator) -- systemctl is-active reported {result.stdout.strip()!r}. "
+            f"Check `systemctl status {unit}`."
+        )
+
+
 def _ensure_alive(proc: subprocess.Popen, name: str, log_path: str) -> None:
     """
     Catches a process that exited immediately (e.g. a rejected CLI flag)
@@ -237,52 +252,33 @@ class PeeringLifecycle:
     # ------------------------------------------------------------------
 
     def _start_distributed(self) -> None:
-        # flow/softflowd/nfcapd are already running (Ansible-managed
-        # systemd services on br) -- this only verifies that, it never
-        # starts them. Fail loud here rather than let a dead service on
-        # br surface later as an hours-later "why does telemetry see
-        # nothing" mystery, same rationale as _ensure_alive() below.
+        # flow/softflowd/nfcapd (br) and exabgp (this host) are ALL
+        # Ansible-managed systemd services now (deploy/vm-lab/ansible/
+        # roles/br and .../orchestrator) -- this only verifies they're
+        # active, it never starts/spawns anything. Fail loud here rather
+        # than let a dead service surface later as an hours-later "why
+        # does telemetry see nothing" mystery, same rationale as
+        # _ensure_alive() below. exabgp used to be spawned per-topology-
+        # start via subprocess.Popen (like Mininet mode still does) --
+        # moved to a persistent service instead, since deploy/vm-lab's
+        # config (peer/local addresses, connect port) never actually
+        # changes between runs, unlike Mininet's veth addresses which
+        # only exist once attach_peering_uplink_to_r1() creates them.
+        #
         # softflowd-peering, not plain softflowd -- deploy/vm-lab/ansible/
         # roles/br names it that deliberately, to avoid colliding with
         # Ubuntu's own softflowd apt package's default unit (which it
         # masks rather than configures).
         for unit in ("flow", "softflowd-peering", "nfcapd"):
             _ensure_active_on_br(unit)
-
-        fifo_path = settings.PEERING_EXABGP_FIFO
-        Path(fifo_path).parent.mkdir(parents=True, exist_ok=True)
-        if not Path(fifo_path).exists():
-            subprocess.run(["mkfifo", "-m", "666", fifo_path], check=True)
-
-        # exabgp itself is still spawned locally here, exactly as in
-        # Mininet mode -- only its peer/local addresses change (br's
-        # real PEERING address instead of the veth one).
-        _write_exabgp_conf(
-            EXABGP_CONF_PATH, fifo_path,
-            peer_ip=settings.PEERING_DIST_BR_IP,
-            local_ip=settings.PEERING_DIST_ORCHESTRATOR_IP,
-            connect_port=settings.PEERING_DIST_FLOW_PORT,
-        )
-        with open(EXABGP_LOG_PATH, "wb") as exabgp_log:
-            self.exabgp_proc = subprocess.Popen(
-                ["exabgp", EXABGP_CONF_PATH],
-                stdout=exabgp_log, stderr=subprocess.STDOUT,
-            )
-        time.sleep(1)
-        _ensure_alive(self.exabgp_proc, "exabgp", EXABGP_LOG_PATH)
+        _ensure_active_local("exabgp")
 
     def _stop_distributed(self) -> None:
-        # flow/softflowd/nfcapd stay running on br -- they're systemd
-        # services shared across topology start/stop cycles, not
-        # per-session processes this class owns in distributed mode.
-        # Only the locally-spawned exabgp gets torn down.
-        if self.exabgp_proc is not None:
-            self.exabgp_proc.terminate()
-            try:
-                self.exabgp_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.exabgp_proc.kill()
-            self.exabgp_proc = None
+        # Nothing to do -- flow/softflowd/nfcapd on br and exabgp here
+        # are all persistent Ansible-managed systemd services, shared
+        # across topology start/stop cycles, not per-session processes
+        # this class owns in distributed mode.
+        pass
 
     # ------------------------------------------------------------------
     # Mininet mode (original design)
