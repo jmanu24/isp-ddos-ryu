@@ -33,7 +33,26 @@ networks:
   # left for a 3rd host.
   PEERING:     {portgroup: "VLAN-PEERING",    cidr: "10.30.0.0/29",  gateway: null,         control_node_ip: "10.30.0.3"}
   RAN:         {portgroup: "VLAN-RAN",        cidr: "10.40.0.0/24",  gateway: "10.40.0.1",  control_node_ip: "10.40.0.254"}
-  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.50.0.0/24",  gateway: null,         control_node_ip: "10.50.0.254"}
+  # No control_node_ip on either enterprise network, deliberately -- see
+  # `pe`'s own interfaces comment below for why. These two exist purely
+  # as pe's real 2-port OpenFlow-controlled data plane; provisioning
+  # (ansible/SSH) to the 5 ent-site VMs and victim happens over their
+  # OWN separate MGMT interface instead, exactly like br/core5g/ran/ue
+  # already do -- not over these.
+  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.50.0.0/24",  gateway: null}
+  # NEW: the "protected/inside" side of pe's bridge, where victim
+  # actually lives -- confirmed necessary on a real run: with victim only
+  # ever on MGMT and ENT_LAN only ever holding the 5 attacker sites, a
+  # real hping3 flood from ent-site-1 to victim's MGMT address routed
+  # through the CONTROL NODE (which has its own presence on every VLAN
+  # for provisioning), never once touching pe's OVS bridge at all --
+  # ryu-manager's flow-stats polling of pe saw zero attack traffic, not
+  # because detection was broken, but because the traffic had a real,
+  # entirely different path that skipped the monitored switch. pe now
+  # gets a real 2nd bridged port here (see its own interfaces comment)
+  # so ent-site-N -> victim traffic has NO path except through pe's
+  # OpenFlow-controlled dataplane.
+  ENT_DC:      {portgroup: "VLAN-ENT-DC",     cidr: "10.55.0.0/24",  gateway: null}
 
 templates:
   alpine:  {source_vm: "tpl-alpine",       os_family: "alpine"}
@@ -151,7 +170,14 @@ vms:
     disk_gb: 4
     interfaces:
       - {network: MGMT, ip: "10.10.0.7"}
-      - {network: ENT_LAN, ip: null}   # bridged by OVS, no L3 address of its own
+      # Both bridged by OVS onto the SAME br-ent, no L3 address of their
+      # own -- a genuine 2-port switch: ENT_LAN is the "outside" side (the
+      # 5 attacker sites), ENT_DC is the "inside" side (victim). This is
+      # what actually forces ent-site-N -> victim traffic through pe's
+      # OpenFlow-controlled dataplane instead of around it -- see ENT_DC's
+      # own comment above for the real run that found this gap.
+      - {network: ENT_LAN, ip: null}
+      - {network: ENT_DC, ip: null}
 
   - name: ent-site-1
     role: enterprise_site
@@ -162,6 +188,11 @@ vms:
     ram_mb: 2048
     disk_gb: 10
     interfaces:
+      # MGMT for provisioning/SSH (ansible reaches these here, same as
+      # br/core5g/ran/ue) -- ENT_LAN is pure attack-traffic data plane,
+      # deliberately with no control-node presence (see ENT_LAN's own
+      # comment above).
+      - {network: MGMT, ip: "10.10.0.21"}
       - {network: ENT_LAN, ip: "10.50.0.11"}
 
   - name: ent-site-2
@@ -171,6 +202,7 @@ vms:
     ram_mb: 2048
     disk_gb: 10
     interfaces:
+      - {network: MGMT, ip: "10.10.0.22"}
       - {network: ENT_LAN, ip: "10.50.0.12"}
 
   - name: ent-site-3
@@ -180,6 +212,7 @@ vms:
     ram_mb: 2048
     disk_gb: 10
     interfaces:
+      - {network: MGMT, ip: "10.10.0.23"}
       - {network: ENT_LAN, ip: "10.50.0.13"}
 
   - name: ent-site-4
@@ -189,6 +222,7 @@ vms:
     ram_mb: 2048
     disk_gb: 10
     interfaces:
+      - {network: MGMT, ip: "10.10.0.24"}
       - {network: ENT_LAN, ip: "10.50.0.14"}
 
   - name: ent-site-5
@@ -198,6 +232,7 @@ vms:
     ram_mb: 2048
     disk_gb: 10
     interfaces:
+      - {network: MGMT, ip: "10.10.0.25"}
       - {network: ENT_LAN, ip: "10.50.0.15"}
 
   - name: victim
@@ -208,6 +243,10 @@ vms:
     disk_gb: 4
     interfaces:
       - {network: MGMT, ip: "10.10.0.100"}
+      # The actual attack target -- on ENT_DC (pe's "inside" port), NOT
+      # ENT_LAN, so traffic from the 5 attacker sites must cross pe's
+      # bridge to reach it (see ENT_DC's own comment above).
+      - {network: ENT_DC, ip: "10.55.0.100"}
 
 # BGP AS numbers for the one real eBGP session in this lab (br <-> peer-router).
 # Deliberately distinct from FLOW_LOCAL_AS/EXABGP_LOCAL_AS (65001/65002 --

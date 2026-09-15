@@ -23,6 +23,17 @@
   ansible.builtin.command:
     cmd: "ovs-vsctl --may-exist add-port br-ent {{ ent_lan_iface | default('eth1') }}"
 
+- name: Attach the enterprise-DC NIC to the SAME bridge (the real 2nd port)
+  # eth1 (ENT_LAN, the 5 attacker sites) and eth2 (ENT_DC, victim) both
+  # land on br-ent -- this is what makes pe a genuine 2-port bridge
+  # instead of a dead-end stub with one real port. Confirmed necessary on
+  # a real run: with only eth1 attached, ent-site-N -> victim traffic had
+  # a completely separate path around pe entirely (see topology.yaml's
+  # ENT_DC comment), so ryu-manager's flow-stats polling of this switch
+  # saw nothing during a real, live hping3 flood.
+  ansible.builtin.command:
+    cmd: "ovs-vsctl --may-exist add-port br-ent {{ ent_dc_iface | default('eth2') }}"
+
 - name: Point the bridge at the orchestrator's OpenFlow controller
   ansible.builtin.command:
     cmd: "ovs-vsctl set-controller br-ent tcp:{{ orchestrator_addr | default('10.10.0.1') }}:6653"
