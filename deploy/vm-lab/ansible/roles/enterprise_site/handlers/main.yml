@@ -2,3 +2,6 @@
 - name: reload nftables
   ansible.builtin.command:
     cmd: nft -f /etc/nftables.nft
+
+- name: netplan apply
+  ansible.builtin.command: netplan apply

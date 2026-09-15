@@ -244,6 +244,26 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # was ever rebuilt). Must match config/settings.py's
         # PEERING_DIST_BR_EXTERNAL_IFACE.
         "peering_external_iface": "ens192",
+        # pe/victim/enterprise_site's ENT_DC+MGMT NICs were hot-added
+        # (govc vm.network.add) to already-running VMs rather than baked
+        # into cloud-init/the alpine answerfile at clone time -- so
+        # there's no render_cloud_init/render_alpine_answerfile path that
+        # ever configures them, and their real OS-level names had to be
+        # confirmed by hand per VM (same PCI-slot-naming unpredictability
+        # as peering_external_iface above). Confirmed on this lab's real
+        # host: pe's new NIC -> eth2, victim's -> eth1, all 5
+        # ent-site-*'s new NIC -> ens192 (consistently). Re-verify with
+        # `ip link show` before trusting these if the lab is ever rebuilt.
+        "victim_ent_dc_addr": net_ip("victim", "ENT_DC"),
+        "victim_ent_dc_iface": "eth1",
+        "pe_ent_dc_iface": "eth2",
+        "enterprise_mgmt_iface": "ens192",
+        # ent-site's ORIGINAL (pre-hot-add) NIC -- always ens160 on this
+        # host, unlike the hot-added ones above (first NIC naming has
+        # been consistent across every VM in this lab).
+        "enterprise_ent_lan_iface": "ens160",
+        "mgmt_control_node_ip": topology["networks"]["MGMT"]["control_node_ip"],
+        "ent_dc_cidr": topology["networks"]["ENT_DC"]["cidr"],
         "bgp_br_as": topology["bgp"]["br_as"],
         "bgp_peer_router_as": topology["bgp"]["peer_router_as"],
         # HTTPS, not the git@ SSH form -- these VMs won't have your own SSH

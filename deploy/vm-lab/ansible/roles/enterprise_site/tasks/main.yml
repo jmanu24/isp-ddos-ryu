@@ -46,3 +46,48 @@
     name: nftables
     enabled: true
     state: started
+
+- name: Configure the MGMT interface (hot-added via govc vm.network.add
+        after this VM was already provisioned -- cloud-init's own
+        99-lab.yaml never saw this NIC, so it needs its own netplan file.
+        ansible_host is ALREADY this address, since the inventory itself
+        points here now -- see topology.yaml's enterprise_site interfaces
+        for why MGMT moved off ENT_LAN)
+  ansible.builtin.copy:
+    content: |
+      network:
+        version: 2
+        ethernets:
+          {{ enterprise_mgmt_iface }}:
+            addresses: [{{ ansible_host }}/24]
+            routes:
+              - to: default
+                via: {{ mgmt_control_node_ip }}
+            nameservers:
+              addresses: [8.8.8.8]
+    dest: /etc/netplan/99-mgmt.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Add the on-link route to ENT_DC over the EXISTING ENT_LAN interface
+        (pe bridges ENT_LAN+ENT_DC at L2 -- see topology.yaml's ENT_DC
+        comment -- but they're different IP subnets, so without an
+        explicit on-link route here this host never even ARPs for
+        victim's address; scope=link is netplan's equivalent of
+        `ip route add ... dev ens160` with no gateway)
+  ansible.builtin.copy:
+    content: |
+      network:
+        version: 2
+        ethernets:
+          {{ enterprise_ent_lan_iface }}:
+            routes:
+              - to: {{ ent_dc_cidr }}
+                scope: link
+    dest: /etc/netplan/98-ent-dc-route.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- confirm netplan actually applied before this
+        role finishes
+  ansible.builtin.meta: flush_handlers

@@ -1,0 +1,3 @@
+---
+- name: restart networking
+  ansible.builtin.command: rc-service networking restart

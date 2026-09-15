@@ -19,6 +19,23 @@
   ansible.builtin.command:
     cmd: ovs-vsctl --may-exist add-br br-ent
 
+- name: Configure the ENT_DC interface (eth2 -- hot-added via govc
+        vm.network.add after this VM was already provisioned, so
+        render_alpine_answerfile's apply.sh never configured it; bridged,
+        no L3 address of its own, exactly like eth1 below)
+  ansible.builtin.blockinfile:
+    path: /etc/network/interfaces
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- ent_dc iface"
+    block: |
+      auto {{ pe_ent_dc_iface }}
+      iface {{ pe_ent_dc_iface }} inet manual
+  notify: restart networking
+
+- name: Flush handlers now -- eth2 must actually be up (ifup'd) before the
+        ovs-vsctl add-port below, not just at end-of-play as notify
+        handlers normally run
+  ansible.builtin.meta: flush_handlers
+
 - name: Attach the enterprise-LAN NIC to the bridge
   ansible.builtin.command:
     cmd: "ovs-vsctl --may-exist add-port br-ent {{ ent_lan_iface | default('eth1') }}"

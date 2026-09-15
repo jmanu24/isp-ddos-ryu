@@ -12,6 +12,25 @@
     state: present
     update_cache: true
 
+- name: Configure the ENT_DC interface (eth1 -- hot-added via govc
+        vm.network.add after this VM was already provisioned; this is the
+        actual attack-target address now, see topology.yaml's victim
+        entry and ENT_DC comment for why it moved off MGMT-only)
+  ansible.builtin.blockinfile:
+    path: /etc/network/interfaces
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- ent_dc iface"
+    block: |
+      auto {{ victim_ent_dc_iface }}
+      iface {{ victim_ent_dc_iface }} inet static
+          address {{ victim_ent_dc_addr }}
+          netmask 255.255.255.0
+  notify: restart networking
+
+- name: Flush handlers now -- eth1 must be up before victim-http (bound to
+        0.0.0.0, so it doesn't strictly need this, but pe's bridge/ARP
+        needs the interface actually configured for the test to work)
+  ansible.builtin.meta: flush_handlers
+
 - name: Deploy a minimal OpenRC service running Python's http.server
   ansible.builtin.copy:
     content: |
