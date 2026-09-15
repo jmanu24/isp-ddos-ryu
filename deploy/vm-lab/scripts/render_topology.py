@@ -68,8 +68,13 @@ def render_cloud_init(vm: dict, networks: dict, out_dir: Path) -> None:
             continue
         prefix = _prefix_len(net["cidr"])
         netplan_lines.append(f"      addresses: [{iface['ip']}/{prefix}]")
-        if net.get("gateway") and i == 0:
-            netplan_lines.append(f"      routes: [{{to: default, via: {net['gateway']}}}]")
+        if net.get("control_node_ip") and i == 0:
+            # via control_node_ip, not `gateway` -- see topology.yaml's
+            # networks: comment. `gateway` is architectural/aspirational
+            # (bng/core5g don't actually route); control_node_ip is the
+            # only address on this VLAN that does real NAT today.
+            netplan_lines.append(f"      routes: [{{to: default, via: {net['control_node_ip']}}}]")
+            netplan_lines.append("      nameservers: {addresses: [8.8.8.8]}")
 
     user_data = f"""#cloud-config
 hostname: {vm['name']}
@@ -111,8 +116,11 @@ def render_alpine_answerfile(vm: dict, networks: dict, out_dir: Path) -> None:
         iface_lines.append("iface eth0 inet static")
         iface_lines.append(f"    address {primary['ip']}")
         iface_lines.append(f"    netmask {ipaddress.ip_network(net['cidr'], strict=False).netmask}")
-        if net.get("gateway"):
-            iface_lines.append(f"    gateway {net['gateway']}")
+        # via control_node_ip, not `gateway` -- see topology.yaml's
+        # networks: comment (gateway is architectural/aspirational, not
+        # functional -- bng/core5g don't actually route).
+        if net.get("control_node_ip"):
+            iface_lines.append(f"    gateway {net['control_node_ip']}")
 
     for i, iface in enumerate(vm["interfaces"][1:], start=1):
         net2 = networks[iface["network"]]
@@ -158,6 +166,7 @@ hostname "{vm['name']}"
 cat > /etc/network/interfaces <<'IFACES_EOF'
 {chr(10).join(iface_lines)}
 IFACES_EOF
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
 rc-service networking restart
 """
     (vm_dir / "apply.sh").write_text(apply_sh)

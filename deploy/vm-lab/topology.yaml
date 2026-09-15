@@ -11,15 +11,29 @@
 # ansible/inventory.ini or the per-VM cloud-init files under generated/.
 
 networks:
-  MGMT:        {portgroup: "VLAN-MGMT",       cidr: "10.10.0.0/24",  gateway: "10.10.0.1"}
-  BB_ACCESS:   {portgroup: "VLAN-BB-ACCESS",  cidr: "10.20.0.0/24",  gateway: "10.20.0.1"}
+  # `gateway` is the ARCHITECTURAL gateway (matches the reference topology
+  # this lab models -- bng/core5g are meant to eventually route their
+  # segment). It is NOT functional today: none of these VMs run
+  # ip_forward+NAT, so a VM's default route pointing there goes nowhere.
+  # `control_node_ip` is the address this lab's actual control node
+  # (wherever ansible-playbook/govc runs from) holds on this VLAN -- it's
+  # the only thing that currently provides real routing (NAT to the
+  # internet, for apt/git during provisioning), via manually-added
+  # iptables MASQUERADE rules (see README). render_topology.py points
+  # each VM's default route here, not at `gateway`, so cloud-init/netplan
+  # bakes in a route that actually works and survives reboots -- confirmed
+  # necessary on a real run: every VM's manually-patched default route
+  # (via control_node_ip) reverted on its own reboot, requiring the same
+  # fix over and over until this was made part of the generated config.
+  MGMT:        {portgroup: "VLAN-MGMT",       cidr: "10.10.0.0/24",  gateway: "10.10.0.1",  control_node_ip: "10.10.0.254"}
+  BB_ACCESS:   {portgroup: "VLAN-BB-ACCESS",  cidr: "10.20.0.0/24",  gateway: "10.20.0.1",  control_node_ip: "10.20.0.254"}
   # /29, not the textbook /30 for a point-to-point eBGP link -- the
-  # control node (wherever `ansible-playbook`/`govc` actually runs from)
-  # also needs its own address on every one of these segments to reach
-  # br/peer-router directly, and a /30 has no room left for a 3rd host.
-  PEERING:     {portgroup: "VLAN-PEERING",    cidr: "10.30.0.0/29",  gateway: null}
-  RAN:         {portgroup: "VLAN-RAN",        cidr: "10.40.0.0/24",  gateway: "10.40.0.1"}
-  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.50.0.0/24",  gateway: null}
+  # control node also needs its own address on every one of these
+  # segments to reach br/peer-router directly, and a /30 has no room
+  # left for a 3rd host.
+  PEERING:     {portgroup: "VLAN-PEERING",    cidr: "10.30.0.0/29",  gateway: null,         control_node_ip: "10.30.0.3"}
+  RAN:         {portgroup: "VLAN-RAN",        cidr: "10.40.0.0/24",  gateway: "10.40.0.1",  control_node_ip: "10.40.0.254"}
+  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.50.0.0/24",  gateway: null,         control_node_ip: "10.50.0.254"}
 
 templates:
   alpine:  {source_vm: "tpl-alpine",       os_family: "alpine"}
