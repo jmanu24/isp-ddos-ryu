@@ -234,6 +234,16 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "ran_mgmt_addr": mgmt_ip("ran"),
         "ric_addr": mgmt_ip("ric"),
         "orchestrator_addr": mgmt_ip("orchestrator"),
+        "br_mgmt_addr": mgmt_ip("br"),
+        "br_peering_addr": net_ip("br", "PEERING"),
+        "peer_router_peering_addr": net_ip("peer-router", "PEERING"),
+        # br's real PEERING-facing NIC -- NOT guaranteed to be `ens192` on
+        # a different ESXi host/rebuild (confirmed on this lab's own host:
+        # vmxnet3 NICs get named by PCI slot, not sequentially -- verify
+        # with `ip link show` on br itself before trusting this if the lab
+        # was ever rebuilt). Must match config/settings.py's
+        # PEERING_DIST_BR_EXTERNAL_IFACE.
+        "peering_external_iface": "ens192",
         "bgp_br_as": topology["bgp"]["br_as"],
         "bgp_peer_router_as": topology["bgp"]["peer_router_as"],
         # HTTPS, not the git@ SSH form -- these VMs won't have your own SSH
@@ -242,7 +252,11 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # a separate Ansible task (not done here -- credentials don't
         # belong in topology.yaml).
         "tesis_controller_repo_url": "https://github.com/jmanu24/isp-ddos-ryu.git",
-        "tesis_controller_branch": "feature/bgp-peering-domain",
+        # feature/peering-distributed-vm, not feature/bgp-peering-domain --
+        # it's branched FROM that one (strict superset: everything it had,
+        # plus PEERING_DISTRIBUTED_MODE support webtool/peering_ops.py
+        # needs to run flow/exabgp against real VMs instead of Mininet).
+        "tesis_controller_branch": "feature/peering-distributed-vm",
     }
 
     group_vars_dir = out_dir / "ansible" / "group_vars"

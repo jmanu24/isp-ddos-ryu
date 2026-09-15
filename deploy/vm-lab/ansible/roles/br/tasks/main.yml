@@ -59,3 +59,87 @@
     name: frr
     enabled: true
     state: started
+
+# --- Distributed-mode FlowSpec pipeline (config/settings.py's
+# PEERING_DISTRIBUTED_MODE) -- flow/softflowd/nfcapd as persistent
+# systemd services, since webtool/peering_ops.py's distributed path no
+# longer spawns them per-topology-start the way Mininet mode does. See
+# that module's own docstring for the full picture.
+
+- name: Add dummy central_server address to br's own loopback
+  # Distributed-mode stand-in for Mininet's central_server (a dummy
+  # interface local to r1, topologies/star_topology.py's
+  # add_central_server()) -- must match config/settings.py's
+  # PEERING_CENTRAL_SERVER_IP exactly, so telemetry/bgp_adapter.py's
+  # existing filtering and flow's --hooked `input`-chain blocking (which
+  # only evaluates LOCALLY DELIVERED traffic, not forwarded traffic)
+  # both keep working unchanged. A oneshot unit, not a one-off `ip addr
+  # add` command -- confirmed needed this whole session: manual `ip`
+  # state on these VMs does not survive a reboot.
+  ansible.builtin.template:
+    src: central-server-addr.service.j2
+    dest: /etc/systemd/system/central-server-addr.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start central-server-addr
+  ansible.builtin.service:
+    name: central-server-addr
+    enabled: true
+    state: started
+
+- name: Deploy flow systemd unit
+  ansible.builtin.template:
+    src: flow.service.j2
+    dest: /etc/systemd/system/flow.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Deploy nfcapd systemd unit
+  ansible.builtin.template:
+    src: nfcapd.service.j2
+    dest: /etc/systemd/system/nfcapd.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Deploy softflowd-peering systemd unit
+  ansible.builtin.template:
+    src: softflowd-peering.service.j2
+    dest: /etc/systemd/system/softflowd-peering.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Mask the distro's own softflowd.service, if the apt package created one
+  # Confirmed necessary in principle, not yet on a real run -- Ubuntu's
+  # softflowd apt package (installed by install_bgp_peering.sh) ships an
+  # init/systemd unit of its own, config'd via /etc/default/softflowd,
+  # which would otherwise also try to capture -- a second instance on
+  # the same interface with different flags/export target than
+  # softflowd-peering.service. `masked` no-ops harmlessly if that unit
+  # was never installed at all.
+  ansible.builtin.systemd:
+    name: softflowd.service
+    masked: true
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Enable and start flow/nfcapd/softflowd-peering
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop:
+    - flow.service
+    - nfcapd.service
+    - softflowd-peering.service
+
+- name: Fetch orchestrator's SSH public key (needed for collectors/
+        peering_flow_collector.py + webtool/peering_ops.py's SSH-based
+        remote calls to br -- see config/settings.py's
+        PEERING_DIST_BR_SSH_USER comment)
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"
+  when: "'orchestrator_ssh_pubkey' in hostvars['orchestrator']"

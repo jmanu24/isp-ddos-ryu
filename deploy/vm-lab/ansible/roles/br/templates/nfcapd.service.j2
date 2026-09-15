@@ -1,0 +1,18 @@
+# Managed by Ansible (roles/br). -w path must match config/settings.py's
+# PEERING_NFCAPD_DIR exactly -- collectors/peering_flow_collector.py
+# (running on orchestrator, over SSH in distributed mode) lists this
+# same directory on br to find new capture files.
+[Unit]
+Description=nfcapd -- NetFlow capture daemon (Peering domain telemetry)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/cache/nfcapd/r1
+ExecStart=/usr/local/bin/nfcapd -w /var/cache/nfcapd/r1 -p 9995 -t 2
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
