@@ -21,7 +21,17 @@ protocol bgp br {
     local as {{ bgp_peer_router_as }};
     neighbor 10.30.0.1 as {{ bgp_br_as }};
     ipv4 {
-        import none;
+        # Import ONLY 10.99.0.1/32 (config/settings.py's
+        # PEERING_CENTRAL_SERVER_IP dummy address, see br's own FRR
+        # config comment) -- confirmed on a real run: a blanket
+        # `import none` (the original design, since peer-router models
+        # an upstream AS that has no general need to learn a customer's
+        # internal routes) also silently rejected THIS route, the one
+        # peer-router actually needs to know how to reach the FlowSpec
+        # test target dynamically instead of a manually-added static
+        # route. Deliberately still not `import all` -- no reason for
+        # peer-router to learn anything else br might ever announce.
+        import where net = 10.99.0.1/32;
         export where source = RTS_STATIC;  # announce only the default route
     };
 }
