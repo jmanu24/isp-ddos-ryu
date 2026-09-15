@@ -135,10 +135,10 @@
     - nfcapd.service
     - softflowd-peering.service
 
-- name: Fetch orchestrator's SSH public key (needed for collectors/
-        peering_flow_collector.py + webtool/peering_ops.py's SSH-based
-        remote calls to br -- see config/settings.py's
-        PEERING_DIST_BR_SSH_USER comment)
+- name: Authorize orchestrator's SSH public key
+  # Needed for collectors/peering_flow_collector.py + webtool/
+  # peering_ops.py's SSH-based remote calls to br -- see config/
+  # settings.py's PEERING_DIST_BR_SSH_USER comment.
   ansible.posix.authorized_key:
     user: "{{ ansible_user }}"
     key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"

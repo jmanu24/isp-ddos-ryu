@@ -83,8 +83,9 @@
     name: "{{ br_mgmt_addr }}"
     key: "{{ lookup('pipe', 'ssh-keyscan -T 5 ' + br_mgmt_addr) }}"
     path: "{{ ansible_env.HOME }}/.ssh/known_hosts"
-  # br might not be reachable/up yet on an early run -- SSH itself
-  # retries at call time (webtool/peering_ops.py's _ssh_br has its own
-  # ConnectTimeout), so a failed keyscan here just means the very first
-  # real SSH call falls back to interactive host-key prompting once.
+  # br might not be reachable/up yet on an early run -- harmless if this
+  # fails, since webtool/peering_ops.py's _ssh_br() also passes
+  # StrictHostKeyChecking=accept-new as a fallback (a failed keyscan here
+  # just means that first real SSH call is the one that ends up trusting
+  # br's key, instead of this task doing it ahead of time).
   failed_when: false
