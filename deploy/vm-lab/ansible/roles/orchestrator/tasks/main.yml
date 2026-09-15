@@ -89,3 +89,38 @@
   # just means that first real SSH call is the one that ends up trusting
   # br's key, instead of this task doing it ahead of time).
   failed_when: false
+
+# --- Persistent exabgp service (distributed-mode FlowSpec pipeline) --
+# exabgp used to be spawned per-topology-start by webtool/peering_ops.py
+# (PeeringLifecycle._start_distributed, subprocess.Popen); now it's an
+# Ansible-managed systemd service, same as flow/nfcapd/softflowd-peering
+# already are on br -- that module now only verifies it's active
+# (systemctl is-active, no SSH needed since it's local) rather than
+# spawning/killing it.
+
+- name: Create /etc/exabgp
+  ansible.builtin.file:
+    path: /etc/exabgp
+    state: directory
+    mode: "0755"
+
+- name: Deploy exabgp config
+  ansible.builtin.template:
+    src: exabgp.conf.j2
+    dest: /etc/exabgp/exabgp.conf
+    mode: "0644"
+  notify: restart exabgp
+
+- name: Deploy exabgp systemd unit
+  ansible.builtin.template:
+    src: exabgp.service.j2
+    dest: /etc/systemd/system/exabgp.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start exabgp
+  ansible.builtin.systemd:
+    name: exabgp.service
+    daemon_reload: true
+    enabled: true
+    state: started

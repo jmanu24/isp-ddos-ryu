@@ -1,0 +1,27 @@
+# Managed by Ansible (roles/orchestrator). Distributed-VM equivalent of
+# what webtool/peering_ops.py's _write_exabgp_conf() generates at
+# runtime for Mininet mode -- here it's static, since exabgp is now a
+# persistent systemd service (exabgp.service) rather than a subprocess
+# PeeringLifecycle spawns per topology-start. Keep in sync with that
+# function's own FLOW_LOCAL_AS/EXABGP_LOCAL_AS constants (65001/65002)
+# and config/settings.py's PEERING_DIST_FLOW_PORT (1790) if any change.
+process peering {
+    run /bin/cat /run/exabgp/exabgp.in;
+    encoder text;
+}
+
+neighbor {{ br_mgmt_addr }} {
+    router-id {{ orchestrator_addr }};
+    local-address {{ orchestrator_addr }};
+    local-as 65002;
+    peer-as 65001;
+    connect 1790;
+
+    family {
+        ipv4 flow;
+    }
+
+    api {
+        processes [ peering ];
+    }
+}

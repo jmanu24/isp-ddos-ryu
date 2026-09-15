@@ -19,6 +19,16 @@ router bgp {{ bgp_br_as }}
  !
  address-family ipv4 unicast
   network 10.10.0.0/24
+  ! Advertises reachability to the dummy "central_server" address
+  ! (config/settings.py's PEERING_CENTRAL_SERVER_IP, added to br's own
+  ! loopback by the "Add dummy central_server address" task) to
+  ! peer-router over the REAL eBGP session -- so peer-router learns how
+  ! to reach it dynamically via BGP, the same way any other real network
+  ! announces its own prefixes, instead of a manually-added static route
+  ! on peer-router that wouldn't survive a reboot. FRR only announces a
+  ! `network` statement if a matching route already exists in the RIB --
+  ! the loopback address itself provides that as a connected /32.
+  network 10.99.0.1/32
  exit-address-family
 !
 line vty

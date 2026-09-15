@@ -1,0 +1,22 @@
+# Managed by Ansible (roles/orchestrator). Persistent exabgp service for
+# the Peering domain's distributed-mode FlowSpec pipeline -- replaces
+# webtool/peering_ops.py's old per-topology-start subprocess.Popen in
+# PEERING_DISTRIBUTED_MODE (that module now only verifies this is
+# active, matching how it already treats flow/softflowd/nfcapd on br).
+# exabgp self-demotes to the `nobody` user internally after binding --
+# confirmed on a real run (ps showed it running as nobody regardless of
+# which user launched it) -- so User= here doesn't need to be anything
+# special.
+[Unit]
+Description=exabgp -- BGP FlowSpec speaker (Peering domain, talks to flow on br)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/Tesis_Controller/venv/bin/exabgp /etc/exabgp/exabgp.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
