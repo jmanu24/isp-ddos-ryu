@@ -1,19 +1,40 @@
-# git+faucetsdn's fork, not PyPI's `ryu==4.30`/`ryu>=4.34` -- confirmed on
-# TWO real runs (this lab's fresh orchestrator VM, Python 3.10, AND the
-# existing Mininet-based Ubuntu test VM's own system-wide install,
-# Python 3.8 -- both currently broken, so this predates and is unrelated
-# to anything about the distributed-VM lab) that PyPI's osrg/ryu package
-# (unmaintained since ~2021, whichever version) does
+# ryu is deliberately NOT listed here -- install it separately, in this
+# exact order:
+#   pip install 'ryu @ git+https://github.com/faucetsdn/ryu.git@d6cda4f427ff8de82b94c58aa826824a106014c2'
+#   pip install -r requirements.txt   # (this file -- pulls eventlet back to 0.36.1)
+# ryu first: its own setup.py pulls in its other real dependencies
+# (msgpack, netaddr, oslo.config, ovs, routes, six, tinyrpc, webob) fine,
+# just with a stale eventlet==0.31.1 pin alongside them (see below).
+# requirements.txt SECOND, on its own (ryu absent from it, so nothing
+# here fights its own eventlet resolution this time): its eventlet==0.36.1
+# pin then just upgrades what ryu's install left behind, correctly, with
+# no conflicting constraint in the same resolution.
+#
+# Confirmed on TWO real runs -- this lab's fresh orchestrator VM (Python
+# 3.10) AND the existing Mininet-based Ubuntu test VM's own system-wide
+# install (Python 3.8), both currently broken, predating and unrelated
+# to anything about the distributed-VM lab -- that PyPI's osrg/ryu
+# package (unmaintained since ~2021) does
 # `from eventlet.wsgi import ALREADY_HANDLED` unconditionally in
 # ryu/app/wsgi.py, and no eventlet version still exports that name at
 # module level (only a newer, incompatible WSGI_LOCAL.already_handled
-# flag API). faucetsdn/ryu (the actively-maintained fork behind the
-# Faucet SDN controller) already fixed exactly this:
+# flag). faucetsdn/ryu (the actively-maintained fork behind the Faucet
+# SDN controller) already carries the fix:
 # `_ALREADY_HANDLED = getattr(eventlet.wsgi, "ALREADY_HANDLED", None)`
-# (confirmed via `gh search code "ALREADY_HANDLED" --repo faucetsdn/ryu`).
+# (confirmed via `gh search code "ALREADY_HANDLED" --repo faucetsdn/ryu`)
+# -- but that same fork's OWN setup.py still hard-pins eventlet==0.31.1
+# (stale, left over from before the getattr fix -- confirmed via a real
+# `pip install -r requirements.txt` producing "ResolutionImpossible: ryu
+# 4.34 depends on eventlet==0.31.1" against this file's eventlet==0.36.1).
+# 0.31.1 itself doesn't support Python 3.10 (monkeypatches socket.timeout,
+# which became a bare alias for the builtin TimeoutError there -- "cannot
+# set 'is_timeout' attribute of immutable type 'TimeoutError'"), so it's
+# not usable as a substitute pin either. --no-deps sidesteps ryu's own
+# resolution of eventlet entirely, relying on this file's 0.36.1 pin
+# instead -- which the getattr fix means ryu doesn't actually need any
+# specific eventlet version for, that pin was just never loosened.
 # No PyPI releases from this fork, only git -- pinned to master's own
 # HEAD at the time of this fix (2022-06-09, "Add project status").
-ryu @ git+https://github.com/faucetsdn/ryu.git@d6cda4f427ff8de82b94c58aa826824a106014c2
 numpy>=1.26
 Flask==3.0.3
 Flask-SocketIO==5.3.6
