@@ -14,6 +14,14 @@ See docs/peering-plan.md for the FlowSpec-dataplane-support spike --
 this telemetry path does NOT depend on it and works independently of
 whether mitigation/peering_backend.py's announcements actually get
 installed by r1's FRR.
+
+DISTRIBUTED-VM MODE (settings.PEERING_DISTRIBUTED_MODE, see webtool/
+peering_ops.py's own docstring for the full picture): nfcapd runs on a
+separate `br` VM, writing capture files to ITS OWN disk -- this
+collector (running wherever the controller does, e.g. the `orchestrator`
+VM) has no local filesystem access to them. Same "list, then nfdump
+each new file" logic, just over SSH instead of os.listdir/a local
+subprocess call.
 """
 import csv
 import io
@@ -23,6 +31,19 @@ import subprocess
 from typing import Dict, List, Optional
 
 import config.settings as settings
+
+
+def _ssh_br(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Same BatchMode=yes non-interactive SSH pattern as webtool/
+    peering_ops.py's _ssh_br() -- duplicated rather than imported since
+    that module pulls in Mininet-only code paths this collector has no
+    other reason to depend on."""
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+         f"{settings.PEERING_DIST_BR_SSH_USER}@{settings.PEERING_DIST_BR_SSH_HOST}",
+         *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
 
 _PROTO_NAMES = {"TCP": "TCP", "UDP": "UDP", "ICMP": "ICMP"}
 
@@ -87,6 +108,7 @@ class PeeringFlowCollector:
         self.capture_dir = capture_dir or settings.PEERING_NFCAPD_DIR
         self.nfdump_bin = nfdump_bin or settings.PEERING_NFDUMP_BIN
         self.logger = logger or logging.getLogger(__name__)
+        self._distributed = settings.PEERING_DISTRIBUTED_MODE
         # Seed with whatever's already on disk -- "tail -f" semantics, not
         # "read everything ever captured". Without this, a fresh controller
         # start replays hours-old capture files from an unrelated earlier
@@ -101,23 +123,35 @@ class PeeringFlowCollector:
     def _is_complete(fname: str) -> bool:
         return fname.startswith("nfcapd.") and not fname.startswith("nfcapd.current.")
 
-    def _existing_files(self) -> List[str]:
+    def _list_capture_dir(self) -> List[str]:
+        """Filenames only, complete or not -- caller filters with
+        _is_complete(). Distributed mode lists br's remote directory over
+        SSH instead of os.listdir()."""
+        if self._distributed:
+            result = _ssh_br(["ls", "-1", self.capture_dir])
+            if result.returncode != 0:
+                self.logger.warning(
+                    "Cannot list nfcapd capture dir %s on br: %s",
+                    self.capture_dir, result.stderr.strip(),
+                )
+                return []
+            return [line for line in result.stdout.splitlines() if line]
         try:
-            return [f for f in os.listdir(self.capture_dir) if self._is_complete(f)]
+            return os.listdir(self.capture_dir)
         except OSError:
             return []
 
+    def _existing_files(self) -> List[str]:
+        return [f for f in self._list_capture_dir() if self._is_complete(f)]
+
     def poll(self) -> List[Dict]:
         """Return flow records from every unread, fully-written capture file."""
-        if not self.capture_dir or not os.path.isdir(self.capture_dir):
+        if not self.capture_dir:
+            return []
+        if not self._distributed and not os.path.isdir(self.capture_dir):
             return []
 
-        try:
-            entries = os.listdir(self.capture_dir)
-        except OSError as exc:
-            self.logger.warning("Cannot list nfcapd capture dir %s: %s", self.capture_dir, exc)
-            return []
-
+        entries = self._list_capture_dir()
         files = sorted(f for f in entries if self._is_complete(f))
         if not files:
             return []
@@ -126,7 +160,7 @@ class PeeringFlowCollector:
 
         records: List[Dict] = []
         for fname in new_files:
-            records.extend(self._decode_file(os.path.join(self.capture_dir, fname)))
+            records.extend(self._decode_file(fname))
             self._processed_files.add(fname)
 
         # nfcapd itself deletes files past its retention window, so this
@@ -136,7 +170,19 @@ class PeeringFlowCollector:
 
         return records
 
-    def _decode_file(self, path: str) -> List[Dict]:
+    def _decode_file(self, fname: str) -> List[Dict]:
+        """fname is just the basename (see poll()) -- joined against
+        self.capture_dir here, either as a local path or (distributed
+        mode) the path nfdump is run against remotely on br over SSH."""
+        remote_path = f"{self.capture_dir.rstrip('/')}/{fname}"
+        if self._distributed:
+            result = _ssh_br([self.nfdump_bin, "-r", remote_path, "-o", "csv"], timeout=30)
+            if result.returncode != 0:
+                self.logger.warning("nfdump failed on br:%s: %s", remote_path, result.stderr.strip())
+                return []
+            return self._parse_csv(result.stdout)
+
+        path = remote_path
         try:
             result = subprocess.run(
                 [self.nfdump_bin, "-r", path, "-o", "csv"],

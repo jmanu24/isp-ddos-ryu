@@ -80,7 +80,9 @@ class BGPPeeringAdapter(DomainAdapter):
             # See PEERING_CENTRAL_SERVER_IP's own comment in
             # config/settings.py for the real incident this fixes.
             if record["src_ip"] not in (
-                settings.PEERING_CENTRAL_SERVER_IP, settings.PEERING_R1_EXTERNAL_IP,
+                settings.PEERING_CENTRAL_SERVER_IP,
+                settings.PEERING_DIST_BR_IP if settings.PEERING_DISTRIBUTED_MODE
+                else settings.PEERING_R1_EXTERNAL_IP,
             )
         ]
 

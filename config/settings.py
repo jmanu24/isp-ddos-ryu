@@ -1,3 +1,5 @@
+import os
+
 # Number of OVS switches (and therefore real enterprise/mobile/broadband
 # hosts, one of each per switch) topologies/star_topology.py's
 # build_topology() creates. Was a hardcoded default of 4 -- raised so
@@ -214,3 +216,61 @@ PEERING_EXTERNAL_PEER_IP = "10.97.0.2"
 # Must match topologies/star_topology.py's CENTRAL_SERVER_IP/R1_EXTERNAL_IP.
 PEERING_CENTRAL_SERVER_IP = "10.99.0.1"
 PEERING_R1_EXTERNAL_IP = "10.97.0.1"
+
+# --- BGP Peering domain: distributed-VM mode (deploy/vm-lab) ----------
+# Everything above models r1 + peer_ext + central_server as ONE Linux
+# host's own namespaces/veths -- confirmed impossible to run as-is
+# across separate VMs: attach_peering_uplink_to_r1() (webtool/
+# peering_ops.py) moves a veth into r1's own PID namespace via `ip link
+# set ... netns <pid>`, which has no cross-machine equivalent. When this
+# flag is on, PeeringLifecycle instead assumes `flow`/softflowd/nfcapd
+# are already running as persistent systemd services on a separate `br`
+# VM (deploy/vm-lab/ansible/roles/br), and `exabgp` as one on whatever
+# host runs this controller (deploy/vm-lab/ansible/roles/orchestrator)
+# -- all installed/configured by Ansible, not spawned per-topology-start
+# the way the Mininet path spawns flow/exabgp/softflowd/nfcapd today.
+#
+# Env-var-overridable, the one exception to this file's usual pure-
+# constants style -- deliberately, since the SAME checkout of this repo
+# runs on two different deployment targets (the existing Mininet-based
+# Ubuntu test VM, and deploy/vm-lab's distributed lab), and this flag is
+# the one thing that must differ between them without a code edit. The
+# distributed lab's orchestrator role sets this in the ryu-manager
+# systemd unit's Environment=; nothing sets it on the Mininet VM, so it
+# defaults False there unchanged.
+PEERING_DISTRIBUTED_MODE = os.environ.get("PEERING_DISTRIBUTED_MODE", "").lower() in ("1", "true", "yes")
+
+# br's real address on the PEERING VLAN (deploy/vm-lab/topology.yaml) --
+# what `flow` binds its BGP FlowSpec listener to and what exabgp peers
+# with, replacing PEERING_UPLINK_R1_IP's veth address. Also the address
+# excluded from attack telemetry for the same reason PEERING_R1_EXTERNAL_IP
+# is above (br's own traffic on this link, not an external attacker's).
+PEERING_DIST_BR_IP = "10.30.0.1"
+
+# This controller's own real address on VLAN-MGMT (deploy/vm-lab/
+# topology.yaml's `orchestrator`) -- exabgp's local-address/router-id,
+# replacing PEERING_UPLINK_ROOT_IP's veth address. Reachable from br
+# over the real network with no veth needed.
+PEERING_DIST_ORCHESTRATOR_IP = "10.10.0.1"
+
+# br's real PEERING-facing NIC -- what softflowd sniffs, replacing
+# EXTERNAL_PEER_IFACE_R1. NOT guaranteed to be `ens192` on a different
+# ESXi host/rebuild (see deploy/vm-lab's control-node interface-naming
+# notes) -- confirm with `ip link show` on the actual VM before trusting
+# this if the lab was ever rebuilt.
+PEERING_DIST_BR_EXTERNAL_IFACE = "ens192"
+
+# peer-router's real address -- the distributed-mode equivalent of
+# PEERING_EXTERNAL_PEER_IP (Mininet's peer_ext).
+PEERING_DIST_EXTERNAL_PEER_IP = "10.30.0.2"
+
+# SSH target for the `br` VM -- distributed mode has no local process
+# handle for flow/softflowd/nfcapd (they're systemd services on a
+# different machine), so PeeringLifecycle.start()/stop() only verifies
+# they're active via SSH rather than spawning/killing them, and
+# collectors/peering_flow_collector.py lists/decodes nfcapd's capture
+# files via SSH too (nfcapd writes them to br's own disk, not this
+# host's). Must be able to SSH in non-interactively (key-based auth) --
+# see deploy/vm-lab/README.md.
+PEERING_DIST_BR_SSH_USER = "labadmin"
+PEERING_DIST_BR_SSH_HOST = PEERING_DIST_BR_IP

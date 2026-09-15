@@ -2,7 +2,10 @@
 webtool/peering_ops.py — BGP Peering domain process lifecycle for
 webtool/orchestrator.py (docs/peering-plan.md §5).
 
-Owns the two processes the domain needs, neither of which is the
+Two modes, switched on settings.PEERING_DISTRIBUTED_MODE:
+
+MININET MODE (default, the original design -- see docs/peering-plan.md
+§5). Owns the two processes the domain needs, neither of which is the
 Ryu controller's own Python process:
 
   - `flow` (github.com/hack3ric/flow), started inside r1's own network
@@ -26,6 +29,22 @@ Ryu controller's own Python process:
     collectors/peering_flow_collector.py (root namespace) reads them
     from there via `nfdump`, same as this class's own file paths do.
 
+DISTRIBUTED-VM MODE (deploy/vm-lab). Confirmed impossible to run the
+above as-is across separate VMs: attach_peering_uplink_to_r1() moves a
+veth into r1's own PID namespace via `ip link set ... netns <pid>`,
+which has no cross-machine equivalent. Instead:
+
+  - `flow` + `softflowd` + `nfcapd` run as persistent systemd services
+    on the separate `br` VM (deploy/vm-lab/ansible/roles/br), installed
+    and started by Ansible -- not spawned per-topology-start. start()
+    only verifies they're active (via SSH); stop() leaves them running.
+  - `exabgp` still runs locally via subprocess.Popen exactly as in
+    Mininet mode, just peering with br's real address
+    (settings.PEERING_DIST_BR_IP) instead of the veth one.
+  - collectors/peering_flow_collector.py lists/decodes nfcapd's capture
+    files via SSH to br instead of local os.listdir/subprocess (they're
+    on br's own disk, not this host's).
+
 Mirrors webtool/bng_ops.py's BngLifecycle shape (explicit start()/stop()
 driven by webtool/orchestrator.py, not a menu loop), adapted for four
 real subprocesses instead of one in-process session object.
@@ -36,10 +55,12 @@ from pathlib import Path
 from typing import Optional
 
 import config.settings as settings
-from topologies.star_topology import (
-    PEERING_UPLINK_ROOT_IP, PEERING_UPLINK_R1_IP, EXTERNAL_PEER_IFACE_R1,
-    attach_peering_uplink_to_r1, detach_peering_uplink,
-)
+
+if not settings.PEERING_DISTRIBUTED_MODE:
+    from topologies.star_topology import (
+        PEERING_UPLINK_ROOT_IP, PEERING_UPLINK_R1_IP, EXTERNAL_PEER_IFACE_R1,
+        attach_peering_uplink_to_r1, detach_peering_uplink,
+    )
 
 FLOW_LOG_PATH = "/tmp/webtool_peering_flow.log"
 EXABGP_LOG_PATH = "/tmp/webtool_peering_exabgp.log"
@@ -79,6 +100,35 @@ NFCAPD_ROTATE_SECONDS = 2
 # introducing new untested values.
 FLOW_LOCAL_AS = 65001
 EXABGP_LOCAL_AS = 65002
+
+
+def _ssh_br(args: list) -> subprocess.CompletedProcess:
+    """
+    Runs one command on the `br` VM over SSH (distributed mode only).
+    BatchMode=yes -- fails fast with a clear error instead of hanging on
+    an interactive password prompt if key-based auth isn't set up (see
+    settings.PEERING_DIST_BR_SSH_USER's own comment).
+    """
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+         f"{settings.PEERING_DIST_BR_SSH_USER}@{settings.PEERING_DIST_BR_SSH_HOST}",
+         *args],
+        capture_output=True, text=True, timeout=15,
+    )
+
+
+def _ensure_active_on_br(unit: str) -> None:
+    """Distributed-mode equivalent of _ensure_alive() below -- these
+    units are Ansible-managed systemd services on br, not processes this
+    class spawns, so "ensure alive" means "ensure systemd already has it
+    up", not "start it"."""
+    result = _ssh_br(["systemctl", "is-active", unit])
+    if result.stdout.strip() != "active":
+        raise RuntimeError(
+            f"{unit} is not active on br (deploy/vm-lab/ansible/roles/br) -- "
+            f"systemctl is-active reported {result.stdout.strip()!r}. "
+            f"Run the br playbook / check `systemctl status {unit}` on br."
+        )
 
 
 def _ensure_alive(proc: subprocess.Popen, name: str, log_path: str) -> None:
@@ -135,10 +185,17 @@ class PeeringLifecycle:
     """
     Owns the `flow` (on r1) and `exabgp` (root namespace) processes for
     the BGP Peering domain, plus the veth uplink between them
-    (topologies/star_topology.py's attach_peering_uplink_to_r1).
+    (topologies/star_topology.py's attach_peering_uplink_to_r1) --
+    MININET MODE. In DISTRIBUTED MODE (settings.PEERING_DISTRIBUTED_MODE)
+    `flow`/softflowd/nfcapd are Ansible-managed systemd services on a
+    separate `br` VM instead -- see this module's own docstring.
     """
 
-    def __init__(self, r1):
+    def __init__(self, r1=None):
+        # r1 is a Mininet host object in Mininet mode, unused (pass None
+        # or omit) in distributed mode -- kept as the same constructor
+        # shape so webtool/orchestrator.py's call site doesn't need a
+        # mode-specific branch of its own.
         self.r1 = r1
         self.flow_proc = None
         self.exabgp_proc = None
@@ -146,6 +203,69 @@ class PeeringLifecycle:
         self.nfcapd_proc = None
 
     def start(self) -> None:
+        if settings.PEERING_DISTRIBUTED_MODE:
+            self._start_distributed()
+        else:
+            self._start_mininet()
+
+    def stop(self) -> None:
+        if settings.PEERING_DISTRIBUTED_MODE:
+            self._stop_distributed()
+        else:
+            self._stop_mininet()
+
+    # ------------------------------------------------------------------
+    # Distributed-VM mode
+    # ------------------------------------------------------------------
+
+    def _start_distributed(self) -> None:
+        # flow/softflowd/nfcapd are already running (Ansible-managed
+        # systemd services on br) -- this only verifies that, it never
+        # starts them. Fail loud here rather than let a dead service on
+        # br surface later as an hours-later "why does telemetry see
+        # nothing" mystery, same rationale as _ensure_alive() below.
+        for unit in ("flow", "softflowd", "nfcapd"):
+            _ensure_active_on_br(unit)
+
+        fifo_path = settings.PEERING_EXABGP_FIFO
+        Path(fifo_path).parent.mkdir(parents=True, exist_ok=True)
+        if not Path(fifo_path).exists():
+            subprocess.run(["mkfifo", "-m", "666", fifo_path], check=True)
+
+        # exabgp itself is still spawned locally here, exactly as in
+        # Mininet mode -- only its peer/local addresses change (br's
+        # real PEERING address instead of the veth one).
+        _write_exabgp_conf(
+            EXABGP_CONF_PATH, fifo_path,
+            peer_ip=settings.PEERING_DIST_BR_IP,
+            local_ip=settings.PEERING_DIST_ORCHESTRATOR_IP,
+        )
+        with open(EXABGP_LOG_PATH, "wb") as exabgp_log:
+            self.exabgp_proc = subprocess.Popen(
+                ["exabgp", EXABGP_CONF_PATH],
+                stdout=exabgp_log, stderr=subprocess.STDOUT,
+            )
+        time.sleep(1)
+        _ensure_alive(self.exabgp_proc, "exabgp", EXABGP_LOG_PATH)
+
+    def _stop_distributed(self) -> None:
+        # flow/softflowd/nfcapd stay running on br -- they're systemd
+        # services shared across topology start/stop cycles, not
+        # per-session processes this class owns in distributed mode.
+        # Only the locally-spawned exabgp gets torn down.
+        if self.exabgp_proc is not None:
+            self.exabgp_proc.terminate()
+            try:
+                self.exabgp_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.exabgp_proc.kill()
+            self.exabgp_proc = None
+
+    # ------------------------------------------------------------------
+    # Mininet mode (original design)
+    # ------------------------------------------------------------------
+
+    def _start_mininet(self) -> None:
         attach_peering_uplink_to_r1(self.r1)
 
         fifo_path = settings.PEERING_EXABGP_FIFO
@@ -309,7 +429,7 @@ class PeeringLifecycle:
         time.sleep(1)
         _ensure_alive(self.softflowd_proc, "softflowd", SOFTFLOWD_LOG_PATH)
 
-    def stop(self) -> None:
+    def _stop_mininet(self) -> None:
         for attr in ("softflowd_proc", "nfcapd_proc", "exabgp_proc", "flow_proc"):
             proc = getattr(self, attr)
             if proc is None:
