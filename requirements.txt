@@ -29,9 +29,10 @@
 # 0.31.1 itself doesn't support Python 3.10 (monkeypatches socket.timeout,
 # which became a bare alias for the builtin TimeoutError there -- "cannot
 # set 'is_timeout' attribute of immutable type 'TimeoutError'"), so it's
-# not usable as a substitute pin either. --no-deps sidesteps ryu's own
-# resolution of eventlet entirely, relying on this file's 0.36.1 pin
-# instead -- which the getattr fix means ryu doesn't actually need any
+# not usable as a substitute pin either. Installing ryu first (with its
+# own deps, whatever they resolve to) then this file separately fixes
+# eventlet back to 0.36.1 with no conflicting constraint in that second
+# resolution -- which the getattr fix means ryu doesn't actually need any
 # specific eventlet version for, that pin was just never loosened.
 # No PyPI releases from this fork, only git -- pinned to master's own
 # HEAD at the time of this fix (2022-06-09, "Add project status").
@@ -40,4 +41,16 @@ Flask==3.0.3
 Flask-SocketIO==5.3.6
 python-socketio==5.11.2
 eventlet==0.36.1
+# >=2.0.0, not left to whatever eventlet's own transitive pin picks --
+# confirmed on a real run: installing ryu first (see above) pulls its
+# stale eventlet==0.31.1 transiently, whose OWN pin (dnspython<2.0.0)
+# downgrades dnspython to 1.16.0 alongside it; eventlet==0.36.1 merely
+# requires dnspython>=1.15.0 (satisfied by 1.16.0, so pip leaves it
+# alone) when this file corrects eventlet back afterward. dnspython
+# 1.16.0 doesn't support Python 3.10 (collections.MutableMapping was
+# removed from the collections module there, after being an alias for
+# collections.abc.MutableMapping) -- "AttributeError: module
+# 'collections' has no attribute 'MutableMapping'" the moment eventlet's
+# greendns support tries to import it.
+dnspython>=2.0.0
 prometheus-client==0.20.0
