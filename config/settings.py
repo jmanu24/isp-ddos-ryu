@@ -240,12 +240,24 @@ PEERING_R1_EXTERNAL_IP = "10.97.0.1"
 # defaults False there unchanged.
 PEERING_DISTRIBUTED_MODE = os.environ.get("PEERING_DISTRIBUTED_MODE", "").lower() in ("1", "true", "yes")
 
-# br's real address on the PEERING VLAN (deploy/vm-lab/topology.yaml) --
-# what `flow` binds its BGP FlowSpec listener to and what exabgp peers
-# with, replacing PEERING_UPLINK_R1_IP's veth address. Also the address
-# excluded from attack telemetry for the same reason PEERING_R1_EXTERNAL_IP
-# is above (br's own traffic on this link, not an external attacker's).
-PEERING_DIST_BR_IP = "10.30.0.1"
+# br's real address on VLAN-MGMT (deploy/vm-lab/topology.yaml) -- what
+# `flow` binds its exabgp-facing listener to, and what this controller
+# SSHes to. Deliberately br's MGMT address, NOT its PEERING one: this
+# controller (orchestrator) has no interface on the PEERING VLAN at all
+# (only br and peer-router do -- see topology.yaml), so br's PEERING
+# address is simply unreachable from here. Replaces PEERING_UPLINK_R1_IP's
+# veth address for both purposes (that veth existed specifically so r1
+# and the root namespace could reach each other with no real network in
+# the way -- MGMT plays the same role here, for real).
+PEERING_DIST_BR_IP = "10.10.0.3"
+
+# br's real address on the PEERING VLAN -- NOT what flow binds to (see
+# PEERING_DIST_BR_IP above), but the address actually carried on
+# PEERING_DIST_BR_EXTERNAL_IFACE, the interface softflowd sniffs. So
+# THIS is the one excluded from attack telemetry, the same role
+# PEERING_R1_EXTERNAL_IP plays in Mininet mode (br's own traffic on the
+# sniffed link, not an external attacker's).
+PEERING_DIST_BR_PEERING_IP = "10.30.0.1"
 
 # This controller's own real address on VLAN-MGMT (deploy/vm-lab/
 # topology.yaml's `orchestrator`) -- exabgp's local-address/router-id,
@@ -263,6 +275,17 @@ PEERING_DIST_BR_EXTERNAL_IFACE = "ens192"
 # peer-router's real address -- the distributed-mode equivalent of
 # PEERING_EXTERNAL_PEER_IP (Mininet's peer_ext).
 PEERING_DIST_EXTERNAL_PEER_IP = "10.30.0.2"
+
+# Non-default TCP port for the flow<->exabgp control channel (flow's own
+# `-b`/exabgp's `connect`, see webtool/peering_ops.py's
+# _write_exabgp_conf). NOT 179: br also runs FRR's bgpd for the real
+# eBGP session with peer-router (deploy/vm-lab/ansible/roles/br), which
+# binds the standard BGP port on ALL of br's addresses by default (no
+# simple per-address scoping available in FRR for the main listener) --
+# flow trying to ALSO bind :179, even on a different specific address,
+# fails with "Address already in use". Arbitrary otherwise; just needs
+# flow's bind port and exabgp's connect port to agree.
+PEERING_DIST_FLOW_PORT = 1790
 
 # SSH target for the `br` VM -- distributed mode has no local process
 # handle for flow/softflowd/nfcapd (they're systemd services on a

@@ -111,6 +111,14 @@ def _ssh_br(args: list) -> subprocess.CompletedProcess:
     """
     return subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+         # accept-new, not the default (ask): the orchestrator role
+         # already pre-seeds known_hosts via ssh-keyscan, but that task
+         # tolerates failure (br might not be up yet on an early run) --
+         # this is the fallback so a stale/missing entry doesn't hang
+         # BatchMode's non-interactive session waiting on a prompt it can
+         # never answer, without silently accepting a CHANGED key like
+         # StrictHostKeyChecking=no would.
+         "-o", "StrictHostKeyChecking=accept-new",
          f"{settings.PEERING_DIST_BR_SSH_USER}@{settings.PEERING_DIST_BR_SSH_HOST}",
          *args],
         capture_output=True, text=True, timeout=15,
@@ -150,14 +158,24 @@ def _ensure_alive(proc: subprocess.Popen, name: str, log_path: str) -> None:
         )
 
 
-def _write_exabgp_conf(path: str, fifo_path: str, peer_ip: str, local_ip: str) -> None:
+def _write_exabgp_conf(
+    path: str, fifo_path: str, peer_ip: str, local_ip: str,
+    connect_port: Optional[int] = None,
+) -> None:
     """
     exabgp does NOT create or read PEERING_EXABGP_FIFO itself -- this
     `process` block runs `cat <fifo>`, whose stdout exabgp treats as
     commands (see mitigation/peering_backend.py's docstring and the
     ExaBGP wiki's "Controlling ExaBGP: using a named PIPE"). The FIFO
     itself must already exist before exabgp starts (see start() below).
+
+    connect_port: distributed mode only -- flow<->exabgp can't use the
+    standard BGP port 179 there (br's FRR already holds it system-wide,
+    see settings.PEERING_DIST_FLOW_PORT's own comment). None (Mininet
+    mode) omits the `connect` line entirely, so exabgp falls back to its
+    own default of 179, matching flow's own `-b ...:179` there.
     """
+    connect_line = f"    connect {connect_port};\n" if connect_port else ""
     conf = f"""process peering {{
     run /bin/cat {fifo_path};
     encoder text;
@@ -168,7 +186,7 @@ neighbor {peer_ip} {{
     local-address {local_ip};
     local-as {EXABGP_LOCAL_AS};
     peer-as {FLOW_LOCAL_AS};
-
+{connect_line}
     family {{
         ipv4 flow;
     }}
@@ -224,7 +242,11 @@ class PeeringLifecycle:
         # starts them. Fail loud here rather than let a dead service on
         # br surface later as an hours-later "why does telemetry see
         # nothing" mystery, same rationale as _ensure_alive() below.
-        for unit in ("flow", "softflowd", "nfcapd"):
+        # softflowd-peering, not plain softflowd -- deploy/vm-lab/ansible/
+        # roles/br names it that deliberately, to avoid colliding with
+        # Ubuntu's own softflowd apt package's default unit (which it
+        # masks rather than configures).
+        for unit in ("flow", "softflowd-peering", "nfcapd"):
             _ensure_active_on_br(unit)
 
         fifo_path = settings.PEERING_EXABGP_FIFO
@@ -239,6 +261,7 @@ class PeeringLifecycle:
             EXABGP_CONF_PATH, fifo_path,
             peer_ip=settings.PEERING_DIST_BR_IP,
             local_ip=settings.PEERING_DIST_ORCHESTRATOR_IP,
+            connect_port=settings.PEERING_DIST_FLOW_PORT,
         )
         with open(EXABGP_LOG_PATH, "wb") as exabgp_log:
             self.exabgp_proc = subprocess.Popen(
