@@ -63,6 +63,15 @@
     creates: "/var/run/netns/ue{{ item }}"
   loop: "{{ range(1, 6) | list }}"
 
+- name: Create /etc/srsran
+  # Same fix as ran_srsran -- confirmed on a real run: neither the build
+  # nor install step creates this, and ansible.builtin.template doesn't
+  # create parent dirs.
+  ansible.builtin.file:
+    path: /etc/srsran
+    state: directory
+    mode: "0755"
+
 - name: Deploy per-UE config (distinct ZMQ ports/IMSI/namespace each)
   ansible.builtin.template:
     src: ue_zmq.conf.j2
