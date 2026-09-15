@@ -38,9 +38,17 @@
   notify: restart frr
 
 - name: Deploy FRR bgpd config (real eBGP with peer-router)
+  # dest: frr.conf, not bgpd.conf -- confirmed on a real run: Ubuntu's frr
+  # package ships /etc/frr/vtysh.conf with "service integrated-vtysh-
+  # config" already active, so FRR only ever reads /etc/frr/frr.conf
+  # (the stock 2021-dated default) and silently ignores any per-daemon
+  # bgpd.conf -- "% BGP instance not found" despite bgpd running and this
+  # task reporting success. The template is already in the integrated
+  # format (frr version/hostname/router bgp all in one file), so no
+  # content change needed, just the destination.
   ansible.builtin.template:
     src: bgpd.conf.j2
-    dest: /etc/frr/bgpd.conf
+    dest: /etc/frr/frr.conf
     owner: frr
     group: frr
     mode: "0640"
