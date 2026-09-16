@@ -134,6 +134,18 @@ class Subscriber:
             # this VM's own default route (breaking SSH/ansible
             # reachability the moment the first session comes up).
             "nodefaultroute",
+            # noauth -- confirmed on a real run: pppd's OWN default
+            # (without this) is to REQUIRE THE PEER (accel-ppp) to
+            # authenticate to US, not the other way around. accel-ppp
+            # correctly rejects that request (an LCP ConfRej on OUR
+            # <auth PAP> option -- a NAS has no reason to authenticate
+            # itself to a subscriber), and pppd then reads that as "the
+            # peer refused to authenticate" and tears the link straight
+            # back down, in an infinite reconnect loop, without ever
+            # reaching PAP negotiation for OUR OWN credentials (which
+            # pap-secrets/`user` below handles independently of this
+            # flag either way).
+            "noauth",
             "persist", "maxfail", "0", "holdoff", "2",
             "-detach",
         ]
