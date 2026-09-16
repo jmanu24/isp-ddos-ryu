@@ -39,7 +39,21 @@ single-session=replace
 # ipoe module talks to it over netlink for every incoming session
 # regardless of ifcfg, failing immediately ("ipoe: not a IPoE message
 # 2" / "ipoe: failed to create interface") without it loaded.
-interface={{ bng_access_iface }},start=dhcpv4
+#
+# ifcfg=1 back on now that the driver actually loads -- this project's
+# real point (real per-session BYTE accounting) needs it: RADIUS
+# Acct-Input/Output-Octets come from ap_session_read_stats() reading
+# plain kernel netdev rx/tx counters on the session's own ipoeN
+# interface (accel-pppd/session.c), which only increase if the ipoe.ko
+# rx_handler on the parent actually redirects matching frames there
+# (ipoe_recv()/ipoe_lookup_rt4() in drivers/ipoe/ipoe.c, matched by the
+# session's source IP) -- confirmed that lookup depends on the
+# session's IP being registered with the kernel driver, which is what
+# ifcfg does (dont_ifcfg=1 otherwise). Without it, sessions established
+# fine and DHCP/control chatter was counted (Output-Octets nonzero) but
+# real subscriber DATA traffic (a real hping3 flood) never touched
+# Input-Octets at all.
+interface={{ bng_access_iface }},start=dhcpv4,ifcfg=1
 noauth=0
 ip-pool=bng_pool
 # A SEPARATE gw-ip-address directive from [ip-pool]'s own one below --
