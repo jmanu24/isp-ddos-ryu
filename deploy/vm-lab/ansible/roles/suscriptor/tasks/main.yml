@@ -45,6 +45,12 @@
         before the macvlan setup script runs
   ansible.builtin.meta: flush_handlers
 
+- name: Create /opt/bng-subscribers
+  ansible.builtin.file:
+    path: /opt/bng-subscribers
+    state: directory
+    mode: "0755"
+
 - name: Deploy the macvlan setup script
   ansible.builtin.template:
     src: setup_macvlans.sh.j2
