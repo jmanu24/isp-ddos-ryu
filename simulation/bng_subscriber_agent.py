@@ -153,6 +153,21 @@ class Subscriber:
             "linkname", f"sub{self.n}",
             "ifname", self.ppp_iface,
             "noipdefault",
+            # novj novjccomp -- confirmed on a real run: this is what was
+            # silently swallowing every real TCP attack packet. Van
+            # Jacobson TCP/IP header compression (RFC 1144) is a classic
+            # PPP feature pppd negotiates by default, and it ONLY applies
+            # to TCP -- exactly matching the observed symptom: a raw
+            # ICMP packet (ping -f) transmitted and counted correctly
+            # over this same interface, while a raw TCP packet (hping3,
+            # and even a hand-built SOCK_RAW/IPPROTO_TCP packet with no
+            # hping3 involved at all) never moved the interface's TX
+            # counters past the PPP handshake itself. The kernel's VJ
+            # compressor expects to track real, kernel-originated TCP
+            # connections -- a hand-crafted raw SYN packet doesn't fit
+            # that model and gets silently dropped before transmission.
+            # novj/novjccomp disable that negotiation entirely.
+            "novj", "novjccomp",
             # nodefaultroute -- critical on a VM with 8 concurrent PPP
             # sessions: without it, EVERY session would try to overwrite
             # this VM's own default route (breaking SSH/ansible
