@@ -1,0 +1,21 @@
+# Managed by Ansible (roles/orchestrator). Was a raw nohup-style process
+# started by hand (stdout/stderr landing wherever /proc/<pid>/fd pointed --
+# confirmed on a real run it was /tmp/ryu.log, not any well-known path) --
+# converted to a proper unit for the same reason exabgp was: restartable,
+# persistent, and its log lands somewhere predictable.
+[Unit]
+Description=ryu-manager -- centralized SDN controller (Enterprise/OpenFlow domain)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Tesis_Controller
+ExecStart=/opt/Tesis_Controller/venv/bin/ryu-manager --observe-links controller/ryu_controller_2.py
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:/var/log/ryu-manager.log
+StandardError=append:/var/log/ryu-manager.log
+
+[Install]
+WantedBy=multi-user.target

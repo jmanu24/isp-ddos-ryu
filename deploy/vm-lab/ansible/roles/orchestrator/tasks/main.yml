@@ -141,3 +141,29 @@
     daemon_reload: true
     enabled: true
     state: started
+
+# --- Persistent ryu-manager service (Enterprise/OpenFlow domain) -----
+# ryu-manager used to be a raw hand-launched process (no systemd unit,
+# stdout/stderr landing at /tmp/ryu.log purely because that's what its
+# own shell redirect happened to say -- see ryu-manager.service.j2's own
+# comment). Same treatment as exabgp above: Ansible-managed, restartable,
+# predictable log path.
+
+- name: Kill any pre-existing hand-launched ryu-manager process (it holds
+        the OpenFlow/web-dashboard ports the systemd unit needs to bind)
+  ansible.builtin.shell:
+    cmd: pkill -f 'ryu-manager --observe-links' || true
+
+- name: Deploy ryu-manager systemd unit
+  ansible.builtin.template:
+    src: ryu-manager.service.j2
+    dest: /etc/systemd/system/ryu-manager.service
+    mode: "0644"
+  notify: restart ryu-manager
+
+- name: Enable and start ryu-manager
+  ansible.builtin.systemd:
+    name: ryu-manager.service
+    daemon_reload: true
+    enabled: true
+    state: started
