@@ -283,8 +283,15 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "bng_access_iface": "ens192",
         "bng_access_addr": net_ip("bng", "BB_ACCESS"),
         # accel-ppp's ip-pool range for subscriber leases -- same
-        # 10.20.0.10-200 range dnsmasq used to hand out.
-        "bng_pool_range": "10.20.0.10-10.20.0.200",
+        # 10.20.0.10-200 range dnsmasq used to hand out. Format is
+        # accel-ppp's own ippool.c parse2(): "a.b.c.d-N" where N is ONLY
+        # the last octet of the range's end (0-255), NOT a second full
+        # IP address -- confirmed on a real run: "10.20.0.10-10.20.0.200"
+        # (a full 2nd IP) silently mis-parsed as a 1-address range
+        # (sscanf's "%u.%u.%u.%u-%u" stopped at the first "." after the
+        # dash), causing every session to fail with "no free IPv4
+        # address".
+        "bng_pool_range": "10.20.0.10-200",
         # RADIUS shared secret between accel-ppp and FreeRADIUS, both on
         # `bng` itself (127.0.0.1) -- not security-sensitive (throwaway
         # local-simulation lab, same posture as BNGBlaster's own world-
