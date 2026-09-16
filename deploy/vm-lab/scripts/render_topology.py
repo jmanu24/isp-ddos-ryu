@@ -264,39 +264,50 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "enterprise_ent_lan_iface": "ens160",
         "mgmt_control_node_ip": topology["networks"]["MGMT"]["control_node_ip"],
         "ent_dc_cidr": topology["networks"]["ENT_DC"]["cidr"],
-        # Broadband domain distributed mode (deploy/vm-lab/ansible/roles/
-        # suscriptor + config/settings.py's BNG_DIST_* on the app-code
-        # branch, feature/peering-distributed-vm -- MUST stay numerically
-        # identical to those, see that branch's own comments) -- BNGBlaster's
-        # hot-added "network" interface address/gateway, and victim's real
-        # MGMT address as BNGBlaster's target-ip.
-        "suscriptor_mgmt_addr": net_ip("suscriptor", "MGMT"),
+        # Broadband domain distributed mode -- accel-ppp + FreeRADIUS
+        # (deploy/vm-lab/ansible/roles/bng + roles/suscriptor, and
+        # config/settings.py's BNG_DIST_* on the app-code branch,
+        # feature/peering-distributed-vm -- MUST stay numerically
+        # identical to those, see that branch's own comments). REPLACES
+        # the earlier BNGBlaster-based group_vars (bng_target_ip stays;
+        # everything else here is new) -- see bngblaster_broadband_
+        # pipeline_status memory for why BNGBlaster itself was dropped.
         "bng_target_ip": mgmt_ip("victim"),
-        # Every OTHER hot-added 2nd NIC on this lab's tpl-ubuntu-2204
-        # clones (br, ent-site-1..5) has come in as ens192, consistently
-        # -- same PCI-slot-naming caveat as peering_external_iface
-        # above: verify with `ip link show` on suscriptor itself before
-        # trusting this if the lab was ever rebuilt.
-        "suscriptor_mgmt_iface": "ens192",
-        # BNGBlaster's own dedicated interfaces -- confirmed on a real
-        # run: it refuses to do anything useful on an interface the
-        # KERNEL also has an address on ("Interfaces must not have an IP
-        # address configured in the host OS!"), so it can't share
-        # suscriptor's own host-level NICs above. ens160 is suscriptor's
-        # ORIGINAL (pre-hot-add) NIC, repurposed here with its kernel IP
-        # stripped (deploy/vm-lab/ansible/roles/suscriptor's own tasks)
-        # -- BNGBlaster's "access" side, reaching bng's dnsmasq.
-        "bng_access_iface": "ens160",
-        # 2nd hot-added NIC (this lab's first 3-NIC Ubuntu clone) -- no
-        # confirmed real-run naming precedent yet the way ens192 has;
-        # verify with `ip link show` on suscriptor before trusting this.
-        "bng_network_iface": "ens224",
-        # BNGBlaster's OWN internal address for its "network" interface
-        # -- deliberately NOT suscriptor_mgmt_addr (10.10.0.9): that's
-        # ens192's real kernel-owned address on a DIFFERENT NIC on the
-        # SAME VLAN-MGMT segment, and BNGBlaster's raw L2 traffic would
-        # ARP-conflict with it if both claimed the same IP on the wire.
-        "bng_network_addr": "10.10.0.91",
+        # bng's own 2nd NIC (BB_ACCESS) -- accel-ppp's ipoe module
+        # listens here. Both of bng's interfaces are baked into cloud-
+        # init at clone time (unlike suscriptor's old, now-removed 3rd
+        # NIC or pe/victim/ent-site's hot-added ones) -- render_
+        # cloud_init's own `ens{160+i}` convention above names this
+        # ens161, the SAME sequential (not PCI-slot-random) naming
+        # already confirmed working for br/core5g/ran/ue/ent-site-*'s
+        # own 2nd interfaces. Verify with `ip link show` on bng if this
+        # VM was ever rebuilt outside this script.
+        "bng_access_iface": "ens161",
+        "bng_access_addr": net_ip("bng", "BB_ACCESS"),
+        # accel-ppp's ip-pool range for subscriber leases -- same
+        # 10.20.0.10-200 range dnsmasq used to hand out.
+        "bng_pool_range": "10.20.0.10-10.20.0.200",
+        # RADIUS shared secret between accel-ppp and FreeRADIUS, both on
+        # `bng` itself (127.0.0.1) -- not security-sensitive (throwaway
+        # local-simulation lab, same posture as BNGBlaster's own world-
+        # writable control socket), just needs to match on both ends.
+        "bng_radius_secret": "bng-lab-radius-secret",
+        # suscriptor's physical access-facing NIC -- macvlan sub-
+        # interfaces (one per simulated subscriber) are created on top
+        # of this one (deploy/vm-lab/ansible/roles/suscriptor's own
+        # tasks), each with its own MAC and DHCP lease from accel-ppp.
+        # Unlike BNGBlaster, accel-ppp/DHCP has no objection to the
+        # kernel owning addresses on this interface, so it no longer
+        # needs the address-stripping BNGBlaster required. ens161, same
+        # reasoning as bng_access_iface above (both of this VM's NICs
+        # are now baked into cloud-init at clone time, no more hot-added
+        # 3rd NIC).
+        "suscriptor_access_iface": "ens161",
+        # macvlan1..N (roles/suscriptor's setup_macvlans.sh.j2) -- must
+        # match simulation/bng_ipoe_config.py's own _MAX_SUBSCRIBERS in
+        # simulation/bng_subscriber_agent.py (the largest subscriber_
+        # count any scenario there uses, distributed_*/low_and_slow's 8).
+        "bng_subscriber_count": 8,
         "ent_lan_cidr": topology["networks"]["ENT_LAN"]["cidr"],
         "bgp_br_as": topology["bgp"]["br_as"],
         "bgp_peer_router_as": topology["bgp"]["peer_router_as"],

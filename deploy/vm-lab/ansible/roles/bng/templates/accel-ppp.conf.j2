@@ -1,0 +1,62 @@
+# Managed by Ansible (roles/bng). accel-ppp as an IPoE access
+# concentrator -- subscriber "sessions" are just DHCPv4 clients on
+# {{ bng_access_iface }} (see roles/suscriptor's macvlan-per-subscriber
+# setup), each authenticated+accounted via FreeRADIUS on 127.0.0.1
+# (this role's own tasks configure that side).
+#
+# NOT yet verified against a real run -- directive names/syntax below
+# are accel-ppp's own documented config format (see its repo's
+# accel-pppd/*.conf* examples / configuration.rst under
+# /opt/accel-ppp-src after deploy/install_accelppp.sh runs), cross-
+# check there if accel-pppd fails to start or logs a config error.
+
+[modules]
+log_syslog
+ipoe
+radius
+
+[core]
+thread-count=1
+
+[common]
+single-session=replace
+
+[ipoe]
+interface={{ bng_access_iface }},start=dhcpv4,ifcfg=1,username=calling-sid
+noauth=0
+ip-pool=bng_pool
+verbose=1
+
+[ip-pool]
+gw-ip-address={{ bng_access_addr }}/24
+{{ bng_pool_range }},name=bng_pool
+
+[dns]
+dns1=8.8.8.8
+
+[radius]
+dictionary=/usr/share/accel-ppp/radius/dictionary
+nas-identifier=bng
+nas-ip-address={{ bng_access_addr }}
+gw-ip-address={{ bng_access_addr }}
+verbose=1
+timeout=3
+max-try=3
+acct-timeout=3
+# Short interim interval -- this IS the real telemetry signal telemetry/
+# broadband_adapter.py's distributed-mode collect() tails (FreeRADIUS's
+# detail log gets one Interim-Update record per session every N
+# seconds, each carrying real Acct-Input/Output-Octets/-Packets).
+acct-interim-interval=5
+
+server=127.0.0.1,{{ bng_radius_secret }},auth-port=1812,acct-port=1813,req-limit=0
+
+[cli]
+tcp=127.0.0.1:2000
+verbose=1
+
+[log]
+log-file=/var/log/accel-ppp/accel-ppp.log
+log-emerg=/var/log/accel-ppp/emerg.log
+copy=1
+level=5

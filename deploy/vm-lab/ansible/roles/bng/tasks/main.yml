@@ -1,14 +1,33 @@
 ---
-# bng role -- Alpine, broadband access gateway (routing + DHCP for the
-# suscriptor segment). Real per-VLAN DHCP (as deploy/setup_bng_netns.sh's
-# Mininet-based setup does for 1:1 vlan-mode) is NOT needed here --
-# simulation/bng_config.py's _base_config() always uses vlan-mode "N:1"
-# (every BNGBlaster session shares ONE vlan, distinguished by MAC only,
-# see that module's own docstring for why), so this role only ever needs
-# to serve DHCP on that single shared vlan, not one range per session.
-- name: Install packages
-  community.general.apk:
-    name: [dnsmasq, iproute2, nftables, openssh]
+# bng role -- Ubuntu, real BRAS/BNG (accel-ppp) + real AAA (FreeRADIUS)
+# for the Broadband domain's distributed-mode pipeline. REPLACES the
+# earlier dnsmasq-only design (see bngblaster_broadband_pipeline_status
+# memory: BNGBlaster itself hit an unresolved packet-transmission bug
+# on this lab -- sendto() succeeded but the frame was invisible to
+# every external observer, incl. local tcpdump). accel-ppp is a real,
+# production-grade open-source BRAS -- its telemetry (byte/packet
+# counters per session) comes from FreeRADIUS's own real accounting
+# records (Acct-Input/Output-Octets/-Packets), genuinely generated
+# BNG-side, not reconstructed from a client-side control socket the
+# way BNGBlaster's session-streams was.
+#
+# Auth posture: accel-ppp's ipoe module authenticates by the client's
+# MAC (Calling-Station-Id, sent as the RADIUS User-Name -- see the
+# accel-ppp.conf template's username=calling-sid), and FreeRADIUS's
+# users file below accepts ANY identity (`DEFAULT Auth-Type := Accept`)
+# -- this project's whole reason for choosing RADIUS here is the real
+# ACCOUNTING telemetry, not subscriber-level access control, so there's
+# no per-subscriber provisioning to maintain (same "throwaway local-
+# simulation" posture as BNGBlaster's own world-writable control
+# socket / dnsmasq's open dhcp-range).
+#
+# NOT yet verified against a real run (see deploy/install_accelppp.sh's
+# own note) -- written and reviewed here, first real deploy will likely
+# need fixes to exact accel-ppp.conf directive names/syntax.
+
+- name: Install FreeRADIUS + networking tools
+  ansible.builtin.apt:
+    name: [freeradius, freeradius-utils, iproute2, iptables, git]
     state: present
     update_cache: true
 
@@ -20,83 +39,102 @@
     state: present
     reload: true
 
-- name: Load the 8021q kernel module (needed for the VLAN sub-interface
-        below -- BNGBlaster's access-interface config always tags DHCP
-        with outer-vlan=1 regardless of vlan-mode, an INNER 802.1Q tag
-        inside the frame, independent of and untouched by ESXi's own
-        outer portgroup VLAN tagging on VLAN-BB-ACCESS)
-  community.general.modprobe:
-    name: 8021q
-    state: present
-  ignore_errors: true  # already built into some kernels, not as a loadable module
-
-- name: Persist 8021q across reboots
-  ansible.builtin.lineinfile:
-    path: /etc/modules
-    line: 8021q
-    create: true
-
-- name: Configure the eth1.1 VLAN sub-interface (dnsmasq listens here,
-        not on plain eth1 -- see the 8021q task above for why)
-  ansible.builtin.blockinfile:
-    path: /etc/network/interfaces
-    marker: "# {mark} ANSIBLE MANAGED BLOCK -- eth1.1 vlan"
-    block: |
-      auto eth1.1
-      iface eth1.1 inet manual
-          pre-up ip link add link eth1 name eth1.1 type vlan id 1 2>/dev/null || true
-          post-up ip link set eth1.1 up
-          post-down ip link delete eth1.1 || true
-  notify: restart networking
-
-- name: Create the DHCP MAC blacklist file (empty at boot -- telemetry/
-        broadband_adapter.py's BroadbandAdapter also clears it on every
-        controller start, see its own docstring; this just ensures
-        dnsmasq's dhcp-hostsfile directive has something to read on a
-        completely fresh VM, before any controller has ever run)
-  ansible.builtin.copy:
-    content: ""
-    dest: /tmp/bng_dhcp_blacklist.hosts
+- name: Clone Tesis_Controller (for deploy/install_accelppp.sh)
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
     force: false
-    mode: "0666"
 
-- name: Ensure /etc/dnsmasq.d exists
+- name: Install accel-ppp
+  ansible.builtin.command:
+    cmd: ./deploy/install_accelppp.sh
+    chdir: /opt/Tesis_Controller
+    creates: /usr/sbin/accel-pppd
+  become: true
+
+# --- FreeRADIUS: AAA backend for accel-ppp's real accounting --------
+
+- name: Add accel-ppp as a FreeRADIUS client (localhost)
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/clients.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- accel-ppp client"
+    block: |
+      client accel-ppp {
+          ipaddr = 127.0.0.1
+          secret = {{ bng_radius_secret }}
+          require_message_authenticator = no
+          nas_type = other
+      }
+  notify: restart freeradius
+
+- name: Accept every identity in FreeRADIUS's authorize file (accounting
+        telemetry is the point here, not per-subscriber access control
+        -- see this role's own top-of-file comment)
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/users
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- accept-all for the lab"
+    block: |
+      DEFAULT Auth-Type := Accept
+  notify: restart freeradius
+
+- name: Confirm FreeRADIUS accounting (detail file) module is enabled
+  # Ubuntu's freeradius package enables mods-enabled/detail by default
+  # (symlinked from mods-available/detail), writing one flat-text
+  # record per Access-Accept/Accounting-* packet under
+  # /var/log/freeradius/radacct/<client>/detail-<date> -- exactly the
+  # real per-session Acct-Input/Output-Octets/-Packets telemetry/
+  # broadband_adapter.py's distributed-mode collect() tails. This task
+  # just verifies the symlink exists rather than re-creating it, so a
+  # site that already customized it isn't silently overwritten.
+  ansible.builtin.stat:
+    path: /etc/freeradius/3.0/mods-enabled/detail
+  register: _detail_mod
+
+- name: Enable the detail accounting module if it was disabled
   ansible.builtin.file:
-    path: /etc/dnsmasq.d
-    state: directory
-    mode: "0755"
+    src: /etc/freeradius/3.0/mods-available/detail
+    dest: /etc/freeradius/3.0/mods-enabled/detail
+    state: link
+  when: not _detail_mod.stat.exists
+  notify: restart freeradius
 
-- name: Deploy dnsmasq config
-  # /etc/dnsmasq.d/bng-access.conf, NOT the default /etc/dnsmasq.conf --
-  # must match telemetry/broadband_adapter.py's DEFAULT_DNSMASQ_CONF_PATH
-  # / config.settings.BNG_DIST_DNSMASQ_CONF_PATH exactly: that module's
-  # dnsmasq-reload finds the right process via `pgrep -f "^dnsmasq
-  # .*<this path>"`, matching this path against dnsmasq's own real
-  # command-line argument (see the conf.d task below) -- a mismatch here
-  # means the pgrep pattern never matches ANY process, silently.
-  ansible.builtin.template:
-    src: dnsmasq.conf.j2
-    dest: /etc/dnsmasq.d/bng-access.conf
-    mode: "0644"
-  notify: restart dnsmasq
-
-- name: Point Alpine's dnsmasq OpenRC service at that conf file
-  # Default Alpine dnsmasq OpenRC config args at /etc/dnsmasq.conf with
-  # no explicit --conf-file on the command line at all -- the pgrep
-  # pattern above would never match anything without this override.
-  ansible.builtin.copy:
-    content: |
-      command_args="--conf-file=/etc/dnsmasq.d/bng-access.conf"
-    dest: /etc/conf.d/dnsmasq
-    mode: "0644"
-  notify: restart dnsmasq
-
-- name: Flush handlers now -- eth1.1 must exist before dnsmasq starts
-        listening on it
+- name: Flush handlers now -- FreeRADIUS must be in its final config
+        state before accel-ppp starts sending it RADIUS requests
   ansible.builtin.meta: flush_handlers
 
-- name: Enable and start dnsmasq
-  ansible.builtin.service:
-    name: dnsmasq
+- name: Enable and start FreeRADIUS
+  ansible.builtin.systemd:
+    name: freeradius
+    daemon_reload: true
+    enabled: true
+    state: started
+
+# --- accel-ppp: the real BRAS/BNG itself ------------------------------
+
+- name: Deploy accel-ppp.conf
+  ansible.builtin.template:
+    src: accel-ppp.conf.j2
+    dest: /etc/accel-ppp.conf
+    mode: "0644"
+  notify: restart accel-ppp
+
+- name: Deploy accel-pppd systemd unit
+  # Built from source (deploy/install_accelppp.sh) -- no upstream unit
+  # file ships with it the way an apt/dpkg package would provide one.
+  ansible.builtin.template:
+    src: accel-pppd.service.j2
+    dest: /etc/systemd/system/accel-pppd.service
+    mode: "0644"
+  notify: restart accel-ppp
+
+- name: Flush handlers now -- config/unit must be in place before
+        accel-ppp starts
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start accel-ppp
+  ansible.builtin.systemd:
+    name: accel-pppd.service
+    daemon_reload: true
     enabled: true
     state: started

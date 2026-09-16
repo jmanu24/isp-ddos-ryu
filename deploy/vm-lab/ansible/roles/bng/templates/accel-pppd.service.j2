@@ -1,0 +1,18 @@
+# Managed by Ansible (roles/bng). Built from source (deploy/
+# install_accelppp.sh) -- no upstream unit ships with it the way an
+# apt/dpkg-packaged daemon would provide one.
+[Unit]
+Description=accel-ppp -- real BRAS/BNG (Broadband domain, distributed mode)
+After=network-online.target freeradius.service
+Wants=network-online.target
+Requires=freeradius.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/log/accel-ppp
+ExecStart=/usr/sbin/accel-pppd -c /etc/accel-ppp.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

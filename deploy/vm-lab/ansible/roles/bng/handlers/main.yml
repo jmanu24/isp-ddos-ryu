@@ -1,8 +1,11 @@
 ---
-- name: restart dnsmasq
-  ansible.builtin.service:
-    name: dnsmasq
+- name: restart freeradius
+  ansible.builtin.systemd:
+    name: freeradius
     state: restarted
 
-- name: restart networking
-  ansible.builtin.command: rc-service networking restart
+- name: restart accel-ppp
+  ansible.builtin.systemd:
+    name: accel-pppd.service
+    daemon_reload: true
+    state: restarted

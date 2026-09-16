@@ -1,0 +1,28 @@
+# Managed by Ansible (roles/suscriptor). Persistent per-subscriber
+# session + attack-traffic control daemon for the Broadband domain's
+# distributed-mode pipeline -- see simulation/bng_subscriber_agent.py's
+# own module docstring. Runs as root (no User= override) -- dhclient/
+# hping3 both need raw-socket-adjacent privileges, same as every other
+# real-packet-generating process in this lab (hping3 on peer-router/
+# ent-site-*).
+[Unit]
+Description=bng-subscriber-agent -- per-subscriber DHCP+attack-traffic daemon (Broadband domain, distributed mode)
+After=network-online.target bng-macvlans.service
+Wants=network-online.target
+Requires=bng-macvlans.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Tesis_Controller
+Environment=PYTHONPATH=/opt/Tesis_Controller
+ExecStart=/usr/bin/python3 simulation/bng_subscriber_agent.py \
+    --target-ip {{ bng_target_ip }} \
+    --parent-interface {{ suscriptor_access_iface }} \
+    --fifo /run/bng-agent/cmd
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:/var/log/bng-subscriber-agent.log
+StandardError=append:/var/log/bng-subscriber-agent.log
+
+[Install]
+WantedBy=multi-user.target

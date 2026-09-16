@@ -96,10 +96,25 @@ vms:
 
   - name: bng
     role: bng
-    template: alpine
+    # ubuntu, not alpine -- REPLACES the BNGBlaster-era dnsmasq-only
+    # design (see bngblaster_broadband_pipeline_status memory: BNGBlaster
+    # itself hit an unresolved, unfixable packet-transmission bug on this
+    # lab -- sendto() succeeded but the frame was invisible to every
+    # external observer). New design: this VM now runs accel-ppp (a real
+    # open-source BRAS/BNG, github.com/accel-ppp/accel-ppp) as an IPoE
+    # access concentrator, backed by FreeRADIUS for AAA -- so telemetry
+    # comes from FreeRADIUS's own real accounting records (Acct-Input/
+    # Output-Octets/Packets per session), genuinely generated BNG-side,
+    # not reconstructed from a client-side control socket. Neither
+    # accel-ppp nor FreeRADIUS is packaged for Alpine (accel-ppp has to
+    # be built from source, and every documented build target is
+    # Debian/Ubuntu/CentOS) -- same reasoning as peer-router's hping3
+    # Alpine-unavailability, just one layer up: this whole approach only
+    # works on a distro with a reliable accel-ppp build path.
+    template: ubuntu
     vcpu: 1
-    ram_mb: 1024
-    disk_gb: 6
+    ram_mb: 1536
+    disk_gb: 8
     interfaces:
       - {network: MGMT, ip: "10.10.0.2"}
       - {network: BB_ACCESS, ip: "10.20.0.1"}
@@ -110,27 +125,21 @@ vms:
     vcpu: 1
     ram_mb: 1024
     disk_gb: 8
-    # MGMT listed FIRST (ansible_host resolves to whichever interface is
-    # first with a real IP -- see render_ansible_inventory) -- confirmed
-    # necessary on a real run: BNGBlaster refuses to do anything useful
-    # (silently stuck, no DHCP, no session traffic -- its own log
-    # literally says "Interfaces must not have an IP address configured
-    # in the host OS!") on any interface the KERNEL also has an address
-    # on. Reusing the SAME NICs suscriptor needs for its own host-level
-    # SSH/Ansible/orchestrator reachability as BNGBlaster's raw access/
-    # network interfaces (the original design here) was fundamentally
-    # incompatible -- BNGBlaster needs EXCLUSIVE, address-less ownership
-    # of its own interfaces. So this VM now carries 3 NICs: MGMT (real
-    # IP, host-level reachability only, orchestrator's distributed-mode
-    # control channel), BB_ACCESS (no IP, BNGBlaster's own "access" side
-    # -- reaches bng's dnsmasq), and a 2nd MGMT-portgroup NIC (no IP,
-    # BNGBlaster's own "network" side -- reaches victim's real MGMT
-    # address, still no OpenFlow bridge needed, see the comment this one
-    # replaced for why).
+    # Back to 2 NICs -- the 3rd one (a 2nd MGMT-portgroup NIC) existed
+    # ONLY for BNGBlaster's own separate "network"/core-side interface
+    # (see bngblaster_broadband_pipeline_status memory). accel-ppp
+    # doesn't need that: subscriber "sessions" here are just standard
+    # DHCP clients (one per macvlan sub-interface on BB_ACCESS, each
+    # with its own MAC -- see roles/suscriptor's own tasks), no
+    # restriction against the kernel owning addresses on these
+    # interfaces (that restriction was BNGBlaster-specific, not a real
+    # Linux/DHCP constraint). Attack traffic from each subscriber's
+    # accel-ppp-assigned IP reaches victim's MGMT address by real L3
+    # forwarding through bng itself (ip_forward, already enabled there)
+    # -- BB_ACCESS and MGMT are different subnets but bng sits on both.
     interfaces:
       - {network: MGMT, ip: "10.10.0.9"}
       - {network: BB_ACCESS, ip: null}
-      - {network: MGMT, ip: null}
 
   - name: br
     role: br
