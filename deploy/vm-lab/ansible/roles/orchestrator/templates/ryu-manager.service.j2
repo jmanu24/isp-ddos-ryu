@@ -11,6 +11,16 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/Tesis_Controller
+# Load-bearing: ryu's dynamic app loader imports ryu_controller_2.py by
+# file path, not as a package, so its own `from forwarding.learning_switch
+# import ...` (and telemetry/correlation/detection/orchestration/web/
+# config/core) only resolves if /opt/Tesis_Controller itself is on
+# sys.path. The interactive process this replaced only worked because
+# whoever launched it had something (PYTHONPATH, a shell rc file) putting
+# it there already -- confirmed on a real run: systemd's clean
+# environment doesn't have that, and the service crash-looped with
+# ModuleNotFoundError: No module named 'forwarding' without this.
+Environment=PYTHONPATH=/opt/Tesis_Controller
 ExecStart=/opt/Tesis_Controller/venv/bin/ryu-manager --observe-links controller/ryu_controller_2.py
 Restart=on-failure
 RestartSec=2
