@@ -101,7 +101,13 @@ def _read_iface_ip(iface: str) -> str:
         ).stdout
     except (subprocess.TimeoutExpired, OSError):
         return ""
-    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", out)
+    # NOT r"inet (...)/ " -- confirmed on a real run: that only matches
+    # ordinary Ethernet-style addressing ("inet X.X.X.X/24 brd ..."). A
+    # real PPP interface's own local address has no prefix at all in
+    # `ip addr show` output -- it's "inet X.X.X.X peer Y.Y.Y.Y/32 ..."
+    # (the /32 belongs to the PEER address, not this one), so the old
+    # regex never matched a pppN interface's own IP even once it was up.
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
     return m.group(1) if m else ""
 
 
