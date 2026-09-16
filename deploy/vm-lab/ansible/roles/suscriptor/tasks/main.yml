@@ -32,7 +32,7 @@
     force: false
 
 - name: Strip BB_ACCESS's auto-DHCP (render_cloud_init defaults an
-        `ip: null` interface to dhcp4=true -- we don't want the
+        address-less interface to dhcp4=true -- we don't want the
         PHYSICAL interface itself leasing an address, only its macvlan
         children, one per simulated subscriber, should)
   ansible.builtin.replace:

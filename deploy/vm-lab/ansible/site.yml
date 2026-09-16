@@ -13,11 +13,11 @@
   hosts: orchestrator
   roles: [orchestrator]
 
-- name: BNG (broadband access gateway)
+- name: BNG (accel-ppp + FreeRADIUS)
   hosts: bng
   roles: [bng]
 
-- name: Suscriptor (BNGBlaster)
+- name: Suscriptor (per-subscriber DHCP sessions + hping3)
   hosts: suscriptor
   roles: [suscriptor]
 
