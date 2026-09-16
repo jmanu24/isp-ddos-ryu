@@ -9,8 +9,22 @@ label, not real per-switch network separation; see
 simulation/bng_traffic_simulator.py's BngScenarioSession._attack_cmd()
 for why session-traffic-start/-stop can only toggle ALL sessions of the
 one running process together.
+
+DISTRIBUTED MODE (settings.BNG_DISTRIBUTED_MODE, deploy/vm-lab): the
+real BngScenarioSession this class would otherwise own directly (local
+subprocess.Popen of the bngblaster binary) instead runs on the separate
+`suscriptor` VM, as a persistent process owned by simulation/
+bng_agent.py -- that script embeds this SAME BngLifecycle class (reused
+unmodified, see its own module docstring), just driven by a local FIFO
+instead of direct Python calls. So THIS instance, running inside
+ryu-manager on `orchestrator`, never touches BngScenarioSession at all
+in distributed mode -- start_baseline/start_attack/stop_attack/stop_all
+just SSH over and append one command line to that FIFO, mirroring
+webtool/peering_ops.py's _ssh_br pattern (BatchMode/accept-new/
+ConnectTimeout) for every other cross-VM control call in this project.
 """
 
+import subprocess
 import threading
 
 import config.settings as settings
@@ -35,9 +49,43 @@ class BngLifecycle:
     stop calls from webtool/orchestrator.py instead of a menu loop.
     """
 
-    def __init__(self, target_ip: str, tick_s: float = None):
+    def __init__(
+        self,
+        target_ip: str,
+        tick_s: float = None,
+        # Distributed-VM-lab overrides (simulation/bng_agent.py) --
+        # None means "let BngScenarioSession use its own Mininet/netns
+        # defaults" (veth-a/veth-n, 10.50.0.10/24), so every existing
+        # Mininet-mode call site is unaffected by this widening.
+        bng_host: str = None,
+        access_interface: str = None,
+        network_interface: str = None,
+        network_ip: str = None,
+        network_gateway: str = None,
+    ):
         self.target_ip = target_ip
         self.tick_s = tick_s if tick_s is not None else settings.COLLECT_INTERVAL
+        # Distributed mode never touches any of the local-session state
+        # below (_lock/_stop_event/_thread/self.session) -- it's all
+        # unused dead weight in that mode, kept only so this class's
+        # shape stays identical between modes. IMPORTANT: simulation/
+        # bng_agent.py (running on suscriptor) constructs this SAME
+        # class to do the REAL local launching -- its own process must
+        # NEVER have BNG_DISTRIBUTED_MODE set in its environment, or its
+        # BngLifecycle would try to SSH to itself instead of actually
+        # starting bngblaster. Only orchestrator's ryu-manager unit sets
+        # that env var (deploy/vm-lab/ansible/roles/orchestrator) --
+        # suscriptor's bng-agent unit deliberately does not.
+        self._distributed = settings.BNG_DISTRIBUTED_MODE
+        self._session_kwargs = {
+            k: v for k, v in {
+                "bng_host": bng_host,
+                "access_interface": access_interface,
+                "network_interface": network_interface,
+                "network_ip": network_ip,
+                "network_gateway": network_gateway,
+            }.items() if v is not None
+        }
         self._lock = threading.Lock()
         self._stop_event = None
         self._thread = None
@@ -55,7 +103,7 @@ class BngLifecycle:
 
     def _launch(self, scenario: str) -> None:
         """Caller must already hold self._lock."""
-        self.session = BngScenarioSession(scenario=scenario, target_ip=self.target_ip)
+        self.session = BngScenarioSession(scenario=scenario, target_ip=self.target_ip, **self._session_kwargs)
         self.session.start()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._tick_loop, daemon=True)
@@ -70,9 +118,37 @@ class BngLifecycle:
             self.session.stop()
         self.session, self._thread, self._stop_event = None, None, None
 
+    def _ssh_write_fifo(self, line: str) -> None:
+        """Distributed mode only: appends one command line to bng_agent.
+        py's FIFO on suscriptor -- see that module's own docstring for
+        the tiny plain-text protocol (baseline/attack <scenario>/stop/
+        stop_all). `echo ... > fifo` blocks until bng_agent.py's read
+        loop has the FIFO open for reading, same as any single-reader
+        FIFO -- its loop re-opens immediately after each line, so the
+        window where no reader is attached is negligible in practice;
+        ConnectTimeout/the outer timeout= below still bound the wait if
+        the agent is down entirely, same posture as every other _ssh_*
+        helper in this project (webtool/peering_ops.py's _ssh_br).
+        """
+        try:
+            result = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                 "-o", "StrictHostKeyChecking=accept-new",
+                 f"{settings.BNG_DIST_SUSCRIPTOR_SSH_USER}@{settings.BNG_DIST_SUSCRIPTOR_SSH_HOST}",
+                 "sh", "-c", f"echo {line!r} > {settings.BNG_DIST_FIFO_PATH}"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise RuntimeError(f"bng-agent FIFO write {line!r} failed: {exc}") from exc
+        if result.returncode != 0:
+            raise RuntimeError(f"bng-agent FIFO write {line!r} failed: {result.stderr.strip()}")
+
     def start_baseline(self) -> None:
         """low_and_slow autostarts its own attack traffic the moment the
         process comes up -- nothing else to do here."""
+        if self._distributed:
+            self._ssh_write_fifo("baseline")
+            return
         self._teardown_current()
         with self._lock:
             self._launch(BASELINE_SCENARIO)
@@ -83,6 +159,9 @@ class BngLifecycle:
         always is, low_and_slow autostarts). Any OTHER scenario: tears
         down the current session and launches a fresh one for it, same
         as bng_interactive.py's 'cambiar'."""
+        if self._distributed:
+            self._ssh_write_fifo(f"attack {scenario}")
+            return
         with self._lock:
             reuse_current = self.session is not None and self.session.scenario == scenario
             if reuse_current:
@@ -99,6 +178,9 @@ class BngLifecycle:
         """Stops attack traffic and falls back to the standing baseline
         -- broadband's benign traffic must never simply vanish, matching
         the always-on baselines the enterprise/mobile domains keep."""
+        if self._distributed:
+            self._ssh_write_fifo("stop")
+            return
         with self._lock:
             on_baseline = self.session is not None and self.session.scenario == BASELINE_SCENARIO
             if on_baseline:
@@ -110,4 +192,7 @@ class BngLifecycle:
             self._launch(BASELINE_SCENARIO)
 
     def stop_all(self) -> None:
+        if self._distributed:
+            self._ssh_write_fifo("stop_all")
+            return
         self._teardown_current()

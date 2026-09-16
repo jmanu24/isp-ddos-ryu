@@ -154,7 +154,12 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.all_adapters = [
             self.of_adapter,
             MobileNetworkAdapter(logger=self.logger),
-            BroadbandAdapter(bng_host="bng-blaster-1", logger=self.logger),
+            # bng_host left unset -- BroadbandAdapter picks the right
+            # default itself (Mininet's "bng-blaster-1" label, or the
+            # distributed lab's real suscriptor SSH host) based on
+            # settings.BNG_DISTRIBUTED_MODE. A hardcoded value here would
+            # silently override that selection in distributed mode.
+            BroadbandAdapter(logger=self.logger),
             BGPPeeringAdapter(logger=self.logger),
         ]
 

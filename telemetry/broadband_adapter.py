@@ -1,8 +1,10 @@
+import json
 import logging
 import os
 import subprocess
 from typing import Dict, List, Optional
 
+import config.settings as settings
 from core.log_format import log_line
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
@@ -14,6 +16,20 @@ DEFAULT_BNG_SOCK_PATH = "/tmp/bng_run.sock"
 # DHCP_BLACKLIST_PATH constants.
 DEFAULT_DNSMASQ_CONF_PATH = "/etc/dnsmasq.d/bng-access.conf"
 DEFAULT_DHCP_BLACKLIST_PATH = "/tmp/bng_dhcp_blacklist.hosts"
+
+_REPO_SCRIPT_DIR = "/opt/Tesis_Controller/simulation"
+_SSH_TIMEOUT_S = 10
+
+
+def _ssh(user: str, host: str, args: list, timeout: int = _SSH_TIMEOUT_S) -> subprocess.CompletedProcess:
+    """Same BatchMode/accept-new convention as webtool/peering_ops.py's
+    _ssh_br -- see that function's docstring."""
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={min(timeout, 5)}",
+         "-o", "StrictHostKeyChecking=accept-new",
+         f"{user}@{host}", *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
 
 # Must match simulation/bng_traffic_simulator.py's CSV_COLUMNS exactly.
 _CSV_COLUMNS = [
@@ -67,6 +83,21 @@ class BroadbandAdapter(DomainAdapter):
     mac) mapping learned during collect() (BNGBlaster's session-info
     doesn't index by IP, so this adapter has to remember the reverse
     mapping itself).
+
+    DISTRIBUTED MODE (settings.BNG_DISTRIBUTED_MODE, deploy/vm-lab): CSV/
+    socket/dnsmasq-blacklist all live on OTHER machines now (suscriptor
+    runs BNGBlaster, bng runs dnsmasq) -- see simulation/bng_agent.py's
+    and config/settings.py's BNG_DIST_* comments for the full picture.
+    Every local file/socket/pgrep+kill operation below gets an SSH-based
+    equivalent instead, gated on self._distributed:
+      - collect(): tails suscriptor's remote CSV via `tail -c +N` over
+        SSH (byte-offset based, same shrink-detection as the local path)
+        instead of a local file handle.
+      - apply_mitigation()'s session-stop/-start: SSHes to suscriptor and
+        runs simulation/bng_socket_cli.py against BNGBlaster's own local
+        control socket there (AF_UNIX has no cross-machine equivalent).
+      - apply_mitigation()'s MAC blacklist: SSHes to bng (not suscriptor)
+        to rewrite its dhcp-hostsfile and SIGHUP dnsmasq there.
     """
 
     domain_name = "broadband"
@@ -74,17 +105,25 @@ class BroadbandAdapter(DomainAdapter):
     def __init__(
         self,
         bng_host: str = None,
-        csv_path: str = DEFAULT_BNG_CSV_PATH,
-        sock_path: str = DEFAULT_BNG_SOCK_PATH,
-        dnsmasq_conf_path: str = DEFAULT_DNSMASQ_CONF_PATH,
-        dhcp_blacklist_path: str = DEFAULT_DHCP_BLACKLIST_PATH,
+        csv_path: str = None,
+        sock_path: str = None,
+        dnsmasq_conf_path: str = None,
+        dhcp_blacklist_path: str = None,
         logger: Optional[logging.Logger] = None,
     ):
-        self.bng_host = bng_host
-        self.csv_path = csv_path
-        self.sock_path = sock_path
-        self.dnsmasq_conf_path = dnsmasq_conf_path
-        self.dhcp_blacklist_path = dhcp_blacklist_path
+        self._distributed = settings.BNG_DISTRIBUTED_MODE
+        # None (every caller today) means "pick the right default for
+        # the active mode" -- explicit paths (tests) still override
+        # either way.
+        self.bng_host = bng_host or (settings.BNG_DIST_SUSCRIPTOR_SSH_HOST if self._distributed else "bng-blaster-1")
+        self.csv_path = csv_path or (settings.BNG_DIST_CSV_PATH if self._distributed else DEFAULT_BNG_CSV_PATH)
+        self.sock_path = sock_path or (settings.BNG_DIST_SOCK_PATH if self._distributed else DEFAULT_BNG_SOCK_PATH)
+        self.dnsmasq_conf_path = dnsmasq_conf_path or (
+            settings.BNG_DIST_DNSMASQ_CONF_PATH if self._distributed else DEFAULT_DNSMASQ_CONF_PATH
+        )
+        self.dhcp_blacklist_path = dhcp_blacklist_path or (
+            settings.BNG_DIST_DHCP_BLACKLIST_PATH if self._distributed else DEFAULT_DHCP_BLACKLIST_PATH
+        )
         # Passed down from the Ryu app (its own self.logger), same
         # convention telemetry/mobile_adapter.py already uses -- defaults
         # to a plain logging.Logger so this stays usable standalone.
@@ -98,6 +137,9 @@ class BroadbandAdapter(DomainAdapter):
         # BngControlSocket opens its own fresh connection per call() --
         # this instance is reused purely to avoid re-constructing it
         # every apply_mitigation(), it holds no connection state itself.
+        # Distributed mode never uses this directly (see _ssh_call_socket
+        # below) -- kept constructed anyway so is_connected()'s Mininet-
+        # mode path and any direct test usage are unaffected.
         self._ctrl = BngControlSocket(self.sock_path)
 
         # A block's DHCP blacklist entry (apply_mitigation's
@@ -133,18 +175,77 @@ class BroadbandAdapter(DomainAdapter):
         self._mac_by_ip = {}
 
     def is_connected(self) -> bool:
+        if self._distributed:
+            result = self._ssh_suscriptor([
+                "sh", "-c",
+                f"test -f {self.csv_path} && test -S {self.sock_path} && echo yes",
+            ])
+            return result.returncode == 0 and result.stdout.strip() == "yes"
         return os.path.exists(self.csv_path) and os.path.exists(self.sock_path)
 
-    def collect(self) -> List[TelemetryEvent]:
-        connected = os.path.exists(self.csv_path)
-        if connected and not self._was_connected:
-            self._logger.info(log_line("broadband", "TELEMETRY", "SOURCE_CONNECTED", f"path={self.csv_path}"))
-        elif not connected and self._was_connected:
-            self._logger.warning(log_line("broadband", "TELEMETRY", "SOURCE_LOST", f"path={self.csv_path}"))
-        self._was_connected = connected
+    def _ssh_suscriptor(self, args: list) -> subprocess.CompletedProcess:
+        return _ssh(settings.BNG_DIST_SUSCRIPTOR_SSH_USER, self.bng_host, args)
 
+    def _ssh_bng(self, args: list) -> subprocess.CompletedProcess:
+        return _ssh(settings.BNG_DIST_BNG_SSH_USER, settings.BNG_DIST_BNG_SSH_HOST, args)
+
+    _REMOTE_SPLIT = "---BNG_CSV_SPLIT---"
+
+    def _read_new_lines_remote(self) -> tuple:
+        """
+        (connected, lines) -- one SSH round-trip does existence check +
+        current size + "everything from self._last_offset onward" all at
+        once (rather than 3 separate SSH calls per collect(), which runs
+        every COLLECT_INTERVAL=0.5s -- see config/settings.py). Mirrors
+        the local path's os.path.getsize/shrink-detection/seek/readlines
+        sequence exactly, just phrased as one remote shell one-liner.
+        """
+        script = (
+            f'if [ -f "{self.csv_path}" ]; then '
+            f'stat -c%s "{self.csv_path}"; echo "{self._REMOTE_SPLIT}"; '
+            f'tail -c +$(({self._last_offset} + 1)) "{self.csv_path}"; '
+            f'else echo MISSING; fi'
+        )
+        try:
+            result = self._ssh_suscriptor(["sh", "-c", script])
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            self._logger.error(log_line("broadband", "TELEMETRY", "ERROR", f"ssh to suscriptor failed: {exc}"))
+            return False, []
+
+        out = result.stdout
+        if result.returncode != 0 or out.strip() == "MISSING" or self._REMOTE_SPLIT not in out:
+            return False, []
+
+        size_str, _, rest = out.partition(self._REMOTE_SPLIT)
+        try:
+            size = int(size_str.strip())
+        except ValueError:
+            return False, []
+
+        # Same shrink-detection as the local path (BngScenarioSession.
+        # start() deletes+recreates the CSV on every scenario switch) --
+        # if the file is now smaller than our stored offset, it's a NEW
+        # file; re-fetch from 0 rather than returning this cycle's
+        # (already-wrong) tail.
+        if size < self._last_offset:
+            self._last_offset = 0
+            return self._read_new_lines_remote()
+
+        # rest starts with a leading "\n" from the echo above -- strip
+        # exactly that one separator newline, not real content.
+        content = rest[1:] if rest.startswith("\n") else rest
+        self._last_offset = size
+        lines = content.splitlines(keepends=True)
+        return True, lines
+
+    def _read_new_lines_local(self) -> tuple:
+        """(connected, lines) -- Mininet-mode local-file path, unchanged
+        behavior from before distributed mode existed (see collect()'s
+        distributed counterpart, _read_new_lines_remote, for why this
+        got split out)."""
+        connected = os.path.exists(self.csv_path)
         if not connected:
-            return []
+            return False, []
 
         # simulation/bng_traffic_simulator.py's BngScenarioSession.start()
         # deletes and recreates this CSV on every launch (its own
@@ -168,6 +269,22 @@ class BroadbandAdapter(DomainAdapter):
             f.seek(self._last_offset)
             lines = f.readlines()
             self._last_offset = f.tell()
+        return True, lines
+
+    def collect(self) -> List[TelemetryEvent]:
+        if self._distributed:
+            connected, lines = self._read_new_lines_remote()
+        else:
+            connected, lines = self._read_new_lines_local()
+
+        if connected and not self._was_connected:
+            self._logger.info(log_line("broadband", "TELEMETRY", "SOURCE_CONNECTED", f"path={self.csv_path}"))
+        elif not connected and self._was_connected:
+            self._logger.warning(log_line("broadband", "TELEMETRY", "SOURCE_LOST", f"path={self.csv_path}"))
+        self._was_connected = connected
+
+        if not connected:
+            return []
 
         # One event per session per collect() call, not per CSV row --
         # same reasoning/fix as telemetry/mobile_adapter.py's own
@@ -215,38 +332,62 @@ class BroadbandAdapter(DomainAdapter):
                 continue
         return list(latest_by_session.values())
 
+    def _call_socket(self, command: str, arguments: dict) -> dict:
+        """BNGBlaster control-socket RPC, local or over SSH (distributed
+        mode has no direct route to suscriptor's AF_UNIX socket -- see
+        simulation/bng_socket_cli.py, which this SSHes to run remotely,
+        against that same socket, ON suscriptor)."""
+        if not self._distributed:
+            return self._ctrl.call(command, arguments)
+
+        result = self._ssh_suscriptor([
+            "python3", f"{_REPO_SCRIPT_DIR}/bng_socket_cli.py", command, json.dumps(arguments),
+            "--sock", self.sock_path,
+        ])
+        if result.returncode != 0:
+            raise RuntimeError(f"bng_socket_cli.py {command!r} on suscriptor failed: {result.stderr.strip()}")
+        return json.loads(result.stdout)
+
     def _reload_dnsmasq(self) -> bool:
         """SIGHUPs dnsmasq so it re-reads dhcp-hostsfile -- finds the PID
         via pgrep (unprivileged) and signals it via `sudo -n` (fails
-        immediately rather than blocking on a password prompt).
+        immediately rather than blocking on a password prompt). In
+        distributed mode, both pgrep and the sudo kill happen over SSH
+        on `bng` (the VM dnsmasq actually runs on -- see config/
+        settings.py's BNG_DIST_BNG_* comments) instead of locally.
 
-        Anchored with ^dnsmasq -- deploy/setup_bng_netns.sh launches it as
-        `sudo dnsmasq --conf-file=... --no-daemon`, and sudo's own monitor
-        process keeps that full command line (including "dnsmasq" and the
-        conf path) as ITS cmdline too, so an unanchored `dnsmasq.*<path>`
-        pattern matches both processes. Confirmed on a real run: pgrep
-        returned sudo's PID first (lower, since it started first) and
-        every reload was silently sent to sudo instead of the actual
-        dnsmasq -- sudo doesn't reliably forward SIGHUP to its child, so
-        the dhcp-hostsfile was never actually re-read, no matter how many
-        times block/unblock rewrote the file underneath it. Anchoring to
-        "the command line starts with dnsmasq" excludes sudo's own
-        ("...starts with sudo dnsmasq...") while still matching on the
-        real conf-file path.
+        Anchored with ^dnsmasq -- deploy/setup_bng_netns.sh (Mininet
+        mode) launches it as `sudo dnsmasq --conf-file=... --no-daemon`,
+        and sudo's own monitor process keeps that full command line
+        (including "dnsmasq" and the conf path) as ITS cmdline too, so
+        an unanchored `dnsmasq.*<path>` pattern matches both processes.
+        Confirmed on a real run: pgrep returned sudo's PID first (lower,
+        since it started first) and every reload was silently sent to
+        sudo instead of the actual dnsmasq -- sudo doesn't reliably
+        forward SIGHUP to its child, so the dhcp-hostsfile was never
+        actually re-read, no matter how many times block/unblock
+        rewrote the file underneath it. Anchoring to "the command line
+        starts with dnsmasq" excludes sudo's own ("...starts with sudo
+        dnsmasq...") while still matching on the real conf-file path.
+        The distributed lab's `bng` role runs dnsmasq as a plain systemd
+        service (no sudo wrapper in its own cmdline), but the same
+        anchored pattern still matches it correctly either way.
         """
+        pgrep_args = ["pgrep", "-f", f"^dnsmasq .*{self.dnsmasq_conf_path}"]
+        kill_args_prefix = ["sudo", "-n", "kill", "-HUP"]
         try:
-            pid_out = subprocess.run(
-                ["pgrep", "-f", f"^dnsmasq .*{self.dnsmasq_conf_path}"],
-                capture_output=True, text=True, timeout=5,
-            )
+            if self._distributed:
+                pid_out = self._ssh_bng(pgrep_args)
+            else:
+                pid_out = subprocess.run(pgrep_args, capture_output=True, text=True, timeout=5)
             pid = pid_out.stdout.strip().splitlines()[0] if pid_out.stdout.strip() else None
             if not pid:
                 print("[BROADBAND] dnsmasq process not found, cannot reload DHCP blacklist")
                 return False
-            result = subprocess.run(
-                ["sudo", "-n", "kill", "-HUP", pid],
-                capture_output=True, text=True, timeout=5,
-            )
+            if self._distributed:
+                result = self._ssh_bng([*kill_args_prefix, pid])
+            else:
+                result = subprocess.run([*kill_args_prefix, pid], capture_output=True, text=True, timeout=5)
             if result.returncode != 0:
                 print(f"[BROADBAND] sudo -n kill -HUP {pid} failed: {result.stderr.strip()}")
                 return False
@@ -255,16 +396,46 @@ class BroadbandAdapter(DomainAdapter):
             print(f"[BROADBAND] dnsmasq reload failed: {exc}")
             return False
 
+    def _read_blacklist_lines(self) -> list:
+        if self._distributed:
+            result = self._ssh_bng(["sh", "-c", f"cat {self.dhcp_blacklist_path} 2>/dev/null || true"])
+            return [ln for ln in result.stdout.splitlines() if ln.strip()]
+        if not os.path.exists(self.dhcp_blacklist_path):
+            return []
+        with open(self.dhcp_blacklist_path, "r") as f:
+            return [ln.rstrip("\n") for ln in f if ln.strip()]
+
+    def _write_blacklist_lines(self, lines: list) -> None:
+        content = "\n".join(lines) + ("\n" if lines else "")
+        if self._distributed:
+            # tee, not a redirect -- this ssh session's own shell has no
+            # write access to a root-owned /etc/dnsmasq.d path, but the
+            # bng role's dnsmasq-reload sudoers entry (same NOPASSWD
+            # posture as _reload_dnsmasq's kill -HUP) covers `tee` here
+            # too. `sh -c` wraps it so stdin (the new content, passed via
+            # `input=`) pipes into tee's stdin over the one ssh command.
+            result = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                 "-o", "StrictHostKeyChecking=accept-new",
+                 f"{settings.BNG_DIST_BNG_SSH_USER}@{settings.BNG_DIST_BNG_SSH_HOST}",
+                 "sudo", "-n", "tee", self.dhcp_blacklist_path],
+                input=content, capture_output=True, text=True, timeout=_SSH_TIMEOUT_S,
+            )
+            if result.returncode != 0:
+                raise OSError(f"writing {self.dhcp_blacklist_path} on bng failed: {result.stderr.strip()}")
+            return
+        with open(self.dhcp_blacklist_path, "w") as f:
+            f.write(content)
+
     def _clear_dhcp_blacklist(self) -> None:
         """Best-effort, same posture as every other BNGBlaster-adjacent
         failure here: a missing blacklist file (deploy/setup_bng_netns.sh
-        never ran yet) or a dnsmasq that isn't up yet are both silent
-        no-ops, not errors -- this only matters once a topology/dnsmasq
-        actually exists."""
+        /the bng Ansible role never ran yet) or a dnsmasq that isn't up
+        yet are both silent no-ops, not errors -- this only matters once
+        a topology/dnsmasq actually exists."""
         try:
-            if os.path.exists(self.dhcp_blacklist_path) and os.path.getsize(self.dhcp_blacklist_path) > 0:
-                with open(self.dhcp_blacklist_path, "w"):
-                    pass
+            if self._read_blacklist_lines():
+                self._write_blacklist_lines([])
                 self._reload_dnsmasq()
         except OSError as exc:
             print(f"[BROADBAND] cannot clear DHCP blacklist {self.dhcp_blacklist_path}: {exc}")
@@ -272,20 +443,16 @@ class BroadbandAdapter(DomainAdapter):
     def _set_mac_blacklisted(self, mac: str, blacklisted: bool) -> bool:
         """Adds/removes "<mac>,ignore" in dnsmasq's dhcp-hostsfile, then
         reloads dnsmasq. Best-effort -- a missing/unwritable blacklist
-        file (e.g. deploy/setup_bng_netns.sh never ran) degrades to a
-        logged no-op rather than raising, same convention as every
-        other BNGBlaster-socket failure in this adapter."""
+        file (e.g. deploy/setup_bng_netns.sh/the bng role never ran)
+        degrades to a logged no-op rather than raising, same convention
+        as every other BNGBlaster-socket failure in this adapter."""
         try:
-            lines = []
-            if os.path.exists(self.dhcp_blacklist_path):
-                with open(self.dhcp_blacklist_path, "r") as f:
-                    lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+            lines = self._read_blacklist_lines()
             entry = f"{mac},ignore"
             lines = [ln for ln in lines if not ln.startswith(f"{mac},")]
             if blacklisted:
                 lines.append(entry)
-            with open(self.dhcp_blacklist_path, "w") as f:
-                f.write("\n".join(lines) + ("\n" if lines else ""))
+            self._write_blacklist_lines(lines)
         except OSError as exc:
             print(f"[BROADBAND] cannot update DHCP blacklist {self.dhcp_blacklist_path}: {exc}")
             return False
@@ -302,7 +469,7 @@ class BroadbandAdapter(DomainAdapter):
         command = "session-stop" if is_block else "session-start"
         ok = True
         try:
-            self._ctrl.call(command, {"session-id": session_id})
+            self._call_socket(command, {"session-id": session_id})
         except (OSError, RuntimeError) as exc:
             print(f"[BROADBAND] {command} session-id={session_id} failed: {exc}")
             ok = False

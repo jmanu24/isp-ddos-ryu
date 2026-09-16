@@ -190,6 +190,11 @@ class BngScenarioSession:
         bng_binary: str = DEFAULT_BNG_BINARY,
         access_interface: str = "veth-a",
         network_interface: str = "veth-n",
+        # Defaults match build_scenario's own -- only the distributed-VM
+        # lab's bng_agent.py overrides these (suscriptor's real network-
+        # side NIC/address, not the old netns setup's veth-n address).
+        network_ip: str = "10.50.0.10/24",
+        network_gateway: str = "10.50.0.1",
         config_path: str = DEFAULT_CONFIG_PATH,
         sock_path: str = DEFAULT_SOCK_PATH,
     ):
@@ -206,6 +211,8 @@ class BngScenarioSession:
             target_ip=target_ip,
             access_interface=access_interface,
             network_interface=network_interface,
+            network_ip=network_ip,
+            network_gateway=network_gateway,
         )
         self.ctrl: BngControlSocket = None
         self._proc: subprocess.Popen = None

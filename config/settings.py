@@ -297,3 +297,64 @@ PEERING_DIST_FLOW_PORT = 1790
 # see deploy/vm-lab/README.md.
 PEERING_DIST_BR_SSH_USER = "labadmin"
 PEERING_DIST_BR_SSH_HOST = PEERING_DIST_BR_IP
+
+# ---------------------------------------------------------------------
+# Broadband domain -- distributed VM lab mode (mirrors PEERING_DISTRIBUTED_
+# MODE above). See telemetry/broadband_adapter.py's DISTRIBUTED MODE
+# docstring and simulation/bng_agent.py's module docstring for the full
+# picture: BNGBlaster runs as a persistent systemd service on `suscriptor`
+# (deploy/vm-lab/ansible/roles/suscriptor), driven over SSH by a FIFO
+# instead of the local subprocess.Popen webtool/bng_ops.py's BngLifecycle
+# uses in Mininet mode; dnsmasq (DHCP + MAC blacklist) runs on `bng`
+# instead of the local process telemetry/broadband_adapter.py's Mininet-
+# mode path controls directly.
+# ---------------------------------------------------------------------
+BNG_DISTRIBUTED_MODE = os.environ.get("BNG_DISTRIBUTED_MODE", "").lower() in ("1", "true", "yes")
+
+# suscriptor's hot-added VLAN-MGMT address (deploy/vm-lab/topology.yaml)
+# -- NOT its BB_ACCESS one (10.20.0.2): orchestrator has no route to
+# BB_ACCESS at all (the control node doesn't forward between VLANs
+# without an explicit rule, unlike NAT-to-internet which every VLAN
+# gets), so suscriptor needed a real MGMT-side NIC added, the same hot-
+# add pattern the enterprise domain's ent-site-* VMs already use. This
+# same new NIC ALSO serves as BNGBlaster's own "network" interface
+# (see BNG_DIST_NETWORK_IP/BNG_DIST_NETWORK_GATEWAY below) -- one NIC,
+# two roles, since both only need reachability to the rest of VLAN-MGMT.
+BNG_DIST_SUSCRIPTOR_IP = "10.10.0.9"
+BNG_DIST_SUSCRIPTOR_SSH_USER = "labadmin"
+BNG_DIST_SUSCRIPTOR_SSH_HOST = BNG_DIST_SUSCRIPTOR_IP
+
+# bng's own real MGMT address (topology.yaml) -- already reachable from
+# orchestrator without any topology change, unlike suscriptor above.
+# Alpine template -- root, not labadmin (see ALPINE_ROOT_PASSWORD in
+# deploy/vm-lab/scripts/render_topology.py).
+BNG_DIST_BNG_IP = "10.10.0.2"
+BNG_DIST_BNG_SSH_USER = "root"
+BNG_DIST_BNG_SSH_HOST = BNG_DIST_BNG_IP
+
+# Same addressing BNGBlaster's "network" interface config gets (see
+# simulation/bng_agent.py's --network-ip/--network-gateway) -- BNG_DIST_
+# SUSCRIPTOR_IP's own /24 and gateway, i.e. this domain's simulated
+# subscriber sessions egress onto VLAN-MGMT itself, reaching victim's
+# real MGMT address (BNG_DIST_TARGET_IP) directly, no OpenFlow bridge
+# involved (unlike the enterprise domain, this domain's detection is
+# BNGBlaster's own native per-session telemetry, not switch-based, so
+# there's no need to force traffic through any particular monitored
+# switch the way ENT_DC's redesign did).
+BNG_DIST_NETWORK_IP = "10.10.0.9/24"
+BNG_DIST_NETWORK_GATEWAY = "10.10.0.254"
+
+# victim's real MGMT address (shared target VM every domain's test
+# scenario uses) -- BNGBlaster's own target-ip.
+BNG_DIST_TARGET_IP = "10.10.0.100"
+
+# Remote paths on suscriptor (CSV/socket/FIFO) and bng (DHCP blacklist +
+# its matching dnsmasq conf, for the pgrep pattern telemetry/
+# broadband_adapter.py's _reload_dnsmasq uses) -- same filenames/
+# conventions the Mininet-mode defaults already use, just now read/
+# written over SSH instead of locally.
+BNG_DIST_CSV_PATH = "/tmp/ddos_bng_events.csv"
+BNG_DIST_SOCK_PATH = "/tmp/bng_run.sock"
+BNG_DIST_FIFO_PATH = "/run/bng-agent/cmd"
+BNG_DIST_DHCP_BLACKLIST_PATH = "/tmp/bng_dhcp_blacklist.hosts"
+BNG_DIST_DNSMASQ_CONF_PATH = "/etc/dnsmasq.d/bng-access.conf"
