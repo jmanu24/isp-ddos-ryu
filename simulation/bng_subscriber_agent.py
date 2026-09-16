@@ -7,25 +7,41 @@ BNGBlaster's own sendto() succeeded but the frame was invisible to
 every external observer on this lab, an unresolved bug. This project's
 real BNG-side telemetry now comes from FreeRADIUS's own accounting
 records on `bng` itself (telemetry/broadband_adapter.py tails those
-over SSH) -- this daemon's only job is making real DHCP-backed
+over SSH) -- this daemon's only job is making real PPPoE-backed
 subscriber sessions exist against accel-ppp and driving real hping3
-attack traffic sourced from each subscriber's own DHCP-assigned IP.
+attack traffic sourced from each subscriber's own PPP-assigned IP.
 
 A "subscriber session" here is one macvlan sub-interface (roles/
 suscriptor's setup_macvlans.sh.j2 creates macvlan1..N at boot, each
-with its own MAC) running its own `dhclient` -- accel-ppp's ipoe module
-on `bng` sees each as a distinct client (by Calling-Station-Id = MAC),
-authenticates+accounts it via FreeRADIUS, and hands back a real IPv4
-lease. `dhclient -r` (release) on stop sends a real DHCPRELEASE, which
-is what makes FreeRADIUS emit a real Accounting-Stop record for that
-session -- a genuine BNG-native session teardown, not a synthetic one.
+with its own MAC) running its own real `pppd` process (rp-pppoe
+plugin) -- accel-ppp's pppoe module on `bng` sees each as a distinct
+PPPoE peer (by Calling-Station-Id = MAC, plus a real PAP identity from
+roles/suscriptor's pap-secrets), authenticates+accounts it via
+FreeRADIUS, and negotiates back a real IPv4 address over IPCP. This
+REPLACES an earlier IPoE/dhclient design (see roles/bng's own accel-
+ppp.conf.j2 top-of-file comment): confirmed on a real run that IPoE
+sessions authenticated and leased real DHCP IPs fine, but the kernel
+ipoe.ko driver never actually redirected real subscriber DATA traffic
+to the session's own interface, so FreeRADIUS accounting never
+reflected any real attack traffic no matter how much flowed. PPPoE
+sidesteps that entirely: each session's traffic is actively
+encapsulated/decapsulated by the kernel's own generic PPP discipline
+as it passes through the session's own real pppN interface, so that
+interface's plain netdev counters are genuinely populated by the
+traffic itself -- no separate classifier that has to choose to
+redirect frames.
+
+Killing a session's pppd process (SIGTERM) closes the PPP link
+normally (LCP Term-Request), which is what makes accel-ppp/FreeRADIUS
+emit a real Accounting-Stop record for that session -- a genuine
+BNG-native session teardown, not a synthetic one.
 
 Same tiny plain-text FIFO protocol as its predecessor (one command per
 line): "baseline", "attack <scenario>", "stop", "stop_all" -- driven
 over SSH by webtool/bng_ops.py's BngLifecycle in distributed mode
 (_ssh_write_fifo), unchanged on that end.
 
-Usage (on suscriptor, as root -- dhclient/hping3/raw sockets need it):
+Usage (on suscriptor, as root -- pppd/hping3/raw sockets need it):
   sudo python3 simulation/bng_subscriber_agent.py \\
       --target-ip 10.10.0.100 --parent-interface ens192 \\
       --fifo /run/bng-agent/cmd
@@ -44,9 +60,8 @@ sys.path.insert(0, REPO_DIR)
 from simulation.bng_ipoe_config import SCENARIOS, BASELINE_SCENARIO, build_scenario  # noqa: E402
 
 _MAX_SUBSCRIBERS = 8
-_DHCP_LEASE_DIR = "/var/lib/dhcp"
-_DHCP_RUN_DIR = "/run/bng-subscribers"
-_DHCP_WAIT_S = 15
+_RUN_DIR = "/run/bng-subscribers"
+_PPP_WAIT_S = 15
 # Real per-session byte/packet counters come from FreeRADIUS's own
 # accounting on `bng` (telemetry/broadband_adapter.py tails those) --
 # but RADIUS accounting has no L4 visibility at all (it's a volumetric
@@ -58,19 +73,24 @@ _DHCP_WAIT_S = 15
 # read which protocol/dst_port each currently-attacking subscriber's IP
 # is meant to represent, merging it with FreeRADIUS's real rate data by
 # IP.
-_STATE_PATH = f"{_DHCP_RUN_DIR}/active_scenario.json"
+_STATE_PATH = f"{_RUN_DIR}/active_scenario.json"
 
 
-def _iface(n: int) -> str:
+def _macvlan_iface(n: int) -> str:
     return f"macvlan{n}"
 
 
-def _pidfile(n: int) -> str:
-    return f"{_DHCP_RUN_DIR}/dhclient.{_iface(n)}.pid"
+def _ppp_iface(n: int) -> str:
+    return f"ppp-sub{n}"
 
 
-def _leasefile(n: int) -> str:
-    return f"{_DHCP_RUN_DIR}/dhclient.{_iface(n)}.leases"
+def _username(n: int) -> str:
+    """Must match roles/suscriptor's pap-secrets.j2 exactly."""
+    return f"sub{n}"
+
+
+def _log_path(n: int) -> str:
+    return f"{_RUN_DIR}/pppd.sub{n}.log"
 
 
 def _read_iface_ip(iface: str) -> str:
@@ -86,55 +106,77 @@ def _read_iface_ip(iface: str) -> str:
 
 
 class Subscriber:
-    """One macvlan-backed subscriber session -- owns its dhclient
-    process and (when attacking) its hping3 process."""
+    """One macvlan-backed subscriber session -- owns its real pppd
+    process (a PPPoE session against accel-ppp on `bng`, over this
+    macvlan) and (when attacking) its hping3 process."""
 
     def __init__(self, n: int):
         self.n = n
-        self.iface = _iface(n)
+        self.macvlan_iface = _macvlan_iface(n)
+        self.ppp_iface = _ppp_iface(n)
         self.ip = ""
+        self._pppd_proc: subprocess.Popen = None
         self._attack_proc: subprocess.Popen = None
 
     def session_up(self) -> None:
         if self.ip:
-            return  # already leased
-        os.makedirs(_DHCP_RUN_DIR, exist_ok=True)
-        subprocess.run(
-            ["dhclient", "-nw", "-pf", _pidfile(self.n), "-lf", _leasefile(self.n), self.iface],
-            capture_output=True, text=True, timeout=_DHCP_WAIT_S,
-        )
-        deadline = time.time() + _DHCP_WAIT_S
+            return  # already up
+        os.makedirs(_RUN_DIR, exist_ok=True)
+        argv = [
+            "pppd",
+            "plugin", "rp-pppoe.so", self.macvlan_iface,
+            "user", _username(self.n),
+            "linkname", f"sub{self.n}",
+            "ifname", self.ppp_iface,
+            "noipdefault",
+            # nodefaultroute -- critical on a VM with 8 concurrent PPP
+            # sessions: without it, EVERY session would try to overwrite
+            # this VM's own default route (breaking SSH/ansible
+            # reachability the moment the first session comes up).
+            "nodefaultroute",
+            "persist", "maxfail", "0", "holdoff", "2",
+            "-detach",
+        ]
+        with open(_log_path(self.n), "wb") as log_f:
+            self._pppd_proc = subprocess.Popen(argv, stdout=log_f, stderr=subprocess.STDOUT)
+
+        deadline = time.time() + _PPP_WAIT_S
         while time.time() < deadline:
-            ip = _read_iface_ip(self.iface)
+            ip = _read_iface_ip(self.ppp_iface)
             if ip:
                 self.ip = ip
-                print(f"[SUBSCRIBER] {self.iface} leased {ip}")
+                print(f"[SUBSCRIBER] {self.ppp_iface} (via {self.macvlan_iface}) got {ip}")
                 return
             time.sleep(0.5)
-        print(f"[SUBSCRIBER] {self.iface} did not get a DHCP lease within {_DHCP_WAIT_S}s", file=sys.stderr)
+        print(f"[SUBSCRIBER] {self.ppp_iface} did not come up within {_PPP_WAIT_S}s", file=sys.stderr)
 
     def session_down(self) -> None:
         self.stop_attack()
-        if not self.ip and not os.path.exists(_pidfile(self.n)):
+        if self._pppd_proc is None:
             return
-        # -r (release) -- sends a real DHCPRELEASE, the trigger for
-        # accel-ppp/FreeRADIUS to emit a real Accounting-Stop record
-        # for this session (see this module's own docstring).
-        subprocess.run(
-            ["dhclient", "-r", "-pf", _pidfile(self.n), "-lf", _leasefile(self.n), self.iface],
-            capture_output=True, text=True, timeout=_DHCP_WAIT_S,
-        )
-        for f in (_pidfile(self.n), _leasefile(self.n)):
-            if os.path.exists(f):
-                os.remove(f)
+        # SIGTERM -- closes the PPP link normally (LCP Term-Request),
+        # the trigger for accel-ppp/FreeRADIUS to emit a real
+        # Accounting-Stop record for this session (see this module's own
+        # docstring). `persist` above only governs auto-reconnect after
+        # an unexpected link drop, not signal handling -- SIGTERM still
+        # terminates pppd outright.
+        try:
+            self._pppd_proc.terminate()
+            self._pppd_proc.wait(timeout=5)
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                self._pppd_proc.kill()
+            except OSError:
+                pass
+        self._pppd_proc = None
         self.ip = ""
 
     def start_attack(self, protocol: str, dst_port: int, rate_flags: list, target_ip: str) -> None:
         self.stop_attack()
         if not self.ip:
-            print(f"[SUBSCRIBER] {self.iface} has no IP yet, cannot attack", file=sys.stderr)
+            print(f"[SUBSCRIBER] {self.ppp_iface} has no IP yet, cannot attack", file=sys.stderr)
             return
-        argv = ["hping3", "-I", self.iface, "-a", self.ip]
+        argv = ["hping3", "-I", self.ppp_iface, "-a", self.ip]
         if protocol == "UDP":
             argv += ["--udp", "-p", str(dst_port), "--keep"]
         elif protocol == "TCP_SYN":
@@ -197,7 +239,7 @@ class SubscriberPool:
 
     def _write_state(self, protocol: str, dst_port: int, count: int) -> None:
         """src_ip -> {protocol, dst_port} for every subscriber currently
-        attacking, keyed by their REAL DHCP-assigned IP -- see this
+        attacking, keyed by their REAL PPP-assigned IP -- see this
         module's own top-of-file comment on why broadband_adapter.py
         needs this alongside FreeRADIUS's real rate data."""
         state = {}
@@ -265,7 +307,7 @@ def main():
     args = p.parse_args()
 
     if sys.platform != "linux":
-        print("ERROR: needs Linux (raw sockets, dhclient) -- run this on suscriptor, not here.", file=sys.stderr)
+        print("ERROR: needs Linux (raw sockets, pppd) -- run this on suscriptor, not here.", file=sys.stderr)
         sys.exit(1)
 
     run(fifo_path=args.fifo, target_ip=args.target_ip, start_baseline=not args.no_baseline)
