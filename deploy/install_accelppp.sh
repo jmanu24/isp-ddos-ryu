@@ -49,7 +49,11 @@ fi
 
 echo "== 1. Dependencias de build =="
 
-BUILD_PKGS="build-essential cmake git pkg-config libssl-dev liblua5.1-0-dev libpcre3-dev libjson-c-dev linux-headers-$(uname -r)"
+# libpcre2-dev, NOT libpcre3-dev -- confirmed on a real run: accel-ppp's
+# own CMakeLists.txt requires PCRE2 specifically ("Required libpcre not
+# found. Install libpcre2-dev and run cmake again"), the legacy PCRE1
+# libpcre3-dev doesn't satisfy it despite the similar package name.
+BUILD_PKGS="build-essential cmake git pkg-config libssl-dev liblua5.1-0-dev libpcre2-dev libjson-c-dev linux-headers-$(uname -r)"
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
   for pkg in $BUILD_PKGS; do
