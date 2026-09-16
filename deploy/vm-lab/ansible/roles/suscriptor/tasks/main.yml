@@ -92,6 +92,26 @@
     mode: "0600"
   notify: netplan apply
 
+- name: Disable IPv6 on BNGBlaster's dedicated interfaces (dhcp6=false
+        above only stops DHCPv6 -- Linux ALWAYS auto-assigns a link-
+        local IPv6 address to any UP interface regardless, via SLAAC,
+        and BNGBlaster's OWN "no address in the host OS" check flags
+        THAT too. Confirmed on a real run, same warning class as the
+        IPv4 fix above, for the auto-assigned link-local address this
+        time. deploy/setup_bng_netns.sh's Mininet-mode setup already
+        knew to disable IPv6 entirely for exactly this reason -- this
+        replicates it for the 2 dedicated NICs.)
+  ansible.posix.sysctl:
+    name: "net.ipv6.conf.{{ item }}.disable_ipv6"
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-bng-disable-ipv6.conf
+  loop:
+    - "{{ bng_access_iface }}"
+    - "{{ bng_network_iface }}"
+
 - name: Flush handlers now -- every NIC above must be in its final state
         before bng-agent starts
   ansible.builtin.meta: flush_handlers
