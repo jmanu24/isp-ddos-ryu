@@ -278,6 +278,25 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # above: verify with `ip link show` on suscriptor itself before
         # trusting this if the lab was ever rebuilt.
         "suscriptor_mgmt_iface": "ens192",
+        # BNGBlaster's own dedicated interfaces -- confirmed on a real
+        # run: it refuses to do anything useful on an interface the
+        # KERNEL also has an address on ("Interfaces must not have an IP
+        # address configured in the host OS!"), so it can't share
+        # suscriptor's own host-level NICs above. ens160 is suscriptor's
+        # ORIGINAL (pre-hot-add) NIC, repurposed here with its kernel IP
+        # stripped (deploy/vm-lab/ansible/roles/suscriptor's own tasks)
+        # -- BNGBlaster's "access" side, reaching bng's dnsmasq.
+        "bng_access_iface": "ens160",
+        # 2nd hot-added NIC (this lab's first 3-NIC Ubuntu clone) -- no
+        # confirmed real-run naming precedent yet the way ens192 has;
+        # verify with `ip link show` on suscriptor before trusting this.
+        "bng_network_iface": "ens224",
+        # BNGBlaster's OWN internal address for its "network" interface
+        # -- deliberately NOT suscriptor_mgmt_addr (10.10.0.9): that's
+        # ens192's real kernel-owned address on a DIFFERENT NIC on the
+        # SAME VLAN-MGMT segment, and BNGBlaster's raw L2 traffic would
+        # ARP-conflict with it if both claimed the same IP on the wire.
+        "bng_network_addr": "10.10.0.91",
         "ent_lan_cidr": topology["networks"]["ENT_LAN"]["cidr"],
         "bgp_br_as": topology["bgp"]["br_as"],
         "bgp_peer_router_as": topology["bgp"]["peer_router_as"],

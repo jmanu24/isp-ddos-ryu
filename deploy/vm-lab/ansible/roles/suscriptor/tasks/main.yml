@@ -32,8 +32,9 @@
 # was already provisioned) -- see topology.yaml's own comment on
 # suscriptor's interfaces for why: orchestrator has no route to
 # BB_ACCESS at all, so the broadband domain's distributed-mode control
-# channel needed a real MGMT-side NIC, and this same NIC doubles as
-# BNGBlaster's own "network" interface.
+# channel needed a real MGMT-side NIC. Host-level reachability ONLY --
+# BNGBlaster gets its own separate, address-less NICs below (confirmed
+# on a real run: sharing this one didn't work, see that task's comment).
 
 - name: Configure the MGMT interface
   ansible.builtin.template:
@@ -42,8 +43,57 @@
     mode: "0600"
   notify: netplan apply
 
-- name: Flush handlers now -- the MGMT NIC must be up before bng-agent
-        (its own "network" interface) starts
+# --- BNGBlaster's own dedicated, address-less interfaces --------------
+# Confirmed on a real run: BNGBlaster refuses to do anything useful
+# (stuck forever, zero DHCP/session traffic, no error visible without
+# explicit -l/-L logging flags) on any interface the kernel ALSO has an
+# address on -- its own log says so directly: "Interfaces must not have
+# an IP address configured in the host OS!". So it needs interfaces
+# fully dedicated to it, distinct from the ones above.
+
+- name: Strip ens160's kernel IP (BNGBlaster's own "access" interface
+        now -- it was suscriptor's ORIGINAL, cloud-init-assigned NIC,
+        carrying 10.20.0.2 and the default route before this; ansible
+        itself now reaches suscriptor via MGMT instead, see topology.
+        yaml's interface ordering comment). Replaces the addresses line
+        with a plain dhcp4=false instead of deleting it outright, so
+        ens160's mapping in the netplan YAML never goes empty/null --
+        netplan rejects that.
+  ansible.builtin.replace:
+    path: /etc/netplan/99-lab.yaml
+    regexp: '^(\s*)addresses: \[10\.20\.0\.2/24\]$'
+    replace: '\1dhcp4: false'
+  notify: netplan apply
+
+- name: Remove ens160's now-stale default route/nameservers (the
+        dhcp4=false above has neither, and a leftover route through an
+        address-less interface fails netplan validation)
+  ansible.builtin.lineinfile:
+    path: /etc/netplan/99-lab.yaml
+    regexp: "{{ item }}"
+    state: absent
+  loop:
+    - "^\\s*routes: \\[\\{to: default, via: 10\\.20\\.0\\.254\\}\\]"
+    - "^\\s*nameservers: \\{addresses: \\[8\\.8\\.8\\.8\\]\\}"
+  notify: netplan apply
+
+- name: Configure BNGBlaster's dedicated "network" interface (2nd hot-
+        added NIC, no kernel IP -- see topology.yaml's suscriptor
+        interfaces comment)
+  ansible.builtin.copy:
+    content: |
+      network:
+        version: 2
+        ethernets:
+          {{ bng_network_iface }}:
+            dhcp4: false
+            dhcp6: false
+    dest: /etc/netplan/97-bng-network.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- every NIC above must be in its final state
+        before bng-agent starts
   ansible.builtin.meta: flush_handlers
 
 # --- bng-agent (simulation/bng_agent.py) -- persistent BNGBlaster -----
