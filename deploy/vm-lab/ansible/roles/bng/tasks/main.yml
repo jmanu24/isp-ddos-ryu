@@ -69,20 +69,32 @@
 
 # --- FreeRADIUS: AAA backend for accel-ppp's real accounting --------
 
-# NOT a new "client accel-ppp" stanza -- Ubuntu's stock clients.conf
-# already ships a "client localhost { ipaddr = 127.0.0.1 ... }" block.
-# FreeRADIUS's client list is keyed by IP, not by name -- a second
-# client block for the SAME ipaddr fails to load at all ("Failed to add
-# duplicate client <name>"), confirmed on a real run. accel-ppp connects
-# from 127.0.0.1 too, so it's already covered by that existing client;
-# this just makes its secret match bng_radius_secret instead of
-# Ubuntu's own default (testing123), so accel-ppp.conf.j2's [radius]
-# secret= line has one real value both sides agree on.
-- name: Point FreeRADIUS's existing localhost client at bng_radius_secret
-  ansible.builtin.replace:
+# NOT ipaddr=127.0.0.1 (an earlier version of this task reused Ubuntu's
+# stock "client localhost" for that IP, since a second client block for
+# the SAME ipaddr fails to load at all -- "Failed to add duplicate
+# client <name>", confirmed on a real run). But confirmed on a LATER
+# real run that ipaddr=127.0.0.1 was itself wrong: accel-ppp.conf.j2's
+# [radius] nas-ip-address directive makes accel-ppp bind() its outgoing
+# RADIUS socket to bng_access_addr (10.20.0.1), not 127.0.0.1 -- the
+# packet FreeRADIUS actually receives has a 10.20.0.1 source address,
+# which the "localhost" client (ipaddr=127.0.0.1 only) never matches,
+# so FreeRADIUS silently drops it (no log, no error -- a RADIUS packet
+# from an unrecognized client is just ignored). accel-ppp itself then
+# reports "server not responding" / "no available servers" with
+# nothing on FreeRADIUS's side to explain why. This IS a genuinely new
+# client (a different ipaddr than the stock one), so no duplicate
+# conflict this time.
+- name: Add a FreeRADIUS client for accel-ppp's real RADIUS source address
+  ansible.builtin.blockinfile:
     path: /etc/freeradius/3.0/clients.conf
-    regexp: '^(\s*secret\s*=\s*)testing123$'
-    replace: '\g<1>{{ bng_radius_secret }}'
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- accel-ppp client"
+    block: |
+      client accel-ppp {
+          ipaddr = {{ bng_access_addr }}
+          secret = {{ bng_radius_secret }}
+          require_message_authenticator = no
+          nas_type = other
+      }
   notify: restart freeradius
 
 - name: Accept every identity in FreeRADIUS's authorize file (accounting

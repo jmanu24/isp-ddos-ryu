@@ -23,17 +23,22 @@ thread-count=1
 single-session=replace
 
 [ipoe]
-# No ifcfg=1 -- confirmed on a real run: that asks accel-ppp to create a
-# per-session KERNEL network interface via its optional in-kernel ipoe
-# driver module, which deploy/install_accelppp.sh explicitly does NOT
-# build (-DBUILD_IPOE_DRIVER=FALSE, to avoid a kernel-module build/load
-# dependency this project doesn't otherwise need). Without that module
-# loaded, every session failed immediately ("ipoe: not a IPoE message
-# 2" / "ipoe: failed to create interface"). This project only needs a
-# real DHCP lease + real FreeRADIUS accounting + accel-cmd terminate
-# capability per session -- none of that requires a per-session kernel
-# interface, so this is simply omitted (module default: off).
-interface={{ bng_access_iface }},start=dhcpv4,username=calling-sid
+# No username=calling-sid -- confirmed on a real run: accel-ppp's ipoe
+# module only recognizes username=ifname or username=lua:<func> (any
+# other value logs "ipoe: unknown username value" to emerg.log and
+# falls back to its own default, the subscriber's not-yet-assigned IP
+# as a string). Not load-bearing for this project either way -- the
+# real MAC still reaches FreeRADIUS as the standard Calling-Station-Id
+# attribute regardless of what User-Name ends up being, and that's what
+# telemetry/broadband_adapter.py's distributed-mode collect() keys its
+# src_ip->MAC mapping on, not User-Name. Simply omitted here.
+#
+# Kernel driver (deploy/install_accelppp.sh builds+loads ipoe.ko) IS
+# required even without ifcfg=1 -- confirmed on a real run: accel-ppp's
+# ipoe module talks to it over netlink for every incoming session
+# regardless of ifcfg, failing immediately ("ipoe: not a IPoE message
+# 2" / "ipoe: failed to create interface") without it loaded.
+interface={{ bng_access_iface }},start=dhcpv4
 noauth=0
 ip-pool=bng_pool
 verbose=1
