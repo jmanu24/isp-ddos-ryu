@@ -211,7 +211,14 @@ class BroadbandAdapter(DomainAdapter):
         BNG_DIST_FREERADIUS_DETAIL_DIR comment), tails it from the last
         byte offset. Resets the offset (and re-fetches once) if the
         filename changed since the last poll -- either a day rollover,
-        or freeradius/the directory not existing yet."""
+        or freeradius/the directory not existing yet.
+
+        sudo -n wraps the whole script -- confirmed on a real run: the
+        radacct directory tree is 0700 freerad:freerad (FreeRADIUS's own
+        default), unreadable by BNG_DIST_BNG_SSH_USER (labadmin)
+        otherwise. -n fails fast rather than hanging on a password
+        prompt if passwordless sudo isn't configured for this user, same
+        posture as every other sudo -n use in this project."""
         script = (
             f'f=$(ls -t {self.freeradius_detail_dir}/detail-* 2>/dev/null | head -1); '
             f'if [ -z "$f" ]; then echo MISSING; exit 0; fi; '
@@ -220,7 +227,7 @@ class BroadbandAdapter(DomainAdapter):
             f'tail -c +$(({self._radius_offset} + 1)) "$f"'
         )
         try:
-            result = self._ssh_bng(["sh", "-c", script])
+            result = self._ssh_bng(["sudo", "-n", "sh", "-c", script])
         except (subprocess.TimeoutExpired, OSError) as exc:
             self._logger.error(log_line("broadband", "TELEMETRY", "ERROR", f"ssh to bng failed: {exc}"))
             return False, ""
@@ -466,12 +473,15 @@ class BroadbandAdapter(DomainAdapter):
         return self._ssh_bng(["accel-cmd", "-p", str(self.accel_cmd_port), *args])
 
     def _read_users_lines(self) -> list:
-        result = self._ssh_bng(["sh", "-c", f"cat {self.freeradius_users_path} 2>/dev/null || true"])
+        # sudo -n -- /etc/freeradius/3.0/ is root:freerad, mode 640
+        # (Ubuntu's stock freeradius package), unreadable by
+        # BNG_DIST_BNG_SSH_USER (labadmin) otherwise.
+        result = self._ssh_bng(["sudo", "-n", "sh", "-c", f"cat {self.freeradius_users_path} 2>/dev/null || true"])
         return result.stdout.splitlines()
 
     def _write_users_lines(self, lines: list) -> None:
         content = "\n".join(lines) + ("\n" if lines else "")
-        result = self._ssh_bng(["tee", self.freeradius_users_path], input_text=content)
+        result = self._ssh_bng(["sudo", "-n", "tee", self.freeradius_users_path], input_text=content)
         if result.returncode != 0:
             raise OSError(f"writing {self.freeradius_users_path} on bng failed: {result.stderr.strip()}")
 
