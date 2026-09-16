@@ -21,7 +21,18 @@ radius
 thread-count=1
 
 [common]
-single-session=replace
+# NOT single-session=replace -- confirmed on a real run this was the
+# root cause of every session dying seconds after establishing: accel-
+# ppp's own session.c compares sessions by User-Name (accel-pppd/
+# session.c), and every session here shared the exact same User-Name
+# ("ens192", the interface name -- see [ipoe]'s own username comment
+# below), so each new subscriber's session looked like "the same user
+# reconnecting" and single-session=replace forcibly terminated whichever
+# session already held that name. This directive means something
+# different in a real per-subscriber-identity deployment (the same
+# subscriber genuinely reconnecting), which isn't this project's
+# situation -- every macvlan here is a distinct simulated subscriber,
+# not the same one reconnecting.
 
 [ipoe]
 # No username=calling-sid -- confirmed on a real run: accel-ppp's ipoe
