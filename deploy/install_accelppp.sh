@@ -90,19 +90,32 @@ else
   sudo rm -rf "$BUILD_DIR/build"
   sudo mkdir -p "$BUILD_DIR/build"
 
-  # -DBUILD_IPOE_DRIVER=FALSE / -DBUILD_VLAN_MON_DRIVER=FALSE: skip the
-  # optional in-kernel fast-path modules (need KDIR matching a full kernel
-  # build tree, not just headers) -- accel-ppp's userspace ipoe module
-  # works without them, just without that extra fast path. Fine for a lab.
+  # -DBUILD_IPOE_DRIVER=TRUE -- NOT optional in practice: confirmed on a
+  # real run that accel-pppd's userspace ipoe module talks to this
+  # kernel module over netlink for EVERY incoming session (not just
+  # ifcfg=1's per-session interface feature) -- without it loaded, every
+  # DHCPv4 Discover fails immediately ("ipoe: not a IPoE message 2" /
+  # "ipoe: failed to create interface", confirmed against accel-ppp's
+  # own accel-pppd/ctrl/ipoe/ipoe_netlink.c source: that message means
+  # the kernel replied with a generic/unrecognized netlink message
+  # instead of a real ipoe-family one, because no such family is
+  # registered). KDIR must point at a full kernel module build tree
+  # matching the RUNNING kernel, not just headers -- linux-headers-
+  # $(uname -r) (installed below) provides exactly that via the
+  # standard /lib/modules/$(uname -r)/build symlink.
+  # -DBUILD_VLAN_MON_DRIVER=FALSE: a separate optional fast-path module
+  # this project's N:1-vlan-free design doesn't need.
   # -DRADIUS=TRUE: this project's whole reason for choosing accel-ppp --
   # real RADIUS auth/accounting against FreeRADIUS (roles/bng's own
   # tasks configure the FreeRADIUS side).
+  KDIR="/lib/modules/$(uname -r)/build"
   (
     cd "$BUILD_DIR/build"
     sudo cmake \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/usr \
-      -DBUILD_IPOE_DRIVER=FALSE \
+      -DBUILD_IPOE_DRIVER=TRUE \
+      -DKDIR="$KDIR" \
       -DBUILD_VLAN_MON_DRIVER=FALSE \
       -DBUILD_PPTP_DRIVER=FALSE \
       -DLUA=TRUE \
@@ -118,6 +131,23 @@ else
     ok "accel-pppd instalado en $(command -v accel-pppd)"
   else
     fail "el build terminó pero accel-pppd no aparece en PATH -- revisa la salida de cmake/make arriba"
+  fi
+fi
+
+echo "== 3. Módulo de kernel ipoe =="
+
+if lsmod | grep -q '^ipoe '; then
+  ok "módulo ipoe ya cargado"
+else
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    warn "módulo ipoe no cargado -- corre sin --check-only"
+  else
+    sudo depmod -a
+    sudo modprobe ipoe \
+      && ok "módulo ipoe cargado" \
+      || fail "modprobe ipoe falló -- revisa que linux-headers-$(uname -r) coincida con el kernel corriendo (uname -r)"
+    echo "ipoe" | sudo tee /etc/modules-load.d/ipoe.conf >/dev/null
+    ok "módulo ipoe persistido en /etc/modules-load.d/ipoe.conf (se carga en cada boot)"
   fi
 fi
 
