@@ -39,7 +39,21 @@ networks:
   # (ansible/SSH) to the 5 ent-site VMs and victim happens over their
   # OWN separate MGMT interface instead, exactly like br/core5g/ran/ue
   # already do -- not over these.
-  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.50.0.0/24",  gateway: null}
+  # 10.70.0.0/24, NOT 10.50.0.0/24 -- confirmed necessary on a real run:
+  # telemetry/openflow_adapter.py's _BNG_NETWORK_SUBNET is hardcoded to
+  # 10.50.0.0/24 (excluded from this domain's detection pipeline
+  # entirely, both packet-in and flow-stats paths -- see its own
+  # docstring: it's for the Mininet-based topology, where BNGBlaster's
+  # veth gets bridged into the SAME simulated OVS ring this domain uses).
+  # That exclusion doesn't apply to this VM lab at all (pe's br-ent is a
+  # physically separate switch bng's traffic can never reach), but the
+  # address ranges collided anyway -- every ent-site-* source IP fell
+  # inside the "exclude" list, so EVERY packet-in/flow-stats event from
+  # the 5 attacker sites got silently dropped before ever reaching
+  # correlation/detection, no matter how large the flood. A real hping3
+  # test against victim produced zero log activity even past
+  # SYN_THRESHOLD=10pps by a factor of 100000x until this was found.
+  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.70.0.0/24",  gateway: null}
   # NEW: the "protected/inside" side of pe's bridge, where victim
   # actually lives -- confirmed necessary on a real run: with victim only
   # ever on MGMT and ENT_LAN only ever holding the 5 attacker sites, a
@@ -193,7 +207,7 @@ vms:
       # deliberately with no control-node presence (see ENT_LAN's own
       # comment above).
       - {network: MGMT, ip: "10.10.0.21"}
-      - {network: ENT_LAN, ip: "10.50.0.11"}
+      - {network: ENT_LAN, ip: "10.70.0.11"}
 
   - name: ent-site-2
     role: enterprise_site
@@ -203,7 +217,7 @@ vms:
     disk_gb: 10
     interfaces:
       - {network: MGMT, ip: "10.10.0.22"}
-      - {network: ENT_LAN, ip: "10.50.0.12"}
+      - {network: ENT_LAN, ip: "10.70.0.12"}
 
   - name: ent-site-3
     role: enterprise_site
@@ -213,7 +227,7 @@ vms:
     disk_gb: 10
     interfaces:
       - {network: MGMT, ip: "10.10.0.23"}
-      - {network: ENT_LAN, ip: "10.50.0.13"}
+      - {network: ENT_LAN, ip: "10.70.0.13"}
 
   - name: ent-site-4
     role: enterprise_site
@@ -223,7 +237,7 @@ vms:
     disk_gb: 10
     interfaces:
       - {network: MGMT, ip: "10.10.0.24"}
-      - {network: ENT_LAN, ip: "10.50.0.14"}
+      - {network: ENT_LAN, ip: "10.70.0.14"}
 
   - name: ent-site-5
     role: enterprise_site
@@ -233,7 +247,7 @@ vms:
     disk_gb: 10
     interfaces:
       - {network: MGMT, ip: "10.10.0.25"}
-      - {network: ENT_LAN, ip: "10.50.0.15"}
+      - {network: ENT_LAN, ip: "10.70.0.15"}
 
   - name: victim
     role: victim
