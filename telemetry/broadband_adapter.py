@@ -371,10 +371,16 @@ class BroadbandAdapter(DomainAdapter):
         dnsmasq...") while still matching on the real conf-file path.
         The distributed lab's `bng` role runs dnsmasq as a plain systemd
         service (no sudo wrapper in its own cmdline), but the same
-        anchored pattern still matches it correctly either way.
+        anchored pattern still matches it correctly either way. That
+        role's VM (Alpine, per deploy/vm-lab/topology.yaml) is also
+        reached over SSH AS root directly (BNG_DIST_BNG_SSH_USER) --
+        sudo is both unnecessary there and typically not even installed
+        on a minimal Alpine image, so the distributed path skips the
+        `sudo -n` prefix Mininet mode's non-root local user still needs.
         """
         pgrep_args = ["pgrep", "-f", f"^dnsmasq .*{self.dnsmasq_conf_path}"]
-        kill_args_prefix = ["sudo", "-n", "kill", "-HUP"]
+        kill_args_prefix = [] if self._distributed else ["sudo", "-n"]
+        kill_args_prefix = [*kill_args_prefix, "kill", "-HUP"]
         try:
             if self._distributed:
                 pid_out = self._ssh_bng(pgrep_args)
@@ -408,17 +414,18 @@ class BroadbandAdapter(DomainAdapter):
     def _write_blacklist_lines(self, lines: list) -> None:
         content = "\n".join(lines) + ("\n" if lines else "")
         if self._distributed:
-            # tee, not a redirect -- this ssh session's own shell has no
-            # write access to a root-owned /etc/dnsmasq.d path, but the
-            # bng role's dnsmasq-reload sudoers entry (same NOPASSWD
-            # posture as _reload_dnsmasq's kill -HUP) covers `tee` here
-            # too. `sh -c` wraps it so stdin (the new content, passed via
-            # `input=`) pipes into tee's stdin over the one ssh command.
+            # tee, not a redirect -- redirects (`>`) are evaluated by the
+            # LOCAL shell building the ssh argv, not the remote one, so
+            # writing the new content requires piping it into a REMOTE
+            # command's stdin instead (`input=` below over the one ssh
+            # call). No sudo needed -- BNG_DIST_BNG_SSH_USER connects as
+            # root directly on this Alpine VM (see _reload_dnsmasq's own
+            # comment on why the distributed path skips sudo).
             result = subprocess.run(
                 ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
                  "-o", "StrictHostKeyChecking=accept-new",
                  f"{settings.BNG_DIST_BNG_SSH_USER}@{settings.BNG_DIST_BNG_SSH_HOST}",
-                 "sudo", "-n", "tee", self.dhcp_blacklist_path],
+                 "tee", self.dhcp_blacklist_path],
                 input=content, capture_output=True, text=True, timeout=_SSH_TIMEOUT_S,
             )
             if result.returncode != 0:

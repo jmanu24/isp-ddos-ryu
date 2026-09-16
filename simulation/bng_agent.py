@@ -81,6 +81,11 @@ def _handle_line(life: BngLifecycle, line: str) -> None:
 
 
 def run(fifo_path: str, life: BngLifecycle, start_baseline: bool) -> None:
+    # /run is tmpfs -- wiped on every reboot, so this can't rely on a
+    # one-time Ansible directory-creation task surviving indefinitely
+    # (the same latent assumption exabgp's own /run/exabgp task makes,
+    # not repeated here) -- self-sufficient on every start instead.
+    os.makedirs(os.path.dirname(fifo_path), exist_ok=True)
     if not os.path.exists(fifo_path):
         os.mkfifo(fifo_path, 0o666)
 
