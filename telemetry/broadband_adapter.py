@@ -369,16 +369,29 @@ class BroadbandAdapter(DomainAdapter):
         rewrote the file underneath it. Anchoring to "the command line
         starts with dnsmasq" excludes sudo's own ("...starts with sudo
         dnsmasq...") while still matching on the real conf-file path.
-        The distributed lab's `bng` role runs dnsmasq as a plain systemd
-        service (no sudo wrapper in its own cmdline), but the same
-        anchored pattern still matches it correctly either way. That
-        role's VM (Alpine, per deploy/vm-lab/topology.yaml) is also
+        The distributed lab's `bng` role runs dnsmasq via Alpine's OpenRC
+        (no sudo wrapper in its own cmdline), but confirmed on a real
+        run: OpenRC invokes it by its FULL PATH (`/usr/sbin/dnsmasq
+        --conf-file=...`), which the `^dnsmasq` anchor does NOT match
+        (the cmdline starts with "/", not "dnsmasq") -- there's no sudo-
+        wrapper ambiguity to guard against in this mode at all (nothing
+        else on `bng` has "conf-file=<path>" in its own cmdline), so the
+        distributed path matches on that argument alone instead,
+        unanchored, with the same self-match-avoidance bracket trick
+        used for the ryu-manager pkill fix (deploy/vm-lab/ansible/roles/
+        orchestrator/tasks/main.yml) -- pgrep -f's own invocation
+        contains its OWN search pattern as an argument, which would
+        otherwise match itself.
+        That role's VM (Alpine, per deploy/vm-lab/topology.yaml) is also
         reached over SSH AS root directly (BNG_DIST_BNG_SSH_USER) --
         sudo is both unnecessary there and typically not even installed
         on a minimal Alpine image, so the distributed path skips the
         `sudo -n` prefix Mininet mode's non-root local user still needs.
         """
-        pgrep_args = ["pgrep", "-f", f"^dnsmasq .*{self.dnsmasq_conf_path}"]
+        if self._distributed:
+            pgrep_args = ["pgrep", "-f", f"[c]onf-file={self.dnsmasq_conf_path}"]
+        else:
+            pgrep_args = ["pgrep", "-f", f"^dnsmasq .*{self.dnsmasq_conf_path}"]
         kill_args_prefix = [] if self._distributed else ["sudo", "-n"]
         kill_args_prefix = [*kill_args_prefix, "kill", "-HUP"]
         try:
