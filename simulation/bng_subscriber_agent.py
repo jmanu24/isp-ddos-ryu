@@ -93,6 +93,24 @@ def _log_path(n: int) -> str:
     return f"{_RUN_DIR}/pppd.sub{n}.log"
 
 
+# Source-based routing table/rule per subscriber -- see start_attack()'s
+# own comment for why this exists at all: hping3's normal "-I <iface>"
+# device-bind path doesn't work on a PPP interface.
+def _route_table(n: int) -> int:
+    return 100 + n
+
+
+def _rule_priority(n: int) -> int:
+    return 200 + n
+
+
+def _run_ip(args: list) -> None:
+    try:
+        subprocess.run(["ip", *args], capture_output=True, text=True, timeout=5)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        print(f"[SUBSCRIBER] ip {' '.join(args)} failed: {exc}", file=sys.stderr)
+
+
 def _read_iface_ip(iface: str) -> str:
     try:
         out = subprocess.run(
@@ -163,14 +181,41 @@ class Subscriber:
             ip = _read_iface_ip(self.ppp_iface)
             if ip:
                 self.ip = ip
+                self._add_source_route()
                 print(f"[SUBSCRIBER] {self.ppp_iface} (via {self.macvlan_iface}) got {ip}")
                 return
             time.sleep(0.5)
         print(f"[SUBSCRIBER] {self.ppp_iface} did not come up within {_PPP_WAIT_S}s", file=sys.stderr)
 
+    def _add_source_route(self) -> None:
+        """Confirmed on a real run: hping3's own "-I <iface>" device-bind
+        path silently fails to transmit anything at all over a PPP
+        interface (ARPHRD_PPP, no Ethernet framing) -- the kernel accepts
+        the sendto() call but the frame never reaches the wire (TX
+        counters never move), while plain `ping -f` over the same
+        interface works fine (a normal IP-layer raw socket, no device
+        bind/link-layer injection). Source-based policy routing sidesteps
+        this: hping3 runs WITHOUT -I, using "-a <this session's real IP>"
+        only, and the kernel's own FIB lookup (which considers the
+        packet's source address once a matching `ip rule` exists) sends
+        it out this session's real ppp interface on its own -- the same
+        IP-layer path `ping -f` already proved works."""
+        table = _route_table(self.n)
+        _run_ip(["route", "replace", "default", "dev", self.ppp_iface, "table", str(table)])
+        _run_ip(["rule", "add", "from", self.ip, "table", str(table), "priority", str(_rule_priority(self.n))])
+
+    def _del_source_route(self) -> None:
+        if not self.ip:
+            return
+        _run_ip(["rule", "del", "from", self.ip, "table", str(_route_table(self.n)),
+                 "priority", str(_rule_priority(self.n))])
+        _run_ip(["route", "flush", "table", str(_route_table(self.n))])
+
     def session_down(self) -> None:
         self.stop_attack()
+        self._del_source_route()
         if self._pppd_proc is None:
+            self.ip = ""
             return
         # SIGTERM -- closes the PPP link normally (LCP Term-Request),
         # the trigger for accel-ppp/FreeRADIUS to emit a real
@@ -194,7 +239,12 @@ class Subscriber:
         if not self.ip:
             print(f"[SUBSCRIBER] {self.ppp_iface} has no IP yet, cannot attack", file=sys.stderr)
             return
-        argv = ["hping3", "-I", self.ppp_iface, "-a", self.ip]
+        # NOT "-I self.ppp_iface" -- see _add_source_route()'s own
+        # comment: that device-bind path never actually transmits over a
+        # PPP interface. -a alone (this session's own real IP, not a
+        # spoof) plus the source-route rule set up in session_up() is
+        # what makes the kernel deliver this out the right interface.
+        argv = ["hping3", "-a", self.ip]
         if protocol == "UDP":
             argv += ["--udp", "-p", str(dst_port), "--keep"]
         elif protocol == "TCP_SYN":
