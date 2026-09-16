@@ -112,6 +112,20 @@ vms:
     disk_gb: 8
     interfaces:
       - {network: BB_ACCESS, ip: "10.20.0.2"}
+      # Hot-added (govc vm.network.add) after this VM was already
+      # provisioned -- orchestrator has no route to BB_ACCESS at all
+      # (the control node doesn't forward between VLANs without an
+      # explicit rule), so the broadband domain's distributed-mode
+      # control channel (BNG_DIST_SUSCRIPTOR_* in config/settings.py)
+      # needed a real MGMT-side NIC, same pattern as the enterprise
+      # domain's ent-site-* VMs. This same NIC ALSO serves as
+      # BNGBlaster's own "network" interface (simulation/bng_agent.py's
+      # --network-ip/--network-gateway) -- simulated subscriber session
+      # traffic egresses onto VLAN-MGMT itself and reaches victim's real
+      # MGMT address directly, no OpenFlow bridge involved (this
+      # domain's detection is BNGBlaster's own native per-session
+      # telemetry, not switch-based).
+      - {network: MGMT, ip: "10.10.0.9"}
 
   - name: br
     role: br

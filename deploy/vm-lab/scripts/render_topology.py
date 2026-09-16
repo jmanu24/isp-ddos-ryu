@@ -264,6 +264,20 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "enterprise_ent_lan_iface": "ens160",
         "mgmt_control_node_ip": topology["networks"]["MGMT"]["control_node_ip"],
         "ent_dc_cidr": topology["networks"]["ENT_DC"]["cidr"],
+        # Broadband domain distributed mode (deploy/vm-lab/ansible/roles/
+        # suscriptor + config/settings.py's BNG_DIST_* on the app-code
+        # branch, feature/peering-distributed-vm -- MUST stay numerically
+        # identical to those, see that branch's own comments) -- BNGBlaster's
+        # hot-added "network" interface address/gateway, and victim's real
+        # MGMT address as BNGBlaster's target-ip.
+        "suscriptor_mgmt_addr": net_ip("suscriptor", "MGMT"),
+        "bng_target_ip": mgmt_ip("victim"),
+        # Every OTHER hot-added 2nd NIC on this lab's tpl-ubuntu-2204
+        # clones (br, ent-site-1..5) has come in as ens192, consistently
+        # -- same PCI-slot-naming caveat as peering_external_iface
+        # above: verify with `ip link show` on suscriptor itself before
+        # trusting this if the lab was ever rebuilt.
+        "suscriptor_mgmt_iface": "ens192",
         "ent_lan_cidr": topology["networks"]["ENT_LAN"]["cidr"],
         "bgp_br_as": topology["bgp"]["br_as"],
         "bgp_peer_router_as": topology["bgp"]["peer_router_as"],

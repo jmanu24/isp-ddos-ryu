@@ -21,6 +21,18 @@ WorkingDirectory=/opt/Tesis_Controller
 # environment doesn't have that, and the service crash-looped with
 # ModuleNotFoundError: No module named 'forwarding' without this.
 Environment=PYTHONPATH=/opt/Tesis_Controller
+# Load-bearing for BOTH the peering and broadband domains' real-VM
+# pipelines -- config/settings.py's PEERING_DISTRIBUTED_MODE/
+# BNG_DISTRIBUTED_MODE are plain os.environ.get() toggles, defaulting
+# False (Mininet-mode code paths) unless this is set. CONFIRMED GAP on
+# a real run: this Environment= line was missing entirely when this
+# unit was first created (converting ryu-manager from a raw hand-
+# launched process, which evidently had PEERING_DISTRIBUTED_MODE set
+# some other way -- e.g. the launching shell's own environment -- that
+# systemd's clean environment doesn't inherit), silently falling back
+# to Mininet-mode peering logic under systemd until this was found.
+Environment=PEERING_DISTRIBUTED_MODE=true
+Environment=BNG_DISTRIBUTED_MODE=true
 ExecStart=/opt/Tesis_Controller/venv/bin/ryu-manager --observe-links controller/ryu_controller_2.py
 Restart=on-failure
 RestartSec=2

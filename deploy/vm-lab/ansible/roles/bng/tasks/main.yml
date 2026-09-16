@@ -1,10 +1,11 @@
 ---
 # bng role -- Alpine, broadband access gateway (routing + DHCP for the
-# suscriptor segment). Deliberately minimal: real per-VLAN DHCP config
-# (as the Mininet-based BB-ACCESS setup already does in
-# deploy/setup_bng_netns.sh) is topology/session-count specific -- adapt
-# templates/dnsmasq.conf.j2 once you know how many subscriber
-# sessions/VLANs this VM actually needs to serve.
+# suscriptor segment). Real per-VLAN DHCP (as deploy/setup_bng_netns.sh's
+# Mininet-based setup does for 1:1 vlan-mode) is NOT needed here --
+# simulation/bng_config.py's _base_config() always uses vlan-mode "N:1"
+# (every BNGBlaster session shares ONE vlan, distinguished by MAC only,
+# see that module's own docstring for why), so this role only ever needs
+# to serve DHCP on that single shared vlan, not one range per session.
 - name: Install packages
   community.general.apk:
     name: [dnsmasq, iproute2, nftables, openssh]
@@ -19,12 +20,80 @@
     state: present
     reload: true
 
+- name: Load the 8021q kernel module (needed for the VLAN sub-interface
+        below -- BNGBlaster's access-interface config always tags DHCP
+        with outer-vlan=1 regardless of vlan-mode, an INNER 802.1Q tag
+        inside the frame, independent of and untouched by ESXi's own
+        outer portgroup VLAN tagging on VLAN-BB-ACCESS)
+  community.general.modprobe:
+    name: 8021q
+    state: present
+  ignore_errors: true  # already built into some kernels, not as a loadable module
+
+- name: Persist 8021q across reboots
+  ansible.builtin.lineinfile:
+    path: /etc/modules
+    line: 8021q
+    create: true
+
+- name: Configure the eth1.1 VLAN sub-interface (dnsmasq listens here,
+        not on plain eth1 -- see the 8021q task above for why)
+  ansible.builtin.blockinfile:
+    path: /etc/network/interfaces
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- eth1.1 vlan"
+    block: |
+      auto eth1.1
+      iface eth1.1 inet manual
+          pre-up ip link add link eth1 name eth1.1 type vlan id 1 2>/dev/null || true
+          post-up ip link set eth1.1 up
+          post-down ip link delete eth1.1 || true
+  notify: restart networking
+
+- name: Create the DHCP MAC blacklist file (empty at boot -- telemetry/
+        broadband_adapter.py's BroadbandAdapter also clears it on every
+        controller start, see its own docstring; this just ensures
+        dnsmasq's dhcp-hostsfile directive has something to read on a
+        completely fresh VM, before any controller has ever run)
+  ansible.builtin.copy:
+    content: ""
+    dest: /tmp/bng_dhcp_blacklist.hosts
+    force: false
+    mode: "0666"
+
+- name: Ensure /etc/dnsmasq.d exists
+  ansible.builtin.file:
+    path: /etc/dnsmasq.d
+    state: directory
+    mode: "0755"
+
 - name: Deploy dnsmasq config
+  # /etc/dnsmasq.d/bng-access.conf, NOT the default /etc/dnsmasq.conf --
+  # must match telemetry/broadband_adapter.py's DEFAULT_DNSMASQ_CONF_PATH
+  # / config.settings.BNG_DIST_DNSMASQ_CONF_PATH exactly: that module's
+  # dnsmasq-reload finds the right process via `pgrep -f "^dnsmasq
+  # .*<this path>"`, matching this path against dnsmasq's own real
+  # command-line argument (see the conf.d task below) -- a mismatch here
+  # means the pgrep pattern never matches ANY process, silently.
   ansible.builtin.template:
     src: dnsmasq.conf.j2
-    dest: /etc/dnsmasq.conf
+    dest: /etc/dnsmasq.d/bng-access.conf
     mode: "0644"
   notify: restart dnsmasq
+
+- name: Point Alpine's dnsmasq OpenRC service at that conf file
+  # Default Alpine dnsmasq OpenRC config args at /etc/dnsmasq.conf with
+  # no explicit --conf-file on the command line at all -- the pgrep
+  # pattern above would never match anything without this override.
+  ansible.builtin.copy:
+    content: |
+      command_args="--conf-file=/etc/dnsmasq.d/bng-access.conf"
+    dest: /etc/conf.d/dnsmasq
+    mode: "0644"
+  notify: restart dnsmasq
+
+- name: Flush handlers now -- eth1.1 must exist before dnsmasq starts
+        listening on it
+  ansible.builtin.meta: flush_handlers
 
 - name: Enable and start dnsmasq
   ansible.builtin.service:

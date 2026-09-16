@@ -7,11 +7,14 @@
 # scenarios).
 - name: Install base packages
   ansible.builtin.apt:
-    name: [git, curl]
+    name: [git, curl, python3]
     state: present
     update_cache: true
 
-- name: Clone Tesis_Controller (for its deploy/install_bngblaster.sh)
+- name: Clone Tesis_Controller (for its deploy/install_bngblaster.sh AND
+        simulation/bng_agent.py -- the distributed-mode control daemon,
+        see BNG_DISTRIBUTED_MODE on this repo's own feature/peering-
+        distributed-vm branch)
   ansible.builtin.git:
     repo: "{{ tesis_controller_repo_url }}"
     dest: /opt/Tesis_Controller
@@ -24,3 +27,46 @@
     chdir: /opt/Tesis_Controller
     creates: /usr/sbin/bngblaster
   become: true
+
+# --- MGMT interface (hot-added via govc vm.network.add after this VM ---
+# was already provisioned) -- see topology.yaml's own comment on
+# suscriptor's interfaces for why: orchestrator has no route to
+# BB_ACCESS at all, so the broadband domain's distributed-mode control
+# channel needed a real MGMT-side NIC, and this same NIC doubles as
+# BNGBlaster's own "network" interface.
+
+- name: Configure the MGMT interface
+  ansible.builtin.template:
+    src: 99-mgmt.yaml.j2
+    dest: /etc/netplan/99-mgmt.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- the MGMT NIC must be up before bng-agent
+        (its own "network" interface) starts
+  ansible.builtin.meta: flush_handlers
+
+# --- bng-agent (simulation/bng_agent.py) -- persistent BNGBlaster -----
+# control daemon, distributed-mode equivalent of webtool/bng_ops.py's
+# own local subprocess.Popen (see that module's and bng_agent.py's own
+# docstrings for the full picture).
+
+- name: Create the bng-agent FIFO directory
+  ansible.builtin.file:
+    path: /run/bng-agent
+    state: directory
+    mode: "1777"
+
+- name: Deploy bng-agent systemd unit
+  ansible.builtin.template:
+    src: bng-agent.service.j2
+    dest: /etc/systemd/system/bng-agent.service
+    mode: "0644"
+  notify: restart bng-agent
+
+- name: Enable and start bng-agent
+  ansible.builtin.systemd:
+    name: bng-agent.service
+    daemon_reload: true
+    enabled: true
+    state: started

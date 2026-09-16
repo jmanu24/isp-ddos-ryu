@@ -3,3 +3,6 @@
   ansible.builtin.service:
     name: dnsmasq
     state: restarted
+
+- name: restart networking
+  ansible.builtin.command: rc-service networking restart
