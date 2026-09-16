@@ -11,15 +11,22 @@
 # BNG-side, not reconstructed from a client-side control socket the
 # way BNGBlaster's session-streams was.
 #
-# Auth posture: accel-ppp's ipoe module authenticates by the client's
-# MAC (Calling-Station-Id, sent as the RADIUS User-Name -- see the
-# accel-ppp.conf template's username=calling-sid), and FreeRADIUS's
-# users file below accepts ANY identity (`DEFAULT Auth-Type := Accept`)
-# -- this project's whole reason for choosing RADIUS here is the real
-# ACCOUNTING telemetry, not subscriber-level access control, so there's
-# no per-subscriber provisioning to maintain (same "throwaway local-
-# simulation" posture as BNGBlaster's own world-writable control
-# socket / dnsmasq's open dhcp-range).
+# PPPoE mode (REPLACES an earlier IPoE-mode design -- see accel-
+# ppp.conf.j2's own top-of-file comment for why: confirmed on a real
+# run that IPoE sessions authenticated fine but the kernel ipoe.ko
+# driver never actually redirected real subscriber DATA traffic to the
+# session's own interface, so Acct-Input-Octets never moved off zero no
+# matter how much real attack traffic flowed).
+#
+# Auth posture: each simulated subscriber (roles/suscriptor's pppd
+# instances) presents a real, distinct PAP username/password (its own
+# pap-secrets entry), and FreeRADIUS's users file below accepts ANY
+# identity (`DEFAULT Auth-Type := Accept`) regardless of what credential
+# was actually presented -- this project's whole reason for choosing
+# RADIUS here is the real ACCOUNTING telemetry, not subscriber-level
+# access control, so there's no need to provision real per-subscriber
+# credentials on the FreeRADIUS side (same "throwaway local-simulation"
+# posture as BNGBlaster's own world-writable control socket).
 #
 # NOT yet verified against a real run (see deploy/install_accelppp.sh's
 # own note) -- written and reviewed here, first real deploy will likely
