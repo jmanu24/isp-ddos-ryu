@@ -132,6 +132,26 @@ else
   else
     fail "el build terminó pero accel-pppd no aparece en PATH -- revisa la salida de cmake/make arriba"
   fi
+
+  # `make install`'s own INSTALL(CODE ...) step (drivers/ipoe/CMakeLists.
+  # txt) runs `make -C $KDIR M=<build>/drivers/ipoe modules_install` --
+  # confirmed on a real run this path is WRONG: the .ko this same
+  # CMakeLists.txt actually builds lands at <build>/drivers/ipoe/driver/
+  # ipoe.ko (singular "driver"), not .../drivers/ipoe/drivers/ipoe/...
+  # (plural, no such tree exists), so modules_install silently no-ops
+  # ("cat: .../modules.order: No such file or directory") and modprobe
+  # later fails with "Module ipoe not found". Installing the real .ko
+  # manually sidesteps that upstream path mismatch instead of trying to
+  # work around it via KDIR/CMake variables.
+  KO_PATH="$BUILD_DIR/build/drivers/ipoe/driver/ipoe.ko"
+  if [ -f "$KO_PATH" ]; then
+    sudo mkdir -p "/lib/modules/$(uname -r)/extra"
+    sudo cp "$KO_PATH" "/lib/modules/$(uname -r)/extra/ipoe.ko"
+    sudo depmod -a
+    ok "ipoe.ko instalado en /lib/modules/$(uname -r)/extra/"
+  else
+    warn "no se encontró $KO_PATH -- el módulo de kernel puede no haberse compilado, revisa la salida de cmake/make arriba"
+  fi
 fi
 
 echo "== 3. Módulo de kernel ipoe =="
