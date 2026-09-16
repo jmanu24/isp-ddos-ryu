@@ -104,29 +104,31 @@
       }
   notify: restart freeradius
 
-- name: Accept every identity in FreeRADIUS's authorize file (accounting
-        telemetry is the point here, not per-subscriber access control
-        -- see this role's own top-of-file comment)
-  # insertbefore: BOF -- confirmed on a real run: Ubuntu's stock `users`
-  # file already ships several of its own DEFAULT entries (e.g. `DEFAULT
-  # Framed-Protocol == PPP`, which every PPPoE Access-Request here
-  # matches). FreeRADIUS's `files` module stops at the FIRST DEFAULT
-  # entry that matches and never even LOOKS at later ones unless that
-  # entry's own reply-item list carries `Fall-Through = Yes` -- so with
-  # this block appended at the end (blockinfile's default), the stock
-  # entry won by matching first and this one was never reached at all
-  # ("pap: No known good password found... NOT setting Auth-Type" ->
-  # every real PAP auth got rejected, confirmed via `freeradius -X`).
-  # Putting this block FIRST, with its own Fall-Through = Yes, makes it
-  # win the match ordering while still letting the stock entries below
-  # it apply their own (harmless, unrelated) reply-items afterward.
+- name: Provision the known subscriber credentials in FreeRADIUS's
+        authorize file (real per-user Cleartext-Password, not a
+        DEFAULT-based accept-all)
+  # NOT "DEFAULT Auth-Type := Accept" -- confirmed on a real run (via
+  # freeradius -X) that this project's earlier attempt at that never
+  # actually worked, regardless of ordering/Fall-Through: `files` kept
+  # reporting a match against Ubuntu's own stock "DEFAULT Framed-
+  # Protocol == PPP" entry instead, and the pap module always logged
+  # "No known good password found... NOT setting Auth-Type", rejecting
+  # every real PAP attempt ("No Auth-Type found: rejecting the user").
+  # Real per-user Cleartext-Password entries are FreeRADIUS's own
+  # standard, well-documented mechanism for PAP -- the pap module finds
+  # it automatically, sets Auth-Type := PAP itself, and does a real
+  # comparison against roles/suscriptor's own pap-secrets.j2 passwords
+  # (same subN/subNpass identities on both ends) -- genuine
+  # authentication, not a bypass, and it sidesteps the DEFAULT-ordering
+  # question entirely.
   ansible.builtin.blockinfile:
     path: /etc/freeradius/3.0/users
-    marker: "# {mark} ANSIBLE MANAGED BLOCK -- accept-all for the lab"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- known lab subscribers"
     insertbefore: BOF
     block: |
-      DEFAULT Auth-Type := Accept
-              Fall-Through = Yes
+      {% for n in range(1, bng_subscriber_count + 1) %}
+      sub{{ n }} Cleartext-Password := "sub{{ n }}pass"
+      {% endfor %}
   notify: restart freeradius
 
 - name: Confirm FreeRADIUS accounting (detail file) module is enabled
