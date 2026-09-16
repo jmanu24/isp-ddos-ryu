@@ -264,6 +264,7 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "enterprise_ent_lan_iface": "ens160",
         "mgmt_control_node_ip": topology["networks"]["MGMT"]["control_node_ip"],
         "ent_dc_cidr": topology["networks"]["ENT_DC"]["cidr"],
+        "ent_lan_cidr": topology["networks"]["ENT_LAN"]["cidr"],
         "bgp_br_as": topology["bgp"]["br_as"],
         "bgp_peer_router_as": topology["bgp"]["peer_router_as"],
         # HTTPS, not the git@ SSH form -- these VMs won't have your own SSH

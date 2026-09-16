@@ -24,6 +24,7 @@
       iface {{ victim_ent_dc_iface }} inet static
           address {{ victim_ent_dc_addr }}
           netmask 255.255.255.0
+          post-up ip route add {{ ent_lan_cidr }} dev {{ victim_ent_dc_iface }} || true
   notify: restart networking
 
 - name: Flush handlers now -- eth1 must be up before victim-http (bound to
