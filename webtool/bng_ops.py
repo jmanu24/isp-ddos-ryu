@@ -10,18 +10,23 @@ simulation/bng_traffic_simulator.py's BngScenarioSession._attack_cmd()
 for why session-traffic-start/-stop can only toggle ALL sessions of the
 one running process together.
 
-DISTRIBUTED MODE (settings.BNG_DISTRIBUTED_MODE, deploy/vm-lab): the
-real BngScenarioSession this class would otherwise own directly (local
-subprocess.Popen of the bngblaster binary) instead runs on the separate
-`suscriptor` VM, as a persistent process owned by simulation/
-bng_agent.py -- that script embeds this SAME BngLifecycle class (reused
-unmodified, see its own module docstring), just driven by a local FIFO
-instead of direct Python calls. So THIS instance, running inside
-ryu-manager on `orchestrator`, never touches BngScenarioSession at all
-in distributed mode -- start_baseline/start_attack/stop_attack/stop_all
-just SSH over and append one command line to that FIFO, mirroring
-webtool/peering_ops.py's _ssh_br pattern (BatchMode/accept-new/
-ConnectTimeout) for every other cross-VM control call in this project.
+DISTRIBUTED MODE (settings.BNG_DISTRIBUTED_MODE, deploy/vm-lab): in
+Mininet mode this class owns a real BngScenarioSession directly (local
+subprocess.Popen of the bngblaster binary). In distributed mode it
+never touches BngScenarioSession at all -- start_baseline/start_attack/
+stop_attack/stop_all instead SSH to the separate `suscriptor` VM and
+append one command line to simulation/bng_subscriber_agent.py's FIFO
+there (that script drives real per-subscriber DHCP sessions against
+accel-ppp on `bng`, plus real hping3 attack traffic -- see its own
+module docstring; it replaces simulation/bng_agent.py's BNGBlaster
+wrapper, see bngblaster_broadband_pipeline_status memory for why:
+BNGBlaster's own sendto() succeeded but the frame was invisible to
+every external observer on this lab, an unresolved bug). The FIFO
+protocol (baseline/attack <scenario>/stop/stop_all) is unchanged from
+the BNGBlaster-era agent, so THIS class's distributed-mode branch below
+needed no code changes for that swap -- mirrors webtool/peering_ops.
+py's _ssh_br pattern (BatchMode/accept-new/ConnectTimeout) for every
+other cross-VM control call in this project.
 """
 
 import subprocess
@@ -53,10 +58,12 @@ class BngLifecycle:
         self,
         target_ip: str,
         tick_s: float = None,
-        # Distributed-VM-lab overrides (simulation/bng_agent.py) --
-        # None means "let BngScenarioSession use its own Mininet/netns
-        # defaults" (veth-a/veth-n, 10.50.0.10/24), so every existing
-        # Mininet-mode call site is unaffected by this widening.
+        # Mininet-mode-only BngScenarioSession overrides -- unused in
+        # distributed mode (see _ssh_write_fifo below, which never
+        # constructs a BngScenarioSession at all). None means "let
+        # BngScenarioSession use its own Mininet/netns defaults"
+        # (veth-a/veth-n, 10.50.0.10/24), so every existing Mininet-mode
+        # call site is unaffected by this widening.
         bng_host: str = None,
         access_interface: str = None,
         network_interface: str = None,
@@ -68,14 +75,13 @@ class BngLifecycle:
         # Distributed mode never touches any of the local-session state
         # below (_lock/_stop_event/_thread/self.session) -- it's all
         # unused dead weight in that mode, kept only so this class's
-        # shape stays identical between modes. IMPORTANT: simulation/
-        # bng_agent.py (running on suscriptor) constructs this SAME
-        # class to do the REAL local launching -- its own process must
-        # NEVER have BNG_DISTRIBUTED_MODE set in its environment, or its
-        # BngLifecycle would try to SSH to itself instead of actually
-        # starting bngblaster. Only orchestrator's ryu-manager unit sets
-        # that env var (deploy/vm-lab/ansible/roles/orchestrator) --
-        # suscriptor's bng-agent unit deliberately does not.
+        # shape stays identical between modes. simulation/
+        # bng_subscriber_agent.py (running on suscriptor) is a separate,
+        # self-contained script now -- it does NOT construct this class
+        # at all (unlike the old BNGBlaster-era bng_agent.py, which
+        # reused it for its real local launching), so there's no longer
+        # an "agent's own process must never see this env var" hazard to
+        # guard against here.
         self._distributed = settings.BNG_DISTRIBUTED_MODE
         self._session_kwargs = {
             k: v for k, v in {
@@ -119,11 +125,12 @@ class BngLifecycle:
         self.session, self._thread, self._stop_event = None, None, None
 
     def _ssh_write_fifo(self, line: str) -> None:
-        """Distributed mode only: appends one command line to bng_agent.
-        py's FIFO on suscriptor -- see that module's own docstring for
-        the tiny plain-text protocol (baseline/attack <scenario>/stop/
-        stop_all). `echo ... > fifo` blocks until bng_agent.py's read
-        loop has the FIFO open for reading, same as any single-reader
+        """Distributed mode only: appends one command line to simulation/
+        bng_subscriber_agent.py's FIFO on suscriptor -- see that
+        module's own docstring for the tiny plain-text protocol
+        (baseline/attack <scenario>/stop/stop_all). `echo ... > fifo`
+        blocks until the agent's read loop has the FIFO open for
+        reading, same as any single-reader
         FIFO -- its loop re-opens immediately after each line, so the
         window where no reader is attached is negligible in practice;
         ConnectTimeout/the outer timeout= below still bound the wait if

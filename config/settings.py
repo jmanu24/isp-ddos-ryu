@@ -300,61 +300,85 @@ PEERING_DIST_BR_SSH_HOST = PEERING_DIST_BR_IP
 
 # ---------------------------------------------------------------------
 # Broadband domain -- distributed VM lab mode (mirrors PEERING_DISTRIBUTED_
-# MODE above). See telemetry/broadband_adapter.py's DISTRIBUTED MODE
-# docstring and simulation/bng_agent.py's module docstring for the full
-# picture: BNGBlaster runs as a persistent systemd service on `suscriptor`
-# (deploy/vm-lab/ansible/roles/suscriptor), driven over SSH by a FIFO
-# instead of the local subprocess.Popen webtool/bng_ops.py's BngLifecycle
-# uses in Mininet mode; dnsmasq (DHCP + MAC blacklist) runs on `bng`
-# instead of the local process telemetry/broadband_adapter.py's Mininet-
-# mode path controls directly.
+# MODE above). REPLACES the earlier BNGBlaster-based design (see
+# bngblaster_broadband_pipeline_status memory: BNGBlaster's own sendto()
+# succeeded but the frame was invisible to every external observer on
+# this lab, an unresolved bug). See telemetry/broadband_adapter.py's
+# DISTRIBUTED MODE docstring and simulation/bng_subscriber_agent.py's
+# module docstring for the full picture: `bng` now runs accel-ppp (a
+# real open-source BRAS/BNG) fronted by FreeRADIUS -- real per-session
+# telemetry comes from FreeRADIUS's own accounting records there, not
+# from anything running on `suscriptor`. `suscriptor` runs simulation/
+# bng_subscriber_agent.py as a persistent systemd service, driven over
+# SSH by the SAME FIFO protocol simulation/bng_agent.py used (baseline/
+# attack <scenario>/stop/stop_all) -- webtool/bng_ops.py's BngLifecycle
+# didn't need to change at all for this swap.
 # ---------------------------------------------------------------------
 BNG_DISTRIBUTED_MODE = os.environ.get("BNG_DISTRIBUTED_MODE", "").lower() in ("1", "true", "yes")
 
-# suscriptor's hot-added VLAN-MGMT address (deploy/vm-lab/topology.yaml)
-# -- NOT its BB_ACCESS one (10.20.0.2): orchestrator has no route to
-# BB_ACCESS at all (the control node doesn't forward between VLANs
-# without an explicit rule, unlike NAT-to-internet which every VLAN
-# gets), so suscriptor needed a real MGMT-side NIC added, the same hot-
-# add pattern the enterprise domain's ent-site-* VMs already use. This
-# same new NIC ALSO serves as BNGBlaster's own "network" interface
-# (see BNG_DIST_NETWORK_IP/BNG_DIST_NETWORK_GATEWAY below) -- one NIC,
-# two roles, since both only need reachability to the rest of VLAN-MGMT.
+# suscriptor's real MGMT address (deploy/vm-lab/topology.yaml) -- no
+# longer a hot-added NIC (BNGBlaster's old 3-NIC design is gone, see
+# topology.yaml's own comment on this VM's interfaces): both of
+# suscriptor's NICs are baked in at clone time now.
 BNG_DIST_SUSCRIPTOR_IP = "10.10.0.9"
 BNG_DIST_SUSCRIPTOR_SSH_USER = "labadmin"
 BNG_DIST_SUSCRIPTOR_SSH_HOST = BNG_DIST_SUSCRIPTOR_IP
 
-# bng's own real MGMT address (topology.yaml) -- already reachable from
-# orchestrator without any topology change, unlike suscriptor above.
-# Alpine template -- root, not labadmin (see ALPINE_ROOT_PASSWORD in
-# deploy/vm-lab/scripts/render_topology.py).
+# bng's own real MGMT address (topology.yaml) -- Ubuntu template now
+# (was Alpine, back when this VM only ran dnsmasq), so labadmin+sudo
+# like every other Ubuntu VM in this lab, not root.
 BNG_DIST_BNG_IP = "10.10.0.2"
-BNG_DIST_BNG_SSH_USER = "root"
+BNG_DIST_BNG_SSH_USER = "labadmin"
 BNG_DIST_BNG_SSH_HOST = BNG_DIST_BNG_IP
 
-# Same addressing BNGBlaster's "network" interface config gets (see
-# simulation/bng_agent.py's --network-ip/--network-gateway) -- BNG_DIST_
-# SUSCRIPTOR_IP's own /24 and gateway, i.e. this domain's simulated
-# subscriber sessions egress onto VLAN-MGMT itself, reaching victim's
-# real MGMT address (BNG_DIST_TARGET_IP) directly, no OpenFlow bridge
-# involved (unlike the enterprise domain, this domain's detection is
-# BNGBlaster's own native per-session telemetry, not switch-based, so
-# there's no need to force traffic through any particular monitored
-# switch the way ENT_DC's redesign did).
-BNG_DIST_NETWORK_IP = "10.10.0.9/24"
-BNG_DIST_NETWORK_GATEWAY = "10.10.0.254"
-
 # victim's real MGMT address (shared target VM every domain's test
-# scenario uses) -- BNGBlaster's own target-ip.
+# scenario uses) -- simulation/bng_subscriber_agent.py's own target-ip;
+# attack traffic reaches it by real L3 forwarding through bng itself
+# (BB_ACCESS and MGMT are different subnets, bng sits on both, ip_
+# forward is enabled there -- deploy/vm-lab/ansible/roles/bng).
 BNG_DIST_TARGET_IP = "10.10.0.100"
 
-# Remote paths on suscriptor (CSV/socket/FIFO) and bng (DHCP blacklist +
-# its matching dnsmasq conf, for the pgrep pattern telemetry/
-# broadband_adapter.py's _reload_dnsmasq uses) -- same filenames/
-# conventions the Mininet-mode defaults already use, just now read/
-# written over SSH instead of locally.
-BNG_DIST_CSV_PATH = "/tmp/ddos_bng_events.csv"
-BNG_DIST_SOCK_PATH = "/tmp/bng_run.sock"
+# suscriptor's control FIFO (simulation/bng_subscriber_agent.py) --
+# same path/protocol simulation/bng_agent.py used.
 BNG_DIST_FIFO_PATH = "/run/bng-agent/cmd"
-BNG_DIST_DHCP_BLACKLIST_PATH = "/tmp/bng_dhcp_blacklist.hosts"
-BNG_DIST_DNSMASQ_CONF_PATH = "/etc/dnsmasq.d/bng-access.conf"
+
+# suscriptor's active-scenario state file (simulation/
+# bng_subscriber_agent.py's _write_state) -- src_ip -> {protocol,
+# dst_port} for whichever subscribers are currently attacking. Real
+# RADIUS accounting has no L4 visibility at all (a volumetric total,
+# not a flow breakdown), so telemetry/broadband_adapter.py's
+# distributed-mode collect() merges THIS (simulator-known metadata)
+# with FreeRADIUS's real per-session byte/packet counters by IP -- same
+# "the synthetic producer already knows what it's simulating"
+# convention simulation/ul_traffic_simulator.py and the old BNGBlaster-
+# era CSV already used.
+BNG_DIST_ACTIVE_SCENARIO_PATH = "/run/bng-subscribers/active_scenario.json"
+
+# FreeRADIUS's own accounting detail log on `bng` -- ONE flat-text
+# record per Access-Accept/Accounting-Start/-Interim-Update/-Stop
+# packet, under a per-NAS-client subdirectory (accel-ppp connects from
+# 127.0.0.1, so that's the subdirectory name), one file per day
+# (detail-YYYYMMDD) per Ubuntu's stock freeradius package config
+# (mods-available/detail's default `filename` directive) -- NOT yet
+# confirmed against a real run; telemetry/broadband_adapter.py globs
+# for `detail-*` under this directory and reads the most recent one
+# rather than hardcoding today's date, so a slightly different rotation
+# scheme still works.
+BNG_DIST_FREERADIUS_DETAIL_DIR = "/var/log/freeradius/radacct/127.0.0.1"
+
+# accel-ppp's own CLI control port (roles/bng's accel-ppp.conf.j2 [cli]
+# tcp=127.0.0.1:2000) -- used to resolve src_ip -> username/MAC for
+# apply_mitigation() (`accel-cmd -p <port> show sessions`) and to
+# terminate a session (`accel-cmd -p <port> terminate username <name>`).
+# Reached over SSH to `bng` itself, then locally against loopback there
+# (no route from orchestrator to bng's loopback, same as every other
+# "control socket only exists on that VM" case in this project).
+BNG_DIST_ACCEL_CMD_PORT = 2000
+
+# FreeRADIUS `users` file (roles/bng deploys the accept-all DEFAULT rule
+# here) -- apply_mitigation()'s persistent block adds a per-MAC
+# `Auth-Type := Reject` entry ABOVE that DEFAULT line so a blocked
+# subscriber's re-DHCP (accel-ppp retries this on its own, same lesson
+# BNGBlaster's own periodic re-DHCP taught -- session-stop/terminate
+# alone gets silently undone) keeps failing auth until unblocked.
+BNG_DIST_FREERADIUS_USERS_PATH = "/etc/freeradius/3.0/users"
