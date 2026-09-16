@@ -73,7 +73,17 @@ CSV_COLUMNS = [
 
 DEFAULT_CONFIG_PATH = "/tmp/bng_run_config.json"
 DEFAULT_SOCK_PATH = "/tmp/bng_run.sock"
+DEFAULT_LOG_PATH = "/tmp/bng_run.log"
 DEFAULT_BNG_BINARY = "/usr/sbin/bngblaster"
+# Confirmed on a real run: bngblaster produces ZERO stdout/log output at
+# all -- not even its own startup banner -- unless explicitly given -l
+# categories (default is apparently "log nothing"). dhcp/error/info/io
+# is what surfaced the actual root cause of a real bug this project hit
+# (sessions permanently stuck in "DHCPv4 pending": "Interfaces must not
+# have an IP address configured in the host OS!", an interface conflict
+# with zero other visible symptom) -- kept on by default so that kind of
+# failure is never silent again.
+DEFAULT_LOG_CATEGORIES = "dhcp,error,info,io"
 _NORMAL_DST_PORT = 80
 _NORMAL_PROTOCOL = "TCP"
 
@@ -197,6 +207,7 @@ class BngScenarioSession:
         network_gateway: str = "10.50.0.1",
         config_path: str = DEFAULT_CONFIG_PATH,
         sock_path: str = DEFAULT_SOCK_PATH,
+        log_path: str = DEFAULT_LOG_PATH,
     ):
         self.scenario = scenario
         self.target_ip = target_ip
@@ -205,6 +216,7 @@ class BngScenarioSession:
         self.bng_binary = bng_binary
         self.config_path = config_path
         self.sock_path = sock_path
+        self.log_path = log_path
 
         self.scn = build_scenario(
             scenario=scenario,
@@ -249,9 +261,27 @@ class BngScenarioSession:
         if os.path.exists(self.csv_path):
             os.remove(self.csv_path)
 
+        if os.path.exists(self.log_path):
+            os.remove(self.log_path)
+
         print(f"[BNG] launching {self.bng_binary} -C {self.config_path} -S {self.sock_path} "
+              f"-l {DEFAULT_LOG_CATEGORIES} -L {self.log_path} "
               f"(scenario={self.scenario}, sessions={self.scn['sessions']})")
-        self._proc = subprocess.Popen([self.bng_binary, "-C", self.config_path, "-S", self.sock_path])
+        # stdbuf -oL -eL, NOT a bare exec -- confirmed on a real run:
+        # bngblaster's own stdio is fully (not line-)buffered when its
+        # stdout isn't a tty, and a hard SIGTERM (this process's own
+        # stop(), or a systemd restart in distributed mode) never gives
+        # it a chance to flush -- the log file existed the whole time
+        # but stayed empty until the process happened to exit cleanly on
+        # its own. Without this, -l/-L above wouldn't actually have
+        # surfaced the "Interfaces must not have an IP address" root
+        # cause either -- the output was real, just never reaching disk
+        # in time to read it.
+        self._proc = subprocess.Popen([
+            "stdbuf", "-oL", "-eL",
+            self.bng_binary, "-C", self.config_path, "-S", self.sock_path,
+            "-l", DEFAULT_LOG_CATEGORIES, "-L", self.log_path,
+        ])
         wait_for_socket(self.sock_path, timeout_s=10.0)
         # This process (and bngblaster, which inherits the same user)
         # runs under sudo for the raw-socket/interface work, so the
