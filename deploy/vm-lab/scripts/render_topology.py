@@ -273,16 +273,14 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # everything else here is new) -- see bngblaster_broadband_
         # pipeline_status memory for why BNGBlaster itself was dropped.
         "bng_target_ip": mgmt_ip("victim"),
-        # bng's own 2nd NIC (BB_ACCESS) -- accel-ppp's ipoe module
-        # listens here. Both of bng's interfaces are baked into cloud-
-        # init at clone time (unlike suscriptor's old, now-removed 3rd
-        # NIC or pe/victim/ent-site's hot-added ones) -- render_
-        # cloud_init's own `ens{160+i}` convention above names this
-        # ens161, the SAME sequential (not PCI-slot-random) naming
-        # already confirmed working for br/core5g/ran/ue/ent-site-*'s
-        # own 2nd interfaces. Verify with `ip link show` on bng if this
-        # VM was ever rebuilt outside this script.
-        "bng_access_iface": "ens161",
+        # bng's own 2nd NIC (BB_ACCESS). render_cloud_init's own
+        # `ens{160+i}` naming COMMENT claims this should be sequential
+        # (ens161) -- confirmed WRONG on a real run: this ESXi host's
+        # vmxnet3 PCI-slot assignment gave it ens192 instead, same as
+        # every hot-added NIC elsewhere in this lab. Confirmed via
+        # `ip -br link show` on the real VM -- verify there again if
+        # this VM is ever rebuilt, don't trust the naming formula.
+        "bng_access_iface": "ens192",
         "bng_access_addr": net_ip("bng", "BB_ACCESS"),
         # accel-ppp's ip-pool range for subscriber leases -- same
         # 10.20.0.10-200 range dnsmasq used to hand out.
@@ -298,11 +296,13 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # tasks), each with its own MAC and DHCP lease from accel-ppp.
         # Unlike BNGBlaster, accel-ppp/DHCP has no objection to the
         # kernel owning addresses on this interface, so it no longer
-        # needs the address-stripping BNGBlaster required. ens161, same
-        # reasoning as bng_access_iface above (both of this VM's NICs
-        # are now baked into cloud-init at clone time, no more hot-added
-        # 3rd NIC).
-        "suscriptor_access_iface": "ens161",
+        # needs the address-stripping BNGBlaster required. ens192,
+        # confirmed via `ip -br link show` on the real VM -- same
+        # PCI-slot-naming gotcha as bng_access_iface above, the
+        # `ens{160+i}` sequential-naming comment in render_cloud_init
+        # does NOT hold on this host even for NICs baked into cloud-init
+        # at clone time.
+        "suscriptor_access_iface": "ens192",
         # macvlan1..N (roles/suscriptor's setup_macvlans.sh.j2) -- must
         # match simulation/bng_ipoe_config.py's own _MAX_SUBSCRIBERS in
         # simulation/bng_subscriber_agent.py (the largest subscriber_
