@@ -151,8 +151,14 @@
 
 - name: Kill any pre-existing hand-launched ryu-manager process (it holds
         the OpenFlow/web-dashboard ports the systemd unit needs to bind)
+  # [r]yu-manager, not ryu-manager -- pkill -f matches against every
+  # process's full command line, including its OWN (the shell wrapper
+  # ansible.builtin.shell runs this through literally contains the same
+  # pattern text) -- confirmed on a real run: without the bracket trick,
+  # pkill matched and killed its own shell, failing the task with rc=-15
+  # even though the actual target process never needed it.
   ansible.builtin.shell:
-    cmd: pkill -f 'ryu-manager --observe-links' || true
+    cmd: pkill -f '[r]yu-manager --observe-links' || true
 
 - name: Deploy ryu-manager systemd unit
   ansible.builtin.template:
