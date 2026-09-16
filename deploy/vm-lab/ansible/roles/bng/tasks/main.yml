@@ -55,17 +55,20 @@
 
 # --- FreeRADIUS: AAA backend for accel-ppp's real accounting --------
 
-- name: Add accel-ppp as a FreeRADIUS client (localhost)
-  ansible.builtin.blockinfile:
+# NOT a new "client accel-ppp" stanza -- Ubuntu's stock clients.conf
+# already ships a "client localhost { ipaddr = 127.0.0.1 ... }" block.
+# FreeRADIUS's client list is keyed by IP, not by name -- a second
+# client block for the SAME ipaddr fails to load at all ("Failed to add
+# duplicate client <name>"), confirmed on a real run. accel-ppp connects
+# from 127.0.0.1 too, so it's already covered by that existing client;
+# this just makes its secret match bng_radius_secret instead of
+# Ubuntu's own default (testing123), so accel-ppp.conf.j2's [radius]
+# secret= line has one real value both sides agree on.
+- name: Point FreeRADIUS's existing localhost client at bng_radius_secret
+  ansible.builtin.replace:
     path: /etc/freeradius/3.0/clients.conf
-    marker: "# {mark} ANSIBLE MANAGED BLOCK -- accel-ppp client"
-    block: |
-      client accel-ppp {
-          ipaddr = 127.0.0.1
-          secret = {{ bng_radius_secret }}
-          require_message_authenticator = no
-          nas_type = other
-      }
+    regexp: '^(\s*secret\s*=\s*)testing123$'
+    replace: '\g<1>{{ bng_radius_secret }}'
   notify: restart freeradius
 
 - name: Accept every identity in FreeRADIUS's authorize file (accounting
