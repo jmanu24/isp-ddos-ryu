@@ -107,11 +107,26 @@
 - name: Accept every identity in FreeRADIUS's authorize file (accounting
         telemetry is the point here, not per-subscriber access control
         -- see this role's own top-of-file comment)
+  # insertbefore: BOF -- confirmed on a real run: Ubuntu's stock `users`
+  # file already ships several of its own DEFAULT entries (e.g. `DEFAULT
+  # Framed-Protocol == PPP`, which every PPPoE Access-Request here
+  # matches). FreeRADIUS's `files` module stops at the FIRST DEFAULT
+  # entry that matches and never even LOOKS at later ones unless that
+  # entry's own reply-item list carries `Fall-Through = Yes` -- so with
+  # this block appended at the end (blockinfile's default), the stock
+  # entry won by matching first and this one was never reached at all
+  # ("pap: No known good password found... NOT setting Auth-Type" ->
+  # every real PAP auth got rejected, confirmed via `freeradius -X`).
+  # Putting this block FIRST, with its own Fall-Through = Yes, makes it
+  # win the match ordering while still letting the stock entries below
+  # it apply their own (harmless, unrelated) reply-items afterward.
   ansible.builtin.blockinfile:
     path: /etc/freeradius/3.0/users
     marker: "# {mark} ANSIBLE MANAGED BLOCK -- accept-all for the lab"
+    insertbefore: BOF
     block: |
       DEFAULT Auth-Type := Accept
+              Fall-Through = Yes
   notify: restart freeradius
 
 - name: Confirm FreeRADIUS accounting (detail file) module is enabled
