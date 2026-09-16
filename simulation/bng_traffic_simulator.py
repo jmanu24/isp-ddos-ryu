@@ -265,23 +265,31 @@ class BngScenarioSession:
             os.remove(self.log_path)
 
         print(f"[BNG] launching {self.bng_binary} -C {self.config_path} -S {self.sock_path} "
-              f"-l {DEFAULT_LOG_CATEGORIES} -L {self.log_path} "
+              f"-l {DEFAULT_LOG_CATEGORIES} > {self.log_path} "
               f"(scenario={self.scenario}, sessions={self.scn['sessions']})")
-        # stdbuf -oL -eL, NOT a bare exec -- confirmed on a real run:
-        # bngblaster's own stdio is fully (not line-)buffered when its
-        # stdout isn't a tty, and a hard SIGTERM (this process's own
-        # stop(), or a systemd restart in distributed mode) never gives
-        # it a chance to flush -- the log file existed the whole time
-        # but stayed empty until the process happened to exit cleanly on
-        # its own. Without this, -l/-L above wouldn't actually have
-        # surfaced the "Interfaces must not have an IP address" root
-        # cause either -- the output was real, just never reaching disk
-        # in time to read it.
-        self._proc = subprocess.Popen([
-            "stdbuf", "-oL", "-eL",
-            self.bng_binary, "-C", self.config_path, "-S", self.sock_path,
-            "-l", DEFAULT_LOG_CATEGORIES, "-L", self.log_path,
-        ])
+        # -l WITHOUT -L, redirecting stdout to log_path via Popen's own
+        # stdout= (not bngblaster's -L flag) -- confirmed on a real run:
+        # -L opens its OWN buffered file handle internally, which `stdbuf`
+        # (only intercepts the STDOUT/STDERR streams) has zero effect on
+        # -- the file existed the whole run but stayed empty regardless.
+        # Plain stdout, wrapped in `stdbuf -oL -eL` and redirected by
+        # THIS process instead, actually worked when manually verified.
+        # -oL alone still wasn't enough either: a hard SIGTERM (this
+        # process's own stop(), or a systemd restart in distributed mode)
+        # never gives bngblaster a chance to flush anything left in even
+        # a line buffer's own partial state, so the file could still stay
+        # empty for a run that gets killed before its next full line --
+        # not an issue in practice here since dhcp/error/info/io logging
+        # is frequent, but noted for anyone tightening -l further.
+        with open(self.log_path, "wb") as log_f:
+            self._proc = subprocess.Popen(
+                [
+                    "stdbuf", "-oL", "-eL",
+                    self.bng_binary, "-C", self.config_path, "-S", self.sock_path,
+                    "-l", DEFAULT_LOG_CATEGORIES,
+                ],
+                stdout=log_f, stderr=subprocess.STDOUT,
+            )
         wait_for_socket(self.sock_path, timeout_s=10.0)
         # This process (and bngblaster, which inherits the same user)
         # runs under sudo for the raw-socket/interface work, so the
