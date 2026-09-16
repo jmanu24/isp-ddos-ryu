@@ -42,6 +42,13 @@ single-session=replace
 interface={{ bng_access_iface }},start=dhcpv4
 noauth=0
 ip-pool=bng_pool
+# A SEPARATE gw-ip-address directive from [ip-pool]'s own one below --
+# confirmed on a real run: the ipoe module's DHCP-offer/router-address
+# logic (find_gw_addr(), accel-pppd/ctrl/ipoe/ipoe.c) reads its own
+# gw-ip-address option straight out of THIS section, not [ip-pool]'s.
+# Without it here, every session got as far as a real leased IP and
+# then failed with "can't determine router address".
+gw-ip-address={{ bng_access_addr }}/24
 verbose=1
 
 [ip-pool]
