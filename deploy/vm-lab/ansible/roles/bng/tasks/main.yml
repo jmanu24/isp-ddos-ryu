@@ -39,6 +39,20 @@
     state: present
     reload: true
 
+- name: Force BB_ACCESS's real IPv4 address via netplan (see the
+        template's own comment -- cloud-init's own generated config can
+        go stale if bng_access_iface's real name was ever discovered
+        wrong after this VM's first boot)
+  ansible.builtin.template:
+    src: 97-bb-access.yaml.j2
+    dest: /etc/netplan/97-bb-access.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- BB_ACCESS must have its real IP before
+        accel-ppp tries to bind its RADIUS socket to it
+  ansible.builtin.meta: flush_handlers
+
 - name: Clone Tesis_Controller (for deploy/install_accelppp.sh)
   ansible.builtin.git:
     repo: "{{ tesis_controller_repo_url }}"
