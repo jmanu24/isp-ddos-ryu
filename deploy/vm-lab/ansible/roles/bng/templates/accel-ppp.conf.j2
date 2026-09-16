@@ -12,6 +12,7 @@
 
 [modules]
 log_syslog
+log_file
 ipoe
 radius
 
@@ -22,7 +23,17 @@ thread-count=1
 single-session=replace
 
 [ipoe]
-interface={{ bng_access_iface }},start=dhcpv4,ifcfg=1,username=calling-sid
+# No ifcfg=1 -- confirmed on a real run: that asks accel-ppp to create a
+# per-session KERNEL network interface via its optional in-kernel ipoe
+# driver module, which deploy/install_accelppp.sh explicitly does NOT
+# build (-DBUILD_IPOE_DRIVER=FALSE, to avoid a kernel-module build/load
+# dependency this project doesn't otherwise need). Without that module
+# loaded, every session failed immediately ("ipoe: not a IPoE message
+# 2" / "ipoe: failed to create interface"). This project only needs a
+# real DHCP lease + real FreeRADIUS accounting + accel-cmd terminate
+# capability per session -- none of that requires a per-session kernel
+# interface, so this is simply omitted (module default: off).
+interface={{ bng_access_iface }},start=dhcpv4,username=calling-sid
 noauth=0
 ip-pool=bng_pool
 verbose=1
