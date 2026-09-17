@@ -48,11 +48,20 @@
         comment naming "network_mode -- host" as the fix for exactly this
         gNB-on-a-different-host case. Confirmed on a real run -- without
         this, the AMF fails with "socket bind(2) [10.40.0.1]:38412 failed
-        (99:Cannot assign requested address)" and the container exits.
+        (99:Cannot assign requested address)" and the container exits. Also
+        pin hostname to the literal string "0.0.0.0" -- confirmed on a real
+        run -- host networking makes the container inherit the VM's own
+        cloud-init-managed /etc/hosts, where "core5g" resolves to 127.0.1.1
+        (Ubuntu's own self-mapping convention), and the webui's own
+        server.listen(port, _hostname) call binds literally to whatever
+        HOSTNAME resolves to -- so it silently became loopback-only and
+        unreachable from outside the VM. A literal "0.0.0.0" needs no
+        resolution at all (Node treats it as an already-parsed address),
+        so this makes it bind every interface regardless of /etc/hosts.
   ansible.builtin.replace:
     path: /opt/srsRAN_Project/docker/docker-compose.yml
     regexp: '    networks:\n      ran:\n        ipv4_address: \$\{OPEN5GS_IP:-10\.53\.1\.2\}\n'
-    replace: "    network_mode: host\n"
+    replace: "    network_mode: host\n    hostname: \"0.0.0.0\"\n"
 
 - name: Deploy the 5-UE subscriber DB (real srsRAN docs' 3 UEs + 2 more, see file's own header comment)
   ansible.builtin.copy:
