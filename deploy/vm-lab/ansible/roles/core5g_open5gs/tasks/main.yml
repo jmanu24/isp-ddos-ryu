@@ -4,6 +4,30 @@
 # deliberate: it's the exact combination srsRAN's own application notes
 # validate their gNB against, avoiding independent Open5GS<->srsRAN
 # version-compatibility guesswork.
+- name: Stop depending on systemd-resolved's 127.0.0.53 stub (Open5GS's own
+        docker image creates one dedicated loopback-alias interface per
+        internal NF -- normally sandboxed inside the container's own netns,
+        but "network_mode -- host" below puts them directly in THIS VM's real
+        namespace instead. Confirmed on a real run -- once enough NFs are
+        up, one of those aliases collides with the address
+        systemd-resolved's stub listener hardcodes, and resolved dies with
+        "Failed to listen on UDP socket 127.0.0.53 -- Cannot assign
+        requested address", killing ALL DNS on the VM, not just the
+        container's own. core5g doesn't need resolved's per-link routing,
+        so just point resolv.conf at a public resolver directly.
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    enabled: false
+    state: stopped
+
+- name: Replace the systemd-resolved symlink with a static resolv.conf
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      nameserver 8.8.8.8
+      nameserver 1.1.1.1
+    mode: "0644"
+
 - name: Install Docker prerequisites
   ansible.builtin.apt:
     name: [ca-certificates, curl, gnupg, git]
