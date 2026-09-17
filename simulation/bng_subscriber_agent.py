@@ -517,6 +517,20 @@ def run(fifo_path: str, target_ip: str, gateway_ip: str, start_baseline: bool) -
     os.makedirs(os.path.dirname(fifo_path), exist_ok=True)
     if not os.path.exists(fifo_path):
         os.mkfifo(fifo_path, 0o666)
+        # os.mkfifo()'s own mode argument is masked by this (root)
+        # process's umask, same as open()/mkdir() -- confirmed on a
+        # real run: with a typical 0022 umask, the FIFO actually ended
+        # up 0644 (owner-write only), silently blocking every SSH-based
+        # writer that isn't root. telemetry/broadband_adapter.py's own
+        # _ssh_suscriptor() calls connect as a plain non-root user
+        # (BNG_DIST_SUSCRIPTOR_SSH_USER) -- its FIFO writes (including
+        # apply_mitigation()'s own "kick" command) failed with a silent
+        # "Permission denied" this way for a long stretch of debugging,
+        # while ansible's own ad-hoc test commands worked fine (they
+        # run as root via become=True), masking the bug entirely until
+        # traced by hand against a live run. chmod here forces the
+        # exact requested bits regardless of umask.
+        os.chmod(fifo_path, 0o666)
 
     pool = SubscriberPool(target_ip=target_ip, gateway_ip=gateway_ip)
     if start_baseline:
