@@ -1,27 +1,34 @@
 ---
-# suscriptor role -- Ubuntu, drives real per-subscriber PPPoE sessions
+# suscriptor role -- Ubuntu, drives real per-subscriber IPoE sessions
 # (macvlan sub-interfaces, one per simulated subscriber, each running
-# its own real pppd process) against accel-ppp on `bng`, plus real
-# attack traffic sourced from each subscriber's own PPP-assigned IP --
+# its own real dhclient process) against accel-ppp on `bng`, plus real
+# attack traffic sourced from each subscriber's own DHCP-assigned IP --
 # TCP_SYN/UDP via simulation/bng_flood.py's own kernel sockets, ICMP via
 # the system `ping` binary; NOT hping3 (confirmed on a real run that
-# hping3 cannot transmit anything at all over a ppp-subN interface --
-# see bng_flood.py's own module docstring).
+# hping3 cannot reliably deliver traffic here at all, over a PPP
+# interface OR a plain Ethernet-type one -- see bng_flood.py's own
+# module docstring).
 #
 # REPLACES the BNGBlaster-based design (simulation/
 # bng_subscriber_agent.py stands in for the old bng_agent.py -- see
 # bngblaster_broadband_pipeline_status memory for why BNGBlaster itself
-# was dropped: an unresolved packet-transmission bug on this lab) AND
-# an earlier IPoE/DHCP-based accel-ppp design (see roles/bng's own
-# accel-ppp.conf.j2 top-of-file comment: confirmed on a real run that
-# IPoE sessions authenticated and got real DHCP IPs, but the kernel
-# ipoe.ko driver never actually redirected real subscriber DATA traffic
-# to the session's own interface, so RADIUS accounting never reflected
-# any real attack traffic no matter how much flowed). PPPoE sidesteps
-# that: each session's traffic passes through the kernel's own generic
-# PPP discipline via a real pppN interface, whose plain netdev counters
-# are what actually get accounted -- no separate traffic classifier
-# that has to choose to redirect frames.
+# was dropped: an unresolved packet-transmission bug on this lab).
+#
+# This project also briefly went through a PPPoE/pppd phase: an
+# earlier IPoE test showed accel-ppp's ipoeN session interfaces never
+# counting real attack traffic, which looked like a kernel driver bug,
+# so the whole stack was rebuilt around PPPoE instead. It wasn't the
+# kernel driver -- confirmed on a later real run that THIS VM being
+# dual-homed (a management NIC besides the access-side one each
+# macvlanN rides on) meant attack traffic sourced from a subscriber's
+# IP was routing out the WRONG NIC entirely with no explicit override,
+# never reaching `bng` at all. bng_subscriber_agent.py's own
+# _add_source_route() below is that override (a per-subscriber `ip
+# rule`/`ip route`, forcing traffic sourced from each subscriber's own
+# IP out its own macvlanN interface via `bng`'s real gateway) -- once
+# in place, real accounting worked correctly under IPoE, and PPPoE's
+# extra complexity (pppd, PAP, Van Jacobson compression workarounds)
+# turned out to be unnecessary.
 #
 # Real BNG-side telemetry now comes from FreeRADIUS's own accounting
 # records on `bng` (telemetry/broadband_adapter.py tails those
@@ -30,21 +37,15 @@
 #
 # Only 2 NICs now (MGMT + BB_ACCESS, both baked into cloud-init at
 # clone time) -- no more hot-added 3rd NIC / address-stripping dance;
-# neither macvlan nor PPPoE has any objection to the kernel owning
-# addresses on BB_ACCESS the way BNGBlaster did (see topology.yaml's
-# own comment on this VM's interfaces for the full reasoning).
+# macvlan has no objection to the kernel owning addresses on BB_ACCESS
+# the way BNGBlaster did (see topology.yaml's own comment on this VM's
+# interfaces for the full reasoning).
 
 - name: Install base packages
   ansible.builtin.apt:
-    name: [git, python3, ppp, pppoe, iproute2, iputils-ping]
+    name: [git, python3, isc-dhcp-client, iproute2, iputils-ping]
     state: present
     update_cache: true
-
-- name: Deploy per-subscriber PAP credentials
-  ansible.builtin.template:
-    src: pap-secrets.j2
-    dest: /etc/ppp/pap-secrets
-    mode: "0600"
 
 - name: Clone Tesis_Controller (for simulation/bng_subscriber_agent.py,
         the distributed-mode session+attack-traffic control daemon)

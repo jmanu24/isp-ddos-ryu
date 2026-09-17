@@ -11,26 +11,22 @@
 # BNG-side, not reconstructed from a client-side control socket the
 # way BNGBlaster's session-streams was.
 #
-# PPPoE mode (REPLACES an earlier IPoE-mode design -- see accel-
-# ppp.conf.j2's own top-of-file comment for why: confirmed on a real
-# run that IPoE sessions authenticated fine but the kernel ipoe.ko
-# driver never actually redirected real subscriber DATA traffic to the
-# session's own interface, so Acct-Input-Octets never moved off zero no
-# matter how much real attack traffic flowed).
+# IPoE mode -- see accel-ppp.conf.j2's own top-of-file comment for the
+# full IPoE -> PPPoE -> IPoE history: the original IPoE "dead end" (real
+# attack traffic never counted) turned out to be a routing bug on the
+# `suscriptor` VM, not accel-ppp's own kernel driver -- once fixed,
+# accel-ppp's real accounting worked correctly.
 #
-# Auth posture: each simulated subscriber (roles/suscriptor's pppd
-# instances) presents a real, distinct PAP username/password (its own
-# pap-secrets entry), and FreeRADIUS's users file below accepts ANY
-# identity (`DEFAULT Auth-Type := Accept`) regardless of what credential
-# was actually presented -- this project's whole reason for choosing
-# RADIUS here is the real ACCOUNTING telemetry, not subscriber-level
-# access control, so there's no need to provision real per-subscriber
-# credentials on the FreeRADIUS side (same "throwaway local-simulation"
-# posture as BNGBlaster's own world-writable control socket).
-#
-# NOT yet verified against a real run (see deploy/install_accelppp.sh's
-# own note) -- written and reviewed here, first real deploy will likely
-# need fixes to exact accel-ppp.conf directive names/syntax.
+# Auth posture: under IPoE every simulated subscriber presents the SAME
+# User-Name (accel-ppp's own ifname fallback, see accel-ppp.conf.j2's
+# [ipoe] comment) -- there's no real per-subscriber identity to check,
+# so FreeRADIUS below is configured to accept every real Access-Request
+# unconditionally. This project's whole reason for choosing RADIUS here
+# is the real ACCOUNTING telemetry, not subscriber-level access control
+# (same "throwaway local-simulation" posture as BNGBlaster's own
+# world-writable control socket), so there's nothing to gain from
+# trying to model per-subscriber credentials IPoE doesn't actually
+# carry.
 
 - name: Install FreeRADIUS + networking tools
   ansible.builtin.apt:
@@ -104,31 +100,28 @@
       }
   notify: restart freeradius
 
-- name: Provision the known subscriber credentials in FreeRADIUS's
-        authorize file (real per-user Cleartext-Password, not a
-        DEFAULT-based accept-all)
-  # NOT "DEFAULT Auth-Type := Accept" -- confirmed on a real run (via
-  # freeradius -X) that this project's earlier attempt at that never
-  # actually worked, regardless of ordering/Fall-Through: `files` kept
-  # reporting a match against Ubuntu's own stock "DEFAULT Framed-
-  # Protocol == PPP" entry instead, and the pap module always logged
-  # "No known good password found... NOT setting Auth-Type", rejecting
-  # every real PAP attempt ("No Auth-Type found: rejecting the user").
-  # Real per-user Cleartext-Password entries are FreeRADIUS's own
-  # standard, well-documented mechanism for PAP -- the pap module finds
-  # it automatically, sets Auth-Type := PAP itself, and does a real
-  # comparison against roles/suscriptor's own pap-secrets.j2 passwords
-  # (same subN/subNpass identities on both ends) -- genuine
-  # authentication, not a bypass, and it sidesteps the DEFAULT-ordering
-  # question entirely.
+- name: Force FreeRADIUS to accept every real Access-Request unconditionally
+  # Confirmed on a real run (via freeradius -X) that neither a
+  # `DEFAULT Auth-Type := Accept` entry in `users` (regardless of
+  # ordering/Fall-Through) nor real per-user Cleartext-Password entries
+  # actually got matched here: `files` kept reporting a match against
+  # Ubuntu's own stock "DEFAULT Framed-Protocol == PPP" entry instead,
+  # rejecting every real attempt with "No Auth-Type found: rejecting
+  # the user" -- root cause never fully isolated. This unlang-level
+  # override in authorize{} itself sidesteps the `users`-file matching
+  # question entirely and was confirmed working on a real run. It's
+  # also the only approach that makes sense under IPoE anyway: every
+  # subscriber shares the same User-Name (see accel-ppp.conf.j2's
+  # [ipoe] comment), so there's no real per-subscriber identity for a
+  # `users`-file entry to key off in the first place.
   ansible.builtin.blockinfile:
-    path: /etc/freeradius/3.0/users
-    marker: "# {mark} ANSIBLE MANAGED BLOCK -- known lab subscribers"
-    insertbefore: BOF
+    path: /etc/freeradius/3.0/sites-available/default
+    marker: "    # {mark} ANSIBLE MANAGED BLOCK -- accept-all for this lab"
+    insertafter: '^authorize \{'
     block: |
-      {% for n in range(1, bng_subscriber_count + 1) %}
-      sub{{ n }} Cleartext-Password := "sub{{ n }}pass"
-      {% endfor %}
+            update control {
+                    Auth-Type := Accept
+            }
   notify: restart freeradius
 
 - name: Confirm FreeRADIUS accounting (detail file) module is enabled

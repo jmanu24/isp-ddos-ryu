@@ -8,7 +8,7 @@ Wants=network-online.target
 # NOT Requires=freeradius.service -- confirmed on a real run: this made
 # any `systemctl stop/restart freeradius` (including transiently, e.g.
 # while debugging with `freeradius -X`) cascade into stopping accel-ppp
-# too, killing every live PPPoE session outright. accel-ppp already
+# too, killing every live subscriber session outright. accel-ppp already
 # retries RADIUS requests on its own (see accel-ppp.conf.j2's [radius]
 # timeout/max-try) -- it doesn't need to die just because FreeRADIUS is
 # briefly unavailable, and After= above still keeps the normal boot
