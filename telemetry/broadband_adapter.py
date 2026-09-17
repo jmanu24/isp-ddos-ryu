@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import time
 from typing import Dict, List, Optional
@@ -29,11 +30,30 @@ _NORMAL_PROTOCOL = "TCP"
 def _ssh(user: str, host: str, args: list, timeout: int = _SSH_TIMEOUT_S,
           input_text: str = None) -> subprocess.CompletedProcess:
     """Same BatchMode/accept-new convention as webtool/peering_ops.py's
-    _ssh_br -- see that function's docstring."""
+    _ssh_br -- see that function's docstring.
+
+    shlex.join(args), NOT *args -- confirmed on a real run: the ssh
+    CLIENT itself concatenates every argument after user@host with a
+    single plain space to build the command line it sends to the
+    remote shell, with NO extra quoting of its own. Passing
+    ["sudo", "-n", "sh", "-c", script] as separate argv elements (as
+    this used to) works fine for a plain multi-word command, but the
+    moment `script` itself contains shell metacharacters (quotes, `|`,
+    `;`, `$(...)`  -- exactly what _read_radius_new_text()'s script
+    needs), the remote shell parses ONLY script's first word as -c's
+    actual argument and treats the rest as separate, unrelated words on
+    the OUTER login shell's own command line -- broken syntax, or at
+    best silently wrong behavior, with no error surfaced anywhere (this
+    adapter's own collect()/apply_mitigation() degrade a failed SSH
+    call to a quiet return, so this was invisible until traced by hand
+    against a live run). shlex.join() re-quotes the whole args list
+    into ONE shell-safe string first, so ssh's own space-joining (a
+    no-op on a single already-complete argv element) can't split it
+    apart again."""
     return subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={min(timeout, 5)}",
          "-o", "StrictHostKeyChecking=accept-new",
-         f"{user}@{host}", *args],
+         f"{user}@{host}", shlex.join(args)],
         input=input_text, capture_output=True, text=True, timeout=timeout,
     )
 
