@@ -92,6 +92,14 @@ e2:
 log:
   filename: /tmp/gnb.log
   all_level: info
+  # e2ap_level is a SEPARATE field from all_level, NOT covered by it --
+  # confirmed via OCUDU's own source (apps/helpers/logger/logger_appconfig.h)
+  # -- it defaults to `warning`, which silently swallows the INFO-level
+  # connection-establishment messages (E2 Setup Request/Response) the
+  # same way NGAP's own logs show for the AMF connection. Without this,
+  # there's no way to tell a real E2/RIC connection failure from the E2
+  # agent simply never having tried.
+  e2ap_level: info
   hex_max_size: 0
 
 pcap:
