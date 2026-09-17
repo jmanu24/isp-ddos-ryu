@@ -100,6 +100,24 @@ ip-pool=bng_pool
 # then failed with "can't determine router address".
 gw-ip-address={{ bng_access_addr }}/24
 verbose=1
+# Long lease -- accel-ppp's own default (LEASE_TIME, accel-pppd/ctrl/
+# ipoe/ipoe.c) is 600s. Confirmed on a real run: a lease renewal
+# mid-test handed a subscriber's macvlanN interface a DIFFERENT IP
+# (accel-ppp's own pool allocation on renew, not a dhclient quirk) --
+# but nothing in simulation/bng_subscriber_agent.py notices this
+# happening, so its cached Subscriber.ip, the already-running attack
+# process (bng_flood.py/ping, launched with the OLD ip baked into its
+# argv), and the per-subscriber `ip rule` (also keyed on the OLD ip)
+# all silently went stale: bng_flood.py kept bind()-ing to an address
+# that no longer belonged to any local interface, failing every
+# iteration with a caught-and-ignored OSError, so real attack traffic
+# silently stopped being generated at all mid-test with zero visible
+# error anywhere. 86400s (24h) comfortably outlives any single test run
+# so this never triggers -- the underlying gap (nothing re-syncs a
+# subscriber's session state after an IP change) is still real and
+# would need fixing for a genuinely long-lived deployment.
+lease-time=86400
+max-lease-time=86400
 
 [ip-pool]
 gw-ip-address={{ bng_access_addr }}/24
