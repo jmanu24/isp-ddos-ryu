@@ -9,18 +9,20 @@
 # gNB and Open5GS core on the SAME machine, reaching the AMF at Docker's
 # own internal bridge IP (10.53.1.2). In this lab the core runs on a
 # DIFFERENT VM (core5g), so 10.53.1.2 is not reachable from here --
-# core5g_open5gs's docker-compose must publish the N2 (SCTP/38412) port
-# to that VM's real MGMT address ({{ core5g_addr | default('10.10.0.5') }})
-# instead of only binding to the docker-internal network. This is a real
-# adaptation this lab needs that the single-PC tutorial did not.
+# core5g_open5gs's 5gc container runs with network_mode: host and binds
+# the AMF's N2/SCTP directly on core5g's real RAN-network address
+# ({{ core5g_ran_addr | default('10.40.0.1') }}, confirmed via `ss -a -A sctp`
+# on a real run -- see open5gs.env.j2's own OPEN5GS_IP comment). Use the
+# RAN network end to end here too (not MGMT) so N2 traffic never needs
+# cross-subnet/asymmetric routing between the two VMs.
 #
 # To run: sudo ./gnb -c gnb_zmq.yaml
 
 cu_cp:
   amf:
-    addr: {{ core5g_addr | default('10.10.0.5') }}
+    addr: {{ core5g_ran_addr | default('10.40.0.1') }}
     port: 38412
-    bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
+    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
     supported_tracking_areas:
       - tac: 7
         plmn_list:
