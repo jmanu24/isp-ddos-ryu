@@ -130,16 +130,33 @@ class PeeringFlowCollector:
         # fired a real (bogus) BGP_FLOWSPEC_DISCARD mitigation attempt the
         # moment ryu-manager booted, before the topology (and thus flow/
         # exabgp) even existed to receive it.
-        self._processed_files = set(self._existing_files())
+        #
+        # None (not an empty set) when this initial listing fails --
+        # confirmed on a real run: distributed mode's SSH call can
+        # genuinely fail this early (network/SSH not fully up yet right
+        # at controller startup), and treating that failure as "br's
+        # directory is empty" silently adopted an EMPTY baseline, so the
+        # very next successful poll() saw every real (days-old, fully
+        # legitimate) capture file on br as "new" and replayed the
+        # entire backlog through nfdump -- observed taking ~6.5 hours,
+        # during which every domain's own telemetry was starved behind
+        # it (see poll()'s own comment for the rest of that story).
+        # poll() checks for this sentinel and defers establishing the
+        # real baseline to its own first successful listing instead.
+        existing = self._existing_files()
+        self._processed_files = set(existing) if existing is not None else None
 
     @staticmethod
     def _is_complete(fname: str) -> bool:
         return fname.startswith("nfcapd.") and not fname.startswith("nfcapd.current.")
 
-    def _list_capture_dir(self) -> List[str]:
+    def _list_capture_dir(self) -> Optional[List[str]]:
         """Filenames only, complete or not -- caller filters with
         _is_complete(). Distributed mode lists br's remote directory over
-        SSH instead of os.listdir()."""
+        SSH instead of os.listdir(). Returns None (NOT []) on failure --
+        callers must not treat "couldn't reach br" the same as "br's
+        directory is genuinely empty", see __init__'s own comment on why
+        that distinction matters."""
         if self._distributed:
             result = _ssh_br(["ls", "-1", self.capture_dir])
             if result.returncode != 0:
@@ -147,15 +164,18 @@ class PeeringFlowCollector:
                     "Cannot list nfcapd capture dir %s on br: %s",
                     self.capture_dir, result.stderr.strip(),
                 )
-                return []
+                return None
             return [line for line in result.stdout.splitlines() if line]
         try:
             return os.listdir(self.capture_dir)
         except OSError:
-            return []
+            return None
 
-    def _existing_files(self) -> List[str]:
-        return [f for f in self._list_capture_dir() if self._is_complete(f)]
+    def _existing_files(self) -> Optional[List[str]]:
+        entries = self._list_capture_dir()
+        if entries is None:
+            return None
+        return [f for f in entries if self._is_complete(f)]
 
     def poll(self) -> List[Dict]:
         """Return flow records from every unread, fully-written capture file."""
@@ -165,7 +185,20 @@ class PeeringFlowCollector:
             return []
 
         entries = self._list_capture_dir()
+        if entries is None:
+            return []  # br unreachable this tick -- try again next time
         files = sorted(f for f in entries if self._is_complete(f))
+
+        if self._processed_files is None:
+            # __init__'s own seeding attempt failed (see its comment) --
+            # this is the first listing that's actually succeeded, so
+            # treat everything currently on disk as the baseline instead
+            # of "new" (it predates this collector even being able to
+            # see it) rather than replaying a potentially large,
+            # unrelated backlog through nfdump.
+            self._processed_files = set(files)
+            return []
+
         if not files:
             return []
 
