@@ -163,6 +163,25 @@
                 key = "%{Calling-Station-Id}"
   notify: restart freeradius
 
+- name: Enable FreeRADIUS auth logging (auth/auth_badpass) for debugging
+  # Applied live by hand throughout this domain's original debugging
+  # (the DEFAULT/Cleartext-Password/files-key investigation above) --
+  # not load-bearing for the pipeline itself, but genuinely useful the
+  # next time real PAP/auth behavior here needs tracing, and this role
+  # should reproduce exactly what's actually running, not a stripped-
+  # down version of it. Both directives are real, uncommented lines in
+  # the stock radiusd.conf already (just defaulting to "no"), so
+  # lineinfile+regexp is safe here -- unlike the files module's `key`
+  # above, there's no risk of the line being commented out by default.
+  ansible.builtin.lineinfile:
+    path: /etc/freeradius/3.0/radiusd.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^\s*auth\s*=\s*(no|yes)\s*$', line: '    auth = yes' }
+    - { regexp: '^\s*auth_badpass\s*=\s*(no|yes)\s*$', line: '        auth_badpass = yes' }
+  notify: restart freeradius
+
 - name: Confirm FreeRADIUS accounting (detail file) module is enabled
   # Ubuntu's freeradius package enables mods-enabled/detail by default
   # (symlinked from mods-available/detail), writing one flat-text
