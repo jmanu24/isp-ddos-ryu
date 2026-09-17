@@ -47,6 +47,15 @@
     state: present
     update_cache: true
 
+- name: Authorize orchestrator's SSH public key
+  # Needed for telemetry/broadband_adapter.py's SSH calls to
+  # `suscriptor` (reading active_scenario.json) and webtool/bng_ops.py's
+  # FIFO writes -- same gap as roles/bng's own task, see its comment.
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"
+  when: "'orchestrator_ssh_pubkey' in hostvars['orchestrator']"
+
 - name: Clone Tesis_Controller (for simulation/bng_subscriber_agent.py,
         the distributed-mode session+attack-traffic control daemon)
   ansible.builtin.git:

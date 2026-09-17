@@ -34,6 +34,24 @@
     state: present
     update_cache: true
 
+- name: Authorize orchestrator's SSH public key
+  # Needed for telemetry/broadband_adapter.py's SSH-based distributed-
+  # mode calls to `bng` (tailing FreeRADIUS's detail log, accel-cmd,
+  # editing the users file) -- same pattern as roles/br's own task for
+  # the peering domain. Confirmed on a real run this was simply missing
+  # (never added when the Broadband domain's distributed mode was
+  # built): orchestrator's ryu-manager could reach `bng` fine for
+  # everything ELSE, but broadband_adapter.py's own collect()/
+  # apply_mitigation() SSH calls failed with "Permission denied
+  # (publickey,password)" on every single attempt, silently -- see that
+  # module's own collect()/_collect_distributed() docstring on why a
+  # connection that NEVER once succeeds produces no log line at all
+  # (SOURCE_CONNECTED/SOURCE_LOST only fire on a state transition).
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"
+  when: "'orchestrator_ssh_pubkey' in hostvars['orchestrator']"
+
 - name: Enable IPv4 forwarding
   ansible.posix.sysctl:
     name: net.ipv4.ip_forward
