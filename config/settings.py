@@ -356,15 +356,18 @@ BNG_DIST_ACTIVE_SCENARIO_PATH = "/run/bng-subscribers/active_scenario.json"
 
 # FreeRADIUS's own accounting detail log on `bng` -- ONE flat-text
 # record per Access-Accept/Accounting-Start/-Interim-Update/-Stop
-# packet, under a per-NAS-client subdirectory (accel-ppp connects from
-# 127.0.0.1, so that's the subdirectory name), one file per day
-# (detail-YYYYMMDD) per Ubuntu's stock freeradius package config
-# (mods-available/detail's default `filename` directive) -- NOT yet
-# confirmed against a real run; telemetry/broadband_adapter.py globs
-# for `detail-*` under this directory and reads the most recent one
-# rather than hardcoding today's date, so a slightly different rotation
-# scheme still works.
-BNG_DIST_FREERADIUS_DETAIL_DIR = "/var/log/freeradius/radacct/127.0.0.1"
+# packet, under a per-NAS-client subdirectory (named by the CLIENT's
+# real source IP -- confirmed on a real run this is bng_access_addr,
+# NOT 127.0.0.1: accel-ppp's own [radius] nas-ip-address directive
+# makes it bind() its outgoing RADIUS socket to its real access-side
+# address, so that's the address FreeRADIUS actually sees the packets
+# arrive from, and what it names the subdirectory after), one file per
+# day (detail-YYYYMMDD) per Ubuntu's stock freeradius package config
+# (mods-available/detail's default `filename` directive).
+# telemetry/broadband_adapter.py globs for `detail-*` under this
+# directory and reads the most recent one rather than hardcoding
+# today's date, so a slightly different rotation scheme still works.
+BNG_DIST_FREERADIUS_DETAIL_DIR = "/var/log/freeradius/radacct/10.20.0.1"
 
 # accel-ppp's own CLI control port (roles/bng's accel-ppp.conf.j2 [cli]
 # tcp=127.0.0.1:2000) -- used to resolve src_ip -> username/MAC for
@@ -375,9 +378,13 @@ BNG_DIST_FREERADIUS_DETAIL_DIR = "/var/log/freeradius/radacct/127.0.0.1"
 # "control socket only exists on that VM" case in this project).
 BNG_DIST_ACCEL_CMD_PORT = 2000
 
-# FreeRADIUS `users` file (roles/bng deploys the accept-all DEFAULT rule
-# here) -- apply_mitigation()'s persistent block adds a per-MAC
-# `Auth-Type := Reject` entry ABOVE that DEFAULT line so a blocked
+# FreeRADIUS `users` file -- the accept-all posture lives in
+# sites-available/default's authorize{} unlang (roles/bng's own tasks),
+# not a DEFAULT line here. apply_mitigation()'s persistent block adds a
+# per-MAC `Auth-Type := Reject` entry here instead (matched by
+# Calling-Station-Id, since roles/bng's tasks also set the `files`
+# module's `key` directive to that -- every IPoE subscriber shares the
+# same User-Name, so matching on it wouldn't work) so a blocked
 # subscriber's re-DHCP (accel-ppp retries this on its own, same lesson
 # BNGBlaster's own periodic re-DHCP taught -- session-stop/terminate
 # alone gets silently undone) keeps failing auth until unblocked.

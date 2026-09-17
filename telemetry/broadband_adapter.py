@@ -83,28 +83,37 @@ class BroadbandAdapter(DomainAdapter):
         uses elsewhere (simulation/ul_traffic_simulator.py, and the old
         BNGBlaster-era CSV before it).
       - apply_mitigation(): two real BNG-native actions per block:
-          1. `accel-cmd terminate username <mac>` on `bng` -- drops the
+          1. `accel-cmd terminate ip <src_ip>` on `bng` -- drops the
              session immediately, accel-ppp's own real management
              interface (arguably MORE authentic than BNGBlaster's own
              session-stop, which just twiddled an internal socket
              command; this is the same tool a real BRAS operator uses).
+             NOT "terminate username <mac>" -- confirmed on a real run:
+             under IPoE every subscriber shares the same username
+             (accel-ppp's own ifname fallback), so that could never
+             match a specific one; `ip` needs no MAC lookup either.
           2. A per-MAC `Auth-Type := Reject` entry in FreeRADIUS's
-             `users` file, inserted ABOVE the accept-all DEFAULT rule
-             (roles/bng's own tasks deploy that DEFAULT), then a
-             FreeRADIUS restart -- needed for the SAME reason
-             BNGBlaster's DHCP-blacklist was: accel-ppp retries auth on
-             its own the next time the client re-DHCPs, so a
-             terminate-only block would get silently undone the moment
-             that happens. Blocking at the AAA layer means it can retry
-             as many times as it wants -- it never gets re-admitted
-             until the Reject entry is removed on unblock.
+             `users` file, then a FreeRADIUS restart -- needed for the
+             SAME reason BNGBlaster's DHCP-blacklist was: accel-ppp
+             retries auth on its own the next time the client re-DHCPs,
+             so a terminate-only block would get silently undone the
+             moment that happens. Blocking at the AAA layer means it
+             can retry as many times as it wants -- it never gets
+             re-admitted until the Reject entry is removed on unblock.
+             This match is by MAC (Calling-Station-Id), not User-Name
+             (which every IPoE subscriber shares) -- roles/bng's own
+             tasks set FreeRADIUS's `files` module `key` directive to
+             `%{Calling-Station-Id}` specifically so this matches.
 
-    NOT yet verified against a real run (this Mac had no route to the
-    lab's MGMT network while this was written) -- exact FreeRADIUS
-    detail-file path/rotation and accel-cmd's command syntax are this
-    module's own best-effort reading of each project's documented
-    format/CLI, cross-check against a live `bng` if collect()/
-    apply_mitigation() misbehave in distributed mode.
+    Confirmed against a real run (2026-09-17): 8 real IPoE sessions,
+    real DHCP leases, real per-subscriber source-based routing (see
+    simulation/bng_subscriber_agent.py's own module docstring for why
+    that routing override is needed at all), and real attack traffic
+    correctly moving a session's own ipoeN RX counters. This class's
+    own collect()/apply_mitigation() logic itself is reviewed but not
+    yet independently re-verified end-to-end against a live detection+
+    mitigation run -- cross-check against a live `bng`/`suscriptor` if
+    either misbehaves.
     """
 
     domain_name = "broadband"
@@ -506,23 +515,24 @@ class BroadbandAdapter(DomainAdapter):
     _REJECT_LINE_RE = re.compile(r"^(\S+)\s+Auth-Type\s*:=\s*Reject\s*$")
 
     def _set_mac_rejected(self, mac: str, rejected: bool) -> bool:
-        """Inserts/removes a `<mac> Auth-Type := Reject` line directly
-        above the `DEFAULT Auth-Type := Accept` line roles/bng's tasks
-        deploy (FreeRADIUS's `users` file matches top-to-bottom, first
-        match wins -- a per-MAC Reject line must come before DEFAULT to
-        actually take effect). Best-effort, same convention as every
-        other mitigation-file failure in this adapter: a missing/
-        unwritable users file degrades to a logged no-op."""
+        """Inserts/removes a `<mac> Auth-Type := Reject` line in
+        FreeRADIUS's `users` file. Matches by MAC because roles/bng's
+        own tasks set the `files` module's `key` directive to
+        `%{Calling-Station-Id}` -- the accept-all posture lives in
+        sites-available/default's authorize{} unlang instead of a
+        `users`-file DEFAULT line (see roles/bng's own tasks comment),
+        so there's no DEFAULT line to insert above here anymore; a
+        per-MAC entry just needs to exist somewhere for `files` to find
+        it, order doesn't matter without one. Best-effort, same
+        convention as every other mitigation-file failure in this
+        adapter: a missing/unwritable users file degrades to a logged
+        no-op."""
         try:
             lines = self._read_users_lines()
             lines = [ln for ln in lines if not self._REJECT_LINE_RE.match(ln.strip())
                      or self._REJECT_LINE_RE.match(ln.strip()).group(1) != mac]
             if rejected:
-                insert_at = next(
-                    (i for i, ln in enumerate(lines) if ln.strip().startswith("DEFAULT")),
-                    len(lines),
-                )
-                lines.insert(insert_at, f"{mac} Auth-Type := Reject")
+                lines.append(f"{mac} Auth-Type := Reject")
             self._write_users_lines(lines)
         except OSError as exc:
             print(f"[BROADBAND] cannot update FreeRADIUS users file {self.freeradius_users_path}: {exc}")
@@ -545,23 +555,35 @@ class BroadbandAdapter(DomainAdapter):
             print(f"[BROADBAND] cannot clear FreeRADIUS reject list {self.freeradius_users_path}: {exc}")
 
     def _apply_mitigation_distributed(self, action: MitigationAction) -> bool:
+        is_block = action.action in ("block", "rate_limit")
+        ok = True
+
+        # NOT "terminate username <mac>" -- confirmed on a real run:
+        # under IPoE every subscriber shares the SAME username (accel-
+        # ppp's own ifname fallback, see accel-ppp.conf.j2's [ipoe]
+        # comment), so a username-keyed terminate can never match a
+        # specific subscriber. "terminate ip <address>" (accel-cmd's own
+        # documented match key, confirmed via `accel-cmd help`) needs no
+        # MAC lookup at all -- src_ip is already on the MitigationAction.
+        if is_block:
+            try:
+                result = self._accel_cmd(["terminate", "ip", action.src_ip])
+                if result.returncode != 0:
+                    print(f"[BROADBAND] accel-cmd terminate ip={action.src_ip} failed: {result.stderr.strip()}")
+                    ok = False
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                print(f"[BROADBAND] accel-cmd terminate ip={action.src_ip} failed: {exc}")
+                ok = False
+
+        # The persistent FreeRADIUS reject (below) still needs the real
+        # MAC -- terminate alone doesn't stop accel-ppp's own automatic
+        # re-DHCP retry, and IP is not a stable identity across a fresh
+        # lease the way Calling-Station-Id is.
         mac = self._mac_by_ip.get(action.src_ip)
         if mac is None:
             print(f"[BROADBAND] cannot resolve src_ip {action.src_ip!r} to a subscriber MAC, "
-                  f"skipping {action.action}")
+                  f"session terminated but no persistent reject entry added")
             return False
-
-        is_block = action.action in ("block", "rate_limit")
-        ok = True
-        if is_block:
-            try:
-                result = self._accel_cmd(["terminate", "username", mac])
-                if result.returncode != 0:
-                    print(f"[BROADBAND] accel-cmd terminate username={mac} failed: {result.stderr.strip()}")
-                    ok = False
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                print(f"[BROADBAND] accel-cmd terminate username={mac} failed: {exc}")
-                ok = False
 
         if not self._set_mac_rejected(mac, rejected=is_block):
             ok = False
