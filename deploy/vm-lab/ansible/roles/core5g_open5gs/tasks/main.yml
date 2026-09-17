@@ -107,8 +107,13 @@
   notify: reload systemd
 
 - name: Enable and start 5GC
-  ansible.builtin.service:
+  # daemon_reload here, not just the handler -- confirmed on a real run --
+  # handlers fire at the END of the play, so this task would otherwise
+  # start the service against systemd's STALE cached unit (missing the
+  # ExecStartPre ogstun cleanup above) whenever the unit file just changed.
+  ansible.builtin.systemd:
     name: open5gs-5gc
+    daemon_reload: true
     enabled: true
     state: started
 
