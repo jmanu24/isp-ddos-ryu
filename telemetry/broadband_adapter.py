@@ -624,6 +624,8 @@ class BroadbandAdapter(DomainAdapter):
         # re-DHCP retry, and IP is not a stable identity across a fresh
         # lease the way Calling-Station-Id is.
         mac = self._mac_by_ip.get(action.src_ip)
+        print(f"[BROADBAND] DEBUG mac_lookup src_ip={action.src_ip!r} mac={mac!r} "
+              f"known_ips={list(self._mac_by_ip.keys())!r}")
         if mac is None:
             print(f"[BROADBAND] cannot resolve src_ip {action.src_ip!r} to a subscriber MAC, "
                   f"session terminated but no persistent reject entry added")
