@@ -1,0 +1,15 @@
+# Managed by Ansible (roles/ric_flexric) -- `make install`'s own sample
+# config ships NearRT_RIC_IP = "127.0.0.1" (confirmed on a real run: found
+# at /usr/local/etc/flexric/ric.conf right after install), which is
+# loopback-only and unreachable from ran_srsran's gNB, which connects
+# to this IP (ric_addr, matching gnb_zmq.yaml.j2's e2.addr) over the
+# network for its E2 SCTP association. This template replaces it with
+# this VM's own real address every run, since `make install` re-copies
+# its sample on every build regardless of what's already there.
+SM_DIR = "/usr/local/lib/flexric/"
+
+# supported name = NearRT_RIC, E2_Agent, E2_Proxy_Agent, xApp
+Name = "NearRT_RIC"
+NearRT_RIC_IP = "{{ ric_addr | default('10.10.0.4') }}"
+E2_Port = 36421
+E42_Port = 36422

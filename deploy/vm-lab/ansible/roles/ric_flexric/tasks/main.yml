@@ -85,3 +85,21 @@
     cmd: make install
     chdir: /opt/flexric/build
   become: true
+
+- name: Deploy near-RT RIC config (real MGMT address, not the sample's 127.0.0.1)
+  # Must run AFTER "Install FlexRIC" every time -- confirmed on a real run
+  # -- `make install` re-copies its own sample conf on every build,
+  # which would silently undo this otherwise.
+  ansible.builtin.template:
+    src: ric.conf.j2
+    dest: /usr/local/etc/flexric/ric.conf
+    mode: "0644"
+
+- name: Note about starting the near-RT RIC (no systemd service here either)
+  ansible.builtin.debug:
+    msg: >-
+      Same as ran_srsran, this role has no systemd service -- start
+      manually: cd /opt/flexric/build/examples/ric && sudo
+      ./nearRT-RIC -c /usr/local/etc/flexric/ric.conf. The E2 Agent
+      (the gNB) connects OUT to the RIC as an SCTP client, so start
+      this BEFORE ran_srsran's gnb, not after.
