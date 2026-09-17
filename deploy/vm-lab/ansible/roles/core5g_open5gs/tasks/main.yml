@@ -42,6 +42,18 @@
     version: main
     force: true
 
+- name: Give the 5gc container real host networking (docker's default bridge
+        can't bind the cross-VM RAN address OPEN5GS_IP points at -- see
+        open5gs.env.j2's own comment, and the compose file's own gnb-service
+        comment naming "network_mode -- host" as the fix for exactly this
+        gNB-on-a-different-host case. Confirmed on a real run -- without
+        this, the AMF fails with "socket bind(2) [10.40.0.1]:38412 failed
+        (99:Cannot assign requested address)" and the container exits.
+  ansible.builtin.replace:
+    path: /opt/srsRAN_Project/docker/docker-compose.yml
+    regexp: '    networks:\n      ran:\n        ipv4_address: \$\{OPEN5GS_IP:-10\.53\.1\.2\}\n'
+    replace: "    network_mode: host\n"
+
 - name: Deploy the 5-UE subscriber DB (real srsRAN docs' 3 UEs + 2 more, see file's own header comment)
   ansible.builtin.copy:
     src: subscriber_db.csv
