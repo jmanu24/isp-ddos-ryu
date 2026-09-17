@@ -1,0 +1,13 @@
+# Managed by Ansible (roles/br). Hourly -- see archive_nfcapd.sh.j2's
+# own comment for why. Persistent=true so a run missed while this VM
+# was off/rebooting fires once at the next boot instead of silently
+# waiting a full hour.
+[Unit]
+Description=Run nfcapd-archive hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

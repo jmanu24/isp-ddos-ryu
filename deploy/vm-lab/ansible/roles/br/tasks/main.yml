@@ -135,6 +135,42 @@
     - nfcapd.service
     - softflowd-peering.service
 
+# --- nfcapd archival: keeps nfcapd_live_dir from growing unbounded ---
+# Confirmed on a real run: nfcapd rotating every 2s with nothing ever
+# draining it grew to 74,821 files over ~41.5 hours, and once a
+# collector finally started polling it took ~6.5 hours to work through
+# that backlog one nfdump-over-SSH call at a time, starving every OTHER
+# domain's telemetry in the same controller process behind it. This
+# runs independent of whether collectors/peering_flow_collector.py
+# happens to be running at all.
+
+- name: Deploy the nfcapd archival script
+  ansible.builtin.template:
+    src: archive_nfcapd.sh.j2
+    dest: /usr/local/bin/archive_nfcapd.sh
+    mode: "0755"
+  vars:
+    nfcapd_live_dir: /var/cache/nfcapd/r1
+    nfcapd_archive_dir: /var/cache/nfcapd/archive
+    nfcapd_archive_min_age_minutes: 50
+
+- name: Deploy nfcapd-archive systemd service + timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - nfcapd-archive.service
+    - nfcapd-archive.timer
+  notify: reload systemd
+
+- name: Enable and start the nfcapd-archive timer
+  ansible.builtin.systemd:
+    name: nfcapd-archive.timer
+    daemon_reload: true
+    enabled: true
+    state: started
+
 - name: Authorize orchestrator's SSH public key
   # Needed for collectors/peering_flow_collector.py + webtool/
   # peering_ops.py's SSH-based remote calls to br -- see config/
