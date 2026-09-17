@@ -61,6 +61,18 @@ line): "baseline", "attack <scenario>", "stop", "stop_all" -- driven
 over SSH by webtool/bng_ops.py's BngLifecycle in distributed mode
 (_ssh_write_fifo), unchanged on that end.
 
+A background thread (see run()/_resync_loop) periodically re-checks
+every subscriber's real interface IP against what this daemon has
+cached and re-syncs routing/the running attack process/the state file
+if it changed -- confirmed on a real run that accel-ppp's IPoE pool
+allocation does NOT reliably keep handing the same MAC the same IP
+across successive DHCP transactions, repeatedly reassigning a LIVE
+subscriber's address independent of dhclient's own lease-renewal timer.
+Without this, self.ip goes silently stale and the attack process keeps
+binding to an address no longer assigned to any local interface,
+generating zero real traffic with no visible error anywhere -- see
+Subscriber.resync_ip()'s own docstring for the full story.
+
 Usage (on suscriptor, as root -- dhclient/ping/raw sockets need it):
   sudo python3 simulation/bng_subscriber_agent.py \\
       --target-ip 10.10.0.100 --gateway-ip 10.20.0.1 \\
@@ -73,6 +85,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -82,6 +95,13 @@ from simulation.bng_ipoe_config import SCENARIOS, BASELINE_SCENARIO, build_scena
 _MAX_SUBSCRIBERS = 8
 _DHCP_RUN_DIR = "/run/bng-subscribers"
 _DHCP_WAIT_S = 15
+# How often the background thread (see run()) checks every subscriber's
+# real interface IP against what this daemon has cached, to catch the
+# IP-drift Subscriber.resync_ip() documents. FreeRADIUS's own
+# acct-interim-interval (roles/bng's accel-ppp.conf.j2) is 5s -- no
+# point checking meaningfully faster than that, since accounting-based
+# detection can't observe a resync happening any sooner anyway.
+_RESYNC_INTERVAL_S = 5
 # Real per-session byte/packet counters come from FreeRADIUS's own
 # accounting on `bng` (telemetry/broadband_adapter.py tails those) --
 # but RADIUS accounting has no L4 visibility at all (it's a volumetric
@@ -172,6 +192,11 @@ class Subscriber:
         self.gateway_ip = gateway_ip
         self.ip = ""
         self._attack_proc: subprocess.Popen = None
+        # Remembers the currently-running attack's own params (None if
+        # not attacking) so resync_ip() can relaunch with the SAME
+        # scenario after an IP change -- see resync_ip()'s own comment
+        # for why this exists at all.
+        self._attack_params: tuple = None
 
     def session_up(self) -> None:
         if self.ip:
@@ -216,6 +241,40 @@ class Subscriber:
                  "priority", str(_rule_priority(self.n))])
         _run_ip(["route", "flush", "table", str(_route_table(self.n))])
 
+    def resync_ip(self) -> bool:
+        """Re-reads this subscriber's real interface IP and, if it
+        changed since session_up(), re-syncs everything keyed on it.
+
+        Confirmed on a real run: accel-ppp's IPoE pool allocation does
+        NOT reliably keep handing the same MAC the same IP across
+        successive DHCP transactions -- this was observed repeatedly
+        reassigning a live subscriber's macvlanN interface a DIFFERENT
+        address, independent of dhclient's own lease-renewal timer (a
+        long lease-time, roles/bng's own accel-ppp.conf.j2, cuts down
+        how OFTEN this can happen but doesn't stop it outright). Without
+        this, self.ip (used for the source-route rule, the running
+        attack process's own --src-ip, and broadband_adapter.py's
+        src_ip-keyed active_scenario.json) silently goes stale: the
+        attack process keeps binding to an address no longer assigned
+        to any local interface, generating zero real traffic with no
+        visible error (see accel-ppp.conf.j2's own comment on this same
+        failure mode). Returns True if the IP changed (caller should
+        rewrite the state file)."""
+        if not self.ip:
+            return False
+        current = _read_iface_ip(self.iface)
+        if not current or current == self.ip:
+            return False
+        old_ip = self.ip
+        self._del_source_route()
+        self.ip = current
+        self._add_source_route()
+        print(f"[SUBSCRIBER] {self.iface} IP changed {old_ip} -> {current}, resyncing", file=sys.stderr)
+        if self._attack_params is not None:
+            protocol, dst_port, pps, target_ip = self._attack_params
+            self.start_attack(protocol, dst_port, pps, target_ip)
+        return True
+
     def session_down(self) -> None:
         self.stop_attack()
         self._del_source_route()
@@ -238,6 +297,7 @@ class Subscriber:
         if not self.ip:
             print(f"[SUBSCRIBER] {self.iface} has no IP yet, cannot attack", file=sys.stderr)
             return
+        self._attack_params = (protocol, dst_port, pps, target_ip)
         if protocol == "ICMP":
             # ping is genuine kernel-stack traffic, not hping3's raw
             # injection -- already confirmed working over these
@@ -260,6 +320,7 @@ class Subscriber:
         self._attack_proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def stop_attack(self) -> None:
+        self._attack_params = None
         if self._attack_proc is None:
             return
         try:
@@ -278,6 +339,18 @@ class SubscriberPool:
         self.target_ip = target_ip
         self.subscribers = {n: Subscriber(n, gateway_ip) for n in range(1, _MAX_SUBSCRIBERS + 1)}
         self.current_scenario = None
+        # Serializes launch()/stop_attack_only()/stop_all() (driven by
+        # the FIFO thread) against resync_all() (driven by run()'s own
+        # background thread) -- both can start/stop the same
+        # Subscriber's attack process, and that's not atomic.
+        self._lock = threading.Lock()
+        # Current scenario's own protocol/dst_port/count -- kept so
+        # resync_all() can rewrite the state file (src_ip -> metadata)
+        # after an IP change without needing the FIFO to hand them in
+        # again; None protocol means "not attacking, nothing to track".
+        self._active_protocol = None
+        self._active_dst_port = None
+        self._active_count = 0
 
     def _ensure_up(self, count: int) -> None:
         for n in range(1, count + 1):
@@ -290,36 +363,64 @@ class SubscriberPool:
     def launch(self, scenario: str) -> None:
         scn = build_scenario(scenario)
         count = scn["subscriber_count"]
-        self._ensure_up(count)
-        self._ensure_down(count)
-        for n in range(1, count + 1):
-            self.subscribers[n].start_attack(scn["protocol"], scn["dst_port"], scn["pps"], self.target_ip)
-        self.current_scenario = scenario
-        self._write_state(scn["protocol"], scn["dst_port"], count)
+        with self._lock:
+            self._ensure_up(count)
+            self._ensure_down(count)
+            for n in range(1, count + 1):
+                self.subscribers[n].start_attack(scn["protocol"], scn["dst_port"], scn["pps"], self.target_ip)
+            self.current_scenario = scenario
+            self._active_protocol = scn["protocol"]
+            self._active_dst_port = scn["dst_port"]
+            self._active_count = count
+            self._write_state()
         print(f"[SUBSCRIBER] scenario={scenario} subscribers={count} started")
 
     def stop_attack_only(self) -> None:
-        for sub in self.subscribers.values():
-            sub.stop_attack()
-        self._write_state(None, None, 0)
+        with self._lock:
+            for sub in self.subscribers.values():
+                sub.stop_attack()
+            self._active_protocol = None
+            self._active_count = 0
+            self._write_state()
 
     def stop_all(self) -> None:
-        for sub in self.subscribers.values():
-            sub.session_down()
-        self.current_scenario = None
-        self._write_state(None, None, 0)
+        with self._lock:
+            for sub in self.subscribers.values():
+                sub.session_down()
+            self.current_scenario = None
+            self._active_protocol = None
+            self._active_count = 0
+            self._write_state()
 
-    def _write_state(self, protocol: str, dst_port: int, count: int) -> None:
+    def resync_all(self) -> None:
+        """Periodically called (see run()'s own background thread) to
+        catch subscriber IP drift -- see Subscriber.resync_ip()'s own
+        docstring for why this is needed at all. Only rewrites the
+        state file if something actually changed, to avoid needless
+        I/O every tick."""
+        # resync_ip() itself is a cheap no-op for any subscriber with no
+        # current IP (torn down / never brought up), so just checking
+        # every slot here is simpler than tracking exactly which ones
+        # are currently up.
+        with self._lock:
+            changed = False
+            for sub in self.subscribers.values():
+                if sub.resync_ip():
+                    changed = True
+            if changed:
+                self._write_state()
+
+    def _write_state(self) -> None:
         """src_ip -> {protocol, dst_port} for every subscriber currently
         attacking, keyed by their REAL DHCP-assigned IP -- see this
         module's own top-of-file comment on why broadband_adapter.py
         needs this alongside FreeRADIUS's real rate data."""
         state = {}
-        if protocol is not None:
-            for n in range(1, count + 1):
+        if self._active_protocol is not None:
+            for n in range(1, self._active_count + 1):
                 ip = self.subscribers[n].ip
                 if ip:
-                    state[ip] = {"protocol": protocol, "dst_port": dst_port}
+                    state[ip] = {"protocol": self._active_protocol, "dst_port": self._active_dst_port}
         try:
             with open(_STATE_PATH, "w") as f:
                 json.dump(state, f)
@@ -354,6 +455,15 @@ def _handle_line(pool: SubscriberPool, line: str) -> None:
         print(f"[SUBSCRIBER] command {line!r} failed: {exc}", file=sys.stderr)
 
 
+def _resync_loop(pool: SubscriberPool) -> None:
+    while True:
+        time.sleep(_RESYNC_INTERVAL_S)
+        try:
+            pool.resync_all()
+        except (OSError, ValueError) as exc:
+            print(f"[SUBSCRIBER] resync failed: {exc}", file=sys.stderr)
+
+
 def run(fifo_path: str, target_ip: str, gateway_ip: str, start_baseline: bool) -> None:
     os.makedirs(os.path.dirname(fifo_path), exist_ok=True)
     if not os.path.exists(fifo_path):
@@ -362,6 +472,8 @@ def run(fifo_path: str, target_ip: str, gateway_ip: str, start_baseline: bool) -
     pool = SubscriberPool(target_ip=target_ip, gateway_ip=gateway_ip)
     if start_baseline:
         pool.launch(BASELINE_SCENARIO)
+
+    threading.Thread(target=_resync_loop, args=(pool,), daemon=True).start()
 
     while True:
         with open(fifo_path, "r") as f:
