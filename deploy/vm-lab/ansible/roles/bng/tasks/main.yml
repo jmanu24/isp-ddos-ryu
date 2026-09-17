@@ -124,6 +124,27 @@
             }
   notify: restart freeradius
 
+- name: Make FreeRADIUS's files module match by MAC (Calling-Station-Id),
+        not User-Name -- every IPoE subscriber shares the same
+        User-Name (see accel-ppp.conf.j2's [ipoe] comment), so
+        telemetry/broadband_adapter.py's apply_mitigation() (a per-MAC
+        Auth-Type := Reject entry in `users`) could never match anyone
+        without this. blockinfile (not lineinfile+backrefs) on purpose
+        -- the stock `key = ...` directive may be commented out by
+        default, and backrefs mode silently no-ops when its regexp
+        doesn't match an existing line. Inserted right BEFORE the
+        module's own closing brace (last directive wins if the stock
+        file already sets `key` uncommented above it), rather than
+        right after its opening brace, so this override always takes
+        effect regardless of the stock file's exact starting content.
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/mods-available/files
+    marker: "    # {mark} ANSIBLE MANAGED BLOCK -- match by MAC for this lab"
+    insertbefore: '^\}$'
+    block: |2
+                key = "%{Calling-Station-Id}"
+  notify: restart freeradius
+
 - name: Confirm FreeRADIUS accounting (detail file) module is enabled
   # Ubuntu's freeradius package enables mods-enabled/detail by default
   # (symlinked from mods-available/detail), writing one flat-text
