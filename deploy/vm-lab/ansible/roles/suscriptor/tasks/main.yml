@@ -2,8 +2,13 @@
 # suscriptor role -- Ubuntu, drives real per-subscriber PPPoE sessions
 # (macvlan sub-interfaces, one per simulated subscriber, each running
 # its own real pppd process) against accel-ppp on `bng`, plus real
-# hping3 attack traffic sourced from each subscriber's own PPP-assigned
-# IP. REPLACES the BNGBlaster-based design (simulation/
+# attack traffic sourced from each subscriber's own PPP-assigned IP --
+# TCP_SYN/UDP via simulation/bng_flood.py's own kernel sockets, ICMP via
+# the system `ping` binary; NOT hping3 (confirmed on a real run that
+# hping3 cannot transmit anything at all over a ppp-subN interface --
+# see bng_flood.py's own module docstring).
+#
+# REPLACES the BNGBlaster-based design (simulation/
 # bng_subscriber_agent.py stands in for the old bng_agent.py -- see
 # bngblaster_broadband_pipeline_status memory for why BNGBlaster itself
 # was dropped: an unresolved packet-transmission bug on this lab) AND
@@ -31,7 +36,7 @@
 
 - name: Install base packages
   ansible.builtin.apt:
-    name: [git, python3, ppp, pppoe, hping3, iproute2]
+    name: [git, python3, ppp, pppoe, iproute2, iputils-ping]
     state: present
     update_cache: true
 
