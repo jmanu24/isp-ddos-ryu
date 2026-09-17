@@ -773,4 +773,6 @@ class BroadbandAdapter(DomainAdapter):
         return ok
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
+        print(f"[BROADBAND] DEBUG apply_mitigation ENTRY action={action.action!r} src_ip={action.src_ip!r} "
+              f"self._distributed={self._distributed!r} id(self)={id(self)}")
         return self._apply_mitigation_distributed(action) if self._distributed else self._apply_mitigation_local(action)
