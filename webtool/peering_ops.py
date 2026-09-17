@@ -54,6 +54,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from eventlet import tpool
+
 import config.settings as settings
 
 if not settings.PEERING_DISTRIBUTED_MODE:
@@ -108,8 +110,18 @@ def _ssh_br(args: list) -> subprocess.CompletedProcess:
     BatchMode=yes -- fails fast with a clear error instead of hanging on
     an interactive password prompt if key-based auth isn't set up (see
     settings.PEERING_DIST_BR_SSH_USER's own comment).
+
+    tpool.execute(), NOT a direct call -- if this webtool app's own
+    Flask-SocketIO instance ends up on eventlet's async_mode (it
+    auto-selects eventlet when available, and this venv has it for
+    ryu-manager's sake), a blocking subprocess.run() here would freeze
+    its whole reactor the same way it did ryu-manager's -- see
+    telemetry/broadband_adapter.py's own _ssh() for the confirmed
+    real-run failure and collectors/peering_flow_collector.py's _ssh_br
+    for the same fix applied there.
     """
-    return subprocess.run(
+    return tpool.execute(
+        subprocess.run,
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
          # accept-new, not the default (ask): the orchestrator role
          # already pre-seeds known_hosts via ssh-keyscan, but that task

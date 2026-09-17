@@ -7,6 +7,8 @@ import subprocess
 import time
 from typing import Dict, List, Optional
 
+from eventlet import tpool
+
 import config.settings as settings
 from core.log_format import log_line
 from core.models import TelemetryEvent, MitigationAction
@@ -49,8 +51,23 @@ def _ssh(user: str, host: str, args: list, timeout: int = _SSH_TIMEOUT_S,
     against a live run). shlex.join() re-quotes the whole args list
     into ONE shell-safe string first, so ssh's own space-joining (a
     no-op on a single already-complete argv element) can't split it
-    apart again."""
-    return subprocess.run(
+    apart again.
+
+    tpool.execute(), NOT a direct call -- confirmed on a real run:
+    ryu-manager's whole process is one eventlet-cooperative reactor
+    (its own startup warning, "1 RLock(s) were not greened", is the
+    tell), and subprocess.run() is a genuinely blocking OS-level call
+    (fork/exec/waitpid) that eventlet's monkey-patching does not make
+    cooperative the way it does plain sockets. A single slow/stuck SSH
+    call (observed: minutes, once even ~6.5 hours behind a large nfdump
+    backlog on a different domain) freezes the ENTIRE controller --
+    every domain's collect()/detect()/mitigate(), not just this one's --
+    since nothing yields back to the reactor until it returns.
+    tpool.execute() runs the call in a real OS thread from eventlet's
+    own thread pool instead, so the reactor keeps servicing every other
+    greenthread while this blocks."""
+    return tpool.execute(
+        subprocess.run,
         ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={min(timeout, 5)}",
          "-o", "StrictHostKeyChecking=accept-new",
          f"{user}@{host}", shlex.join(args)],

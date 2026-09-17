@@ -30,6 +30,8 @@ import os
 import subprocess
 from typing import Dict, List, Optional
 
+from eventlet import tpool
+
 import config.settings as settings
 
 
@@ -37,8 +39,19 @@ def _ssh_br(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
     """Same BatchMode=yes non-interactive SSH pattern as webtool/
     peering_ops.py's _ssh_br() -- duplicated rather than imported since
     that module pulls in Mininet-only code paths this collector has no
-    other reason to depend on."""
-    return subprocess.run(
+    other reason to depend on.
+
+    tpool.execute(), NOT a direct call -- confirmed on a real run: a
+    slow/backlogged nfdump-over-SSH call here (observed once taking
+    ~6.5 hours to work through an unprocessed nfcapd backlog) blocks
+    ryu-manager's entire eventlet reactor, freezing EVERY domain's
+    collect()/detect()/mitigate() until it returns, not just this
+    one's -- eventlet's monkey-patching doesn't make subprocess.run()
+    (a real blocking fork/exec/waitpid) cooperative the way it does
+    plain sockets. See telemetry/broadband_adapter.py's own _ssh() for
+    the same fix applied there."""
+    return tpool.execute(
+        subprocess.run,
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
          f"{settings.PEERING_DIST_BR_SSH_USER}@{settings.PEERING_DIST_BR_SSH_HOST}",
          *args],

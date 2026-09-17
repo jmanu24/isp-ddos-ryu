@@ -29,8 +29,11 @@ py's _ssh_br pattern (BatchMode/accept-new/ConnectTimeout) for every
 other cross-VM control call in this project.
 """
 
+import shlex
 import subprocess
 import threading
+
+from eventlet import tpool
 
 import config.settings as settings
 from simulation.bng_traffic_simulator import BngScenarioSession
@@ -136,13 +139,32 @@ class BngLifecycle:
         ConnectTimeout/the outer timeout= below still bound the wait if
         the agent is down entirely, same posture as every other _ssh_*
         helper in this project (webtool/peering_ops.py's _ssh_br).
+
+        shlex.join() the remote script into ONE argv element, NOT
+        separate ("sh", "-c", script) elements -- confirmed on a real
+        run (telemetry/broadband_adapter.py's own _ssh() hit the exact
+        same bug): ssh concatenates every argument after user@host with
+        a single plain space, so "sh", "-c", "echo 'attack syn_flood' >
+        /run/bng-agent/cmd" reassembles as `sh -c echo 'attack
+        syn_flood' > /run/bng-agent/cmd` on the remote end -- -c's
+        actual argument is just "echo", and the real command becomes an
+        unused positional parameter while bare `echo` writes an empty
+        line to the FIFO instead. tpool.execute() -- if this webtool
+        app's Flask-SocketIO instance lands on eventlet's async_mode
+        (auto-selected when available, and this venv has it for
+        ryu-manager's sake), a direct blocking subprocess.run() here
+        would freeze its whole reactor the same way it did
+        ryu-manager's; see broadband_adapter.py's _ssh() for the
+        confirmed real-run failure.
         """
+        script = f"echo {line!r} > {settings.BNG_DIST_FIFO_PATH}"
         try:
-            result = subprocess.run(
+            result = tpool.execute(
+                subprocess.run,
                 ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
                  "-o", "StrictHostKeyChecking=accept-new",
                  f"{settings.BNG_DIST_SUSCRIPTOR_SSH_USER}@{settings.BNG_DIST_SUSCRIPTOR_SSH_HOST}",
-                 "sh", "-c", f"echo {line!r} > {settings.BNG_DIST_FIFO_PATH}"],
+                 shlex.join(["sh", "-c", script])],
                 capture_output=True, text=True, timeout=10,
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
