@@ -55,7 +55,23 @@ cell_cfg:
   prach:
     prach_config_index: 1
     total_nof_ra_preambles: 64
-    nof_ssb_per_ro: 1
+    # Deliberately NOT setting nof_ssb_per_ro -- confirmed on a real run --
+    # OCUDU release_26_04 has a real upstream bug that makes explicitly
+    # setting it to "1" (copied here from the upstream app note, meant as
+    # "ratio 1") actually crash the gNB. Its CLI option has no custom
+    # string->enum converter, so CLI11 parses the raw "1" as the
+    # ssb_per_rach_occasions enum's ordinal 1 (one_forth = ratio 0.25),
+    # not the ratio "1" (ordinal 3, one). Worse, its own
+    # asn1_rrc_config_helpers.cpp compares that ratio against literal
+    # "1 / 4" -- integer division, always 0, never 0.25 -- so even the
+    # 0.25 branch can never match, and it falls through to
+    # `report_fatal_error("Invalid nof. SSB per RACH occasion value 0.25")`.
+    # Leaving this key OUT entirely skips CLI11's parsing of it altogether
+    # (the field keeps its C++ default, ssb_per_rach_occasions::one, ratio
+    # 1.0), landing on the one branch of that same function, which is
+    # correctly implemented (unlike the ==4/==8/==16 branches right after
+    # it, which are ALSO missing their `return;` and fall through even on
+    # a match -- don't set this to 4, 8, or 16 either).
     nof_cb_preambles_per_ssb: 64
   pdsch:
     mcs_table: qam64
