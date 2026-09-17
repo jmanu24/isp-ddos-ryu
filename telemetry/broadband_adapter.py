@@ -651,8 +651,10 @@ class BroadbandAdapter(DomainAdapter):
         just means that subscriber stays a silent ghost a bit longer,
         not a broken unblock (the FreeRADIUS reject is already gone by
         this point either way)."""
+        print(f"[BROADBAND] kicking suscriptor for src_ip={src_ip}")
         try:
-            self._ssh_suscriptor(["sh", "-c", f"echo 'kick {src_ip}' > {settings.BNG_DIST_FIFO_PATH}"])
+            result = self._ssh_suscriptor(["sh", "-c", f"echo 'kick {src_ip}' > {settings.BNG_DIST_FIFO_PATH}"])
+            print(f"[BROADBAND] kick ssh rc={result.returncode} stderr={result.stderr.strip()!r}")
         except (OSError, subprocess.TimeoutExpired) as exc:
             print(f"[BROADBAND] cannot kick suscriptor for src_ip={src_ip}: {exc}")
 
