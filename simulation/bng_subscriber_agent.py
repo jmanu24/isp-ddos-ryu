@@ -103,11 +103,19 @@ def _iface(n: int) -> str:
 
 
 def _pidfile(n: int) -> str:
-    return f"{_DHCP_RUN_DIR}/dhclient.{_iface(n)}.pid"
+    # NOT under _DHCP_RUN_DIR -- confirmed on a real run: Ubuntu's
+    # stock dhclient AppArmor profile (/etc/apparmor.d/sbin.dhclient)
+    # only allows /run/dhclient*.pid and /run/dhclient*.lease* directly
+    # under /run/, not a subdirectory -- dhclient still gets a real
+    # lease with a custom -pf/-lf path (the DHCP exchange itself isn't
+    # gated by AppArmor), but silently fails to WRITE its pid/lease
+    # files there ("Permission denied"), breaking session_down()'s own
+    # -r (release) call, which depends on those files.
+    return f"/run/dhclient-{_iface(n)}.pid"
 
 
 def _leasefile(n: int) -> str:
-    return f"{_DHCP_RUN_DIR}/dhclient.{_iface(n)}.leases"
+    return f"/run/dhclient-{_iface(n)}.leases"
 
 
 # Source-based routing table/rule per subscriber -- what makes the
