@@ -88,6 +88,14 @@ e2:
   e2sm_rc_enabled: true
   addr: {{ ric_addr | default('10.10.0.4') }}
   port: 36421
+  # bind_addr defaults to 127.0.0.1 (confirmed via `./gnb e2 --help` on a
+  # real run) -- binding the E2 client's LOCAL SCTP endpoint to loopback
+  # while connecting OUT to ric's real network address makes the
+  # association impossible, and OCUDU's E2 client apparently fails this
+  # silently (no error at any log level we found). ric has no separate
+  # RAN-network address (unlike core5g/ran/ue), so E2 traffic stays on
+  # MGMT end to end, matching this VM's own MGMT address.
+  bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
 
 log:
   filename: /tmp/gnb.log
