@@ -153,11 +153,20 @@ class BroadbandAdapter(DomainAdapter):
     real DHCP leases, real per-subscriber source-based routing (see
     simulation/bng_subscriber_agent.py's own module docstring for why
     that routing override is needed at all), and real attack traffic
-    correctly moving a session's own ipoeN RX counters. This class's
-    own collect()/apply_mitigation() logic itself is reviewed but not
-    yet independently re-verified end-to-end against a live detection+
-    mitigation run -- cross-check against a live `bng`/`suscriptor` if
-    either misbehaves.
+    correctly moving a session's own ipoeN RX counters, plus a full
+    real detect -> block (accel-cmd terminate + FreeRADIUS reject) ->
+    unblock -> kick cycle.
+
+    Use self._logger, NOT print(), anywhere in this class -- confirmed
+    on a real run: ryu-manager's systemd unit redirects stdout to a
+    file (StandardOutput=append:/var/log/ryu-manager.log), and Python
+    fully-buffers stdout when it isn't a TTY. A plain print() call can
+    sit in that buffer indefinitely and never actually reach the file,
+    while `self._logger.warning(...)` (a real logging.StreamHandler)
+    flushes per record. This made several real bugs in this class look
+    unfixable for a long stretch of debugging: the fix code was
+    correct and running, but its own confirming print() output was
+    silently never appearing in the log at all.
     """
 
     domain_name = "broadband"
@@ -549,10 +558,10 @@ class BroadbandAdapter(DomainAdapter):
         try:
             result = self._ssh_bng(["sudo", "-n", "systemctl", "restart", "freeradius"])
         except (OSError, subprocess.TimeoutExpired) as exc:
-            print(f"[BROADBAND] freeradius restart failed: {exc}")
+            self._logger.warning(f"[BROADBAND] freeradius restart failed: {exc}")
             return False
         if result.returncode != 0:
-            print(f"[BROADBAND] freeradius restart failed: {result.stderr.strip()}")
+            self._logger.warning(f"[BROADBAND] freeradius restart failed: {result.stderr.strip()}")
             return False
         return True
 
@@ -579,7 +588,7 @@ class BroadbandAdapter(DomainAdapter):
                 lines.append(f"{mac} Auth-Type := Reject")
             self._write_users_lines(lines)
         except OSError as exc:
-            print(f"[BROADBAND] cannot update FreeRADIUS users file {self.freeradius_users_path}: {exc}")
+            self._logger.warning(f"[BROADBAND] cannot update FreeRADIUS users file {self.freeradius_users_path}: {exc}")
             return False
         return self._reload_freeradius()
 
@@ -596,7 +605,7 @@ class BroadbandAdapter(DomainAdapter):
                 self._write_users_lines(cleaned)
                 self._reload_freeradius()
         except OSError as exc:
-            print(f"[BROADBAND] cannot clear FreeRADIUS reject list {self.freeradius_users_path}: {exc}")
+            self._logger.warning(f"[BROADBAND] cannot clear FreeRADIUS reject list {self.freeradius_users_path}: {exc}")
 
     def _apply_mitigation_distributed(self, action: MitigationAction) -> bool:
         is_block = action.action in ("block", "rate_limit")
@@ -613,10 +622,10 @@ class BroadbandAdapter(DomainAdapter):
             try:
                 result = self._accel_cmd(["terminate", "ip", action.src_ip])
                 if result.returncode != 0:
-                    print(f"[BROADBAND] accel-cmd terminate ip={action.src_ip} failed: {result.stderr.strip()}")
+                    self._logger.warning(f"[BROADBAND] accel-cmd terminate ip={action.src_ip} failed: {result.stderr.strip()}")
                     ok = False
             except (OSError, subprocess.TimeoutExpired) as exc:
-                print(f"[BROADBAND] accel-cmd terminate ip={action.src_ip} failed: {exc}")
+                self._logger.warning(f"[BROADBAND] accel-cmd terminate ip={action.src_ip} failed: {exc}")
                 ok = False
 
         # The persistent FreeRADIUS reject (below) still needs the real
@@ -624,10 +633,8 @@ class BroadbandAdapter(DomainAdapter):
         # re-DHCP retry, and IP is not a stable identity across a fresh
         # lease the way Calling-Station-Id is.
         mac = self._mac_by_ip.get(action.src_ip)
-        print(f"[BROADBAND] DEBUG mac_lookup src_ip={action.src_ip!r} mac={mac!r} "
-              f"known_ips={list(self._mac_by_ip.keys())!r}")
         if mac is None:
-            print(f"[BROADBAND] cannot resolve src_ip {action.src_ip!r} to a subscriber MAC, "
+            self._logger.warning(f"[BROADBAND] cannot resolve src_ip {action.src_ip!r} to a subscriber MAC, "
                   f"session terminated but no persistent reject entry added")
             return False
 
@@ -637,7 +644,7 @@ class BroadbandAdapter(DomainAdapter):
         if not is_block:
             self._kick_subscriber(action.src_ip)
 
-        print(f"[BROADBAND] {'block' if is_block else 'unblock'} mac={mac} "
+        self._logger.warning(f"[BROADBAND] {'block' if is_block else 'unblock'} mac={mac} "
               f"(src_ip={action.src_ip}, attack_type={action.attack_type})")
         return ok
 
@@ -653,12 +660,12 @@ class BroadbandAdapter(DomainAdapter):
         just means that subscriber stays a silent ghost a bit longer,
         not a broken unblock (the FreeRADIUS reject is already gone by
         this point either way)."""
-        print(f"[BROADBAND] kicking suscriptor for src_ip={src_ip}")
+        self._logger.warning(f"[BROADBAND] kicking suscriptor for src_ip={src_ip}")
         try:
             result = self._ssh_suscriptor(["sh", "-c", f"echo 'kick {src_ip}' > {settings.BNG_DIST_FIFO_PATH}"])
-            print(f"[BROADBAND] kick ssh rc={result.returncode} stderr={result.stderr.strip()!r}")
+            self._logger.warning(f"[BROADBAND] kick ssh rc={result.returncode} stderr={result.stderr.strip()!r}")
         except (OSError, subprocess.TimeoutExpired) as exc:
-            print(f"[BROADBAND] cannot kick suscriptor for src_ip={src_ip}: {exc}")
+            self._logger.warning(f"[BROADBAND] cannot kick suscriptor for src_ip={src_ip}: {exc}")
 
     # ------------------------------------------------------------------
     # Mitigation -- Mininet mode (BNGBlaster socket + dnsmasq, unchanged)
@@ -696,11 +703,11 @@ class BroadbandAdapter(DomainAdapter):
                 return False
             result = subprocess.run([*kill_args, pid], capture_output=True, text=True, timeout=5)
             if result.returncode != 0:
-                print(f"[BROADBAND] sudo -n kill -HUP {pid} failed: {result.stderr.strip()}")
+                self._logger.warning(f"[BROADBAND] sudo -n kill -HUP {pid} failed: {result.stderr.strip()}")
                 return False
             return True
         except (OSError, subprocess.TimeoutExpired) as exc:
-            print(f"[BROADBAND] dnsmasq reload failed: {exc}")
+            self._logger.warning(f"[BROADBAND] dnsmasq reload failed: {exc}")
             return False
 
     def _read_blacklist_lines(self) -> list:
@@ -725,7 +732,7 @@ class BroadbandAdapter(DomainAdapter):
                 self._write_blacklist_lines([])
                 self._reload_dnsmasq()
         except OSError as exc:
-            print(f"[BROADBAND] cannot clear DHCP blacklist {self.dhcp_blacklist_path}: {exc}")
+            self._logger.warning(f"[BROADBAND] cannot clear DHCP blacklist {self.dhcp_blacklist_path}: {exc}")
 
     def _set_mac_blacklisted(self, mac: str, blacklisted: bool) -> bool:
         """Adds/removes "<mac>,ignore" in dnsmasq's dhcp-hostsfile, then
@@ -740,14 +747,14 @@ class BroadbandAdapter(DomainAdapter):
                 lines.append(entry)
             self._write_blacklist_lines(lines)
         except OSError as exc:
-            print(f"[BROADBAND] cannot update DHCP blacklist {self.dhcp_blacklist_path}: {exc}")
+            self._logger.warning(f"[BROADBAND] cannot update DHCP blacklist {self.dhcp_blacklist_path}: {exc}")
             return False
         return self._reload_dnsmasq()
 
     def _apply_mitigation_local(self, action: MitigationAction) -> bool:
         session_id = self._session_by_ip.get(action.src_ip)
         if session_id is None:
-            print(f"[BROADBAND] cannot resolve src_ip {action.src_ip!r} to a session-id, "
+            self._logger.warning(f"[BROADBAND] cannot resolve src_ip {action.src_ip!r} to a session-id, "
                   f"skipping {action.action}")
             return False
 
@@ -757,7 +764,7 @@ class BroadbandAdapter(DomainAdapter):
         try:
             self._call_socket(command, {"session-id": session_id})
         except (OSError, RuntimeError) as exc:
-            print(f"[BROADBAND] {command} session-id={session_id} failed: {exc}")
+            self._logger.warning(f"[BROADBAND] {command} session-id={session_id} failed: {exc}")
             ok = False
 
         mac = self._mac_by_ip.get(action.src_ip)
@@ -765,14 +772,12 @@ class BroadbandAdapter(DomainAdapter):
             if not self._set_mac_blacklisted(mac, blacklisted=is_block):
                 ok = False
         else:
-            print(f"[BROADBAND] no MAC known for src_ip {action.src_ip!r}, "
+            self._logger.warning(f"[BROADBAND] no MAC known for src_ip {action.src_ip!r}, "
                   f"DHCP blacklist not updated (session-stop/-start still applied)")
 
-        print(f"[BROADBAND] {command} session-id={session_id} (src_ip={action.src_ip}, "
+        self._logger.warning(f"[BROADBAND] {command} session-id={session_id} (src_ip={action.src_ip}, "
               f"mac={mac}, attack_type={action.attack_type})")
         return ok
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
-        print(f"[BROADBAND] DEBUG apply_mitigation ENTRY action={action.action!r} src_ip={action.src_ip!r} "
-              f"self._distributed={self._distributed!r} id(self)={id(self)}")
         return self._apply_mitigation_distributed(action) if self._distributed else self._apply_mitigation_local(action)
