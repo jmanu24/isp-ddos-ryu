@@ -117,12 +117,18 @@
     enabled: true
     state: started
 
-- name: Note about the subscriber DB -- how to actually load it
+- name: Note about the subscriber DB -- it's already automatic
+  # Corrected on a real run -- this used to say the WebUI/API had to be
+  # used by hand, but the image's own open5gs_entrypoint.sh runs
+  # `python3 add_users.py --subscriber_data ${SUBSCRIBER_DB}` directly
+  # against MongoDB on EVERY container start, no WebUI/API step needed.
+  # Confirmed via `mongosh open5gs --eval db.subscribers.countDocuments()`
+  # returning exactly the CSV's 6 rows (ue00-ue05) right after a fresh
+  # boot.
   ansible.builtin.debug:
     msg: >-
-      subscriber_db.csv is deployed to disk, but Open5GS's own docker
-      image reads it into MongoDB only via its WebUI or API, not directly
-      from the file, on every fresh container start -- confirm the 5 UEs
-      show up at http://{{ core5g_addr }}:9999 (admin/1423) after the
-      open5gs-5gc service comes up; add any missing IMSI by hand there if
-      the CSV import didn't pick it up.
+      subscriber_db.csv's 6 UEs are imported into MongoDB automatically
+      on every open5gs-5gc start (see open5gs_entrypoint.sh's own
+      add_users.py call) -- nothing to do by hand. Only touch
+      http://{{ core5g_addr }}:9999 (admin/1423) if you need to add an
+      IMSI that isn't in this file.
