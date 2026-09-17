@@ -5,6 +5,14 @@ Requires=docker.service
 
 [Service]
 WorkingDirectory=/opt/srsRAN_Project/docker
+# Confirmed on a real run -- under network_mode: host, the UPF's ogstun TUN
+# device and its addresses live in THIS VM's persistent netns instead of
+# the container's own (which used to be destroyed on every stop). On any
+# restart after the first, Open5GS's setup_tun.py tries to recreate it
+# from scratch and dies with "NetlinkError: (17, 'File exists')" because
+# it's still there from the previous run. Force a clean slate before every
+# start; "-" ignores the exit code when ogstun doesn't exist yet.
+ExecStartPre=-/sbin/ip link delete ogstun
 ExecStart=/usr/bin/docker compose up --build 5gc
 ExecStop=/usr/bin/docker compose down
 Restart=on-failure
