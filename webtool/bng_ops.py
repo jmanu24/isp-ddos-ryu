@@ -16,7 +16,7 @@ subprocess.Popen of the bngblaster binary). In distributed mode it
 never touches BngScenarioSession at all -- start_baseline/start_attack/
 stop_attack/stop_all instead SSH to the separate `suscriptor` VM and
 append one command line to simulation/bng_subscriber_agent.py's FIFO
-there (that script drives real per-subscriber PPPoE sessions against
+there (that script drives real per-subscriber IPoE sessions against
 accel-ppp on `bng`, plus real attack traffic -- see its own module
 docstring; it replaces simulation/bng_agent.py's BNGBlaster
 wrapper, see bngblaster_broadband_pipeline_status memory for why:

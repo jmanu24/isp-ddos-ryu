@@ -1,30 +1,35 @@
 """
 bng_flood.py — kernel-native TCP-SYN / UDP flood generator for the
-Broadband domain's PPPoE subscriber sessions, spawned by
-bng_subscriber_agent.py's Subscriber.start_attack() in place of
-hping3.
+Broadband domain's IPoE subscriber sessions (macvlanN interfaces),
+spawned by bng_subscriber_agent.py's Subscriber.start_attack() in place
+of hping3.
 
-Why not hping3: confirmed on a real run that hping3 cannot transmit
-ANY traffic over a `ppp-subN` interface at all, regardless of -I / -a /
-source-based policy routing. With no -I, it auto-selects an egress
-interface via its own naive heuristic (observed picking the VM's other,
-unrelated NIC instead of the correct ppp-subN one, ignoring the `ip
-rule from <subscriber-ip>` policy route that a REAL kernel route lookup
-does honor). With -I ppp-subN, it correctly identifies the interface
-(its own banner reports it) but the TX byte/packet counters never move
-past the PPP LCP/IPCP handshake baseline -- hping3 injects packets via
-a raw-socket path that assumes Ethernet L2 framing, and a PPP netdevice
-(ARPHRD_PPP) has no such framing, so the frame never actually reaches
-the wire.
+Why not hping3: confirmed on real runs that hping3 cannot reliably
+deliver traffic here at all, under EITHER access mode this project has
+used. Under an earlier PPPoE-based design (ppp-subN interfaces), with
+no -I it auto-selected the wrong egress interface via its own naive
+heuristic (observed picking the VM's other, unrelated NIC, ignoring the
+`ip rule from <subscriber-ip>` policy route a REAL kernel route lookup
+does honor); with -I ppp-subN it correctly identified the interface
+(its own banner reported it) but TX counters never moved past the PPP
+LCP/IPCP handshake baseline -- hping3 injects packets via a raw-socket
+path that assumes Ethernet L2 framing, which a PPP netdevice
+(ARPHRD_PPP) doesn't have. Under the current IPoE design (a plain
+Ethernet-type macvlanN interface, no such framing mismatch), hping3
+STILL failed with -I bound to the right interface -- its own banner and
+transmit-count claims looked normal, but the destination's BNG-side
+session interface counter never moved at all, most likely an ARP
+resolution failure in hping3's own raw-socket send path.
 
-This script sidesteps the problem entirely by never touching L2: it
-uses ordinary kernel sockets bound to the subscriber's own PPP-assigned
-IP. The kernel's real FIB lookup (ip_route_output_flow) considers the
-bound source address, correctly matches the per-subscriber `ip rule`
-that bng_subscriber_agent.py's Subscriber._add_source_route() already
-sets up, and the kernel's own PPP net_device driver performs the actual
-framing -- exactly the same mechanism that already made `ping -f` work
-correctly over these interfaces throughout this project's debugging.
+This script sidesteps the problem entirely by using ordinary kernel
+sockets bound to the subscriber's own IP instead of any raw-socket L2
+trick. The kernel's real FIB lookup (ip_route_output_flow) considers
+the bound source address, correctly matches the per-subscriber `ip
+rule` that bng_subscriber_agent.py's Subscriber._add_source_route()
+already sets up, and the kernel's own network stack performs ARP
+resolution and framing itself -- exactly the same mechanism that
+already made `ping` work correctly throughout this project's
+debugging, on every interface type it's been tried on.
 
 TCP_SYN mode does not complete the handshake: every iteration opens a
 fresh non-blocking socket, binds it to the subscriber's IP, fires one

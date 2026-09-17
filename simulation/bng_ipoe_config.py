@@ -25,9 +25,10 @@ actual generator for that protocol needs (ping's own -i/-f flags for
 ICMP, or a --pps argument to simulation/bng_flood.py for TCP_SYN/UDP).
 Kept protocol-agnostic here on purpose: this file used to store
 hping3's own rate-flag syntax directly, but hping3 turned out to be
-unusable over these PPP interfaces at all (see bng_subscriber_agent.py's
-own module docstring) and was replaced per-protocol, so a single
-generic number is the right level of detail for this config.
+unusable in this lab regardless of access mode (see
+bng_subscriber_agent.py's own module docstring) and was replaced
+per-protocol, so a single generic number is the right level of detail
+for this config.
 """
 
 SCENARIOS = (
