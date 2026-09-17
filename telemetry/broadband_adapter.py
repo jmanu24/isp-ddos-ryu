@@ -141,6 +141,13 @@ class BroadbandAdapter(DomainAdapter):
              (which every IPoE subscriber shares) -- roles/bng's own
              tasks set FreeRADIUS's `files` module `key` directive to
              `%{Calling-Station-Id}` specifically so this matches.
+          On unblock specifically, a third step: tells suscriptor's own
+          bng_subscriber_agent.py (over the same FIFO webtool/bng_ops.py
+          drives) to "kick" that subscriber into a fresh session
+          immediately, rather than leaving it to notice on its own
+          (potentially a long time later) that its old, terminate()'d
+          session is a ghost -- see _kick_subscriber()'s own docstring
+          and Subscriber.force_refresh() on the suscriptor side.
 
     Confirmed against a real run (2026-09-17): 8 real IPoE sessions,
     real DHCP leases, real per-subscriber source-based routing (see
@@ -625,9 +632,29 @@ class BroadbandAdapter(DomainAdapter):
         if not self._set_mac_rejected(mac, rejected=is_block):
             ok = False
 
+        if not is_block:
+            self._kick_subscriber(action.src_ip)
+
         print(f"[BROADBAND] {'block' if is_block else 'unblock'} mac={mac} "
               f"(src_ip={action.src_ip}, attack_type={action.attack_type})")
         return ok
+
+    def _kick_subscriber(self, src_ip: str) -> None:
+        """Tells suscriptor's bng_subscriber_agent.py to fully
+        re-establish the session at this IP -- see that module's own
+        Subscriber.force_refresh() docstring for why this is needed at
+        all: the accel-cmd terminate above (issued back when this
+        subscriber was blocked) leaves that daemon's own cached self.ip
+        pointing at a session `bng` no longer tracks, and nothing there
+        would otherwise notice until its own next DHCP lease renewal --
+        which could be a long time away. Best-effort: a failed kick
+        just means that subscriber stays a silent ghost a bit longer,
+        not a broken unblock (the FreeRADIUS reject is already gone by
+        this point either way)."""
+        try:
+            self._ssh_suscriptor(["sh", "-c", f"echo 'kick {src_ip}' > {settings.BNG_DIST_FIFO_PATH}"])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"[BROADBAND] cannot kick suscriptor for src_ip={src_ip}: {exc}")
 
     # ------------------------------------------------------------------
     # Mitigation -- Mininet mode (BNGBlaster socket + dnsmasq, unchanged)

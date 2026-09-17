@@ -59,7 +59,10 @@ not a raw L2 injection).
 Same tiny plain-text FIFO protocol as its predecessor (one command per
 line): "baseline", "attack <scenario>", "stop", "stop_all" -- driven
 over SSH by webtool/bng_ops.py's BngLifecycle in distributed mode
-(_ssh_write_fifo), unchanged on that end.
+(_ssh_write_fifo), unchanged on that end. One new command since:
+"kick <ip>", sent by telemetry/broadband_adapter.py's own
+apply_mitigation() right after a real unblock -- see
+Subscriber.force_refresh()'s own docstring for why.
 
 A background thread (see run()/_resync_loop) periodically re-checks
 every subscriber's real interface IP against what this daemon has
@@ -292,6 +295,33 @@ class Subscriber:
                 os.remove(f)
         self.ip = ""
 
+    def force_refresh(self) -> None:
+        """Fully re-establishes this subscriber's session (a real
+        DHCPRELEASE immediately followed by a fresh DHCPDISCOVER),
+        restarting whatever attack was running under the new IP.
+
+        Used when something OUTSIDE this daemon's own knowledge
+        invalidated the session server-side -- confirmed on a real run:
+        telemetry/broadband_adapter.py's own apply_mitigation() blocks a
+        subscriber via `accel-cmd terminate ip <ip>` directly on `bng`,
+        which this daemon has no way to observe. resync_ip() alone
+        doesn't catch this: the interface KEEPS its old IP locally
+        (nothing forces dhclient to notice its session died until its
+        own next lease renewal, which -- especially with a long
+        lease-time, see accel-ppp.conf.j2's own comment on why that
+        exists -- could be a long time away), so the subscriber stays a
+        silent "ghost" (an IP with no real accounting happening for it
+        at all) long after apply_mitigation()'s own unblock() removes
+        the FreeRADIUS reject that was actually keeping it out. Called
+        from the FIFO's own "kick <ip>" command, sent by
+        broadband_adapter.py right after a real unblock."""
+        attack_params = self._attack_params
+        self.session_down()
+        self.session_up()
+        if attack_params is not None and self.ip:
+            protocol, dst_port, pps, target_ip = attack_params
+            self.start_attack(protocol, dst_port, pps, target_ip)
+
     def start_attack(self, protocol: str, dst_port: int, pps: float, target_ip: str) -> None:
         self.stop_attack()
         if not self.ip:
@@ -392,6 +422,20 @@ class SubscriberPool:
             self._active_count = 0
             self._write_state()
 
+    def kick_by_ip(self, ip: str) -> None:
+        """Finds whichever subscriber currently holds `ip` and forces a
+        fresh session for it -- see Subscriber.force_refresh()'s own
+        docstring for why. Silent no-op if no subscriber currently has
+        that IP (e.g. it already resynced to a different one on its
+        own, or the FIFO command arrived late)."""
+        with self._lock:
+            for sub in self.subscribers.values():
+                if sub.ip == ip:
+                    print(f"[SUBSCRIBER] kicking {sub.iface} (was {ip}) for a fresh session", file=sys.stderr)
+                    sub.force_refresh()
+                    break
+            self._write_state()
+
     def resync_all(self) -> None:
         """Periodically called (see run()'s own background thread) to
         catch subscriber IP drift -- see Subscriber.resync_ip()'s own
@@ -449,6 +493,11 @@ def _handle_line(pool: SubscriberPool, line: str) -> None:
                 pool.launch(BASELINE_SCENARIO)
         elif cmd == "stop_all":
             pool.stop_all()
+        elif cmd == "kick" and len(parts) == 2:
+            # Sent by telemetry/broadband_adapter.py's own
+            # apply_mitigation() right after a real unblock -- see
+            # Subscriber.force_refresh()'s own docstring for why.
+            pool.kick_by_ip(parts[1])
         else:
             print(f"[SUBSCRIBER] unknown command: {line!r}", file=sys.stderr)
     except (OSError, ValueError) as exc:
