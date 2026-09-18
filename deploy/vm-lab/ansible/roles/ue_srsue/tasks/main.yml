@@ -89,6 +89,13 @@
     dest: /etc/srsran/multi_ue_scenario.grc
     mode: "0644"
 
+- name: Deploy a direct-to-gNB single UE config (no broker, diagnostic --
+        see the file's own header comment for why)
+  ansible.builtin.template:
+    src: ue_direct_zmq.conf.j2
+    dest: /etc/srsran/ue_direct_zmq.conf
+    mode: "0644"
+
 - name: Note about the 4th/5th UE and run order (manual steps)
   ansible.builtin.debug:
     msg: >-
