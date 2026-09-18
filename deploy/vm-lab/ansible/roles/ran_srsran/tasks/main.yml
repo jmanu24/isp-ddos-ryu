@@ -40,13 +40,23 @@
 # gitlab.com/ocudu/ocudu#571 -- cell_exec/pcell_executor never dispatch
 # deferred work under virtualization (confirmed on ESXi here, VirtualBox
 # in the upstream report), silently starving the gNB's own DL ZMQ
-# tx_channel of samples to send. MAC + RLC TM patches applied here, NOT
-# the RLC AM one (breaks 58 upstream unit tests per the issue). The
-# ansible.builtin.patch module is itself idempotent (dry-run check
-# first), safe to re-run.
+# tx_channel of samples to send. The ansible.builtin.patch module is
+# itself idempotent (dry-run check first), safe to re-run.
 - name: Apply the ocudu#571 executor-stall workaround (MAC + RLC TM patches)
   ansible.builtin.patch:
     src: ocudu-571-executor-stall-workaround.patch
+    basedir: /opt/ocudu
+    strip: 1
+
+# Confirmed on a real run: MAC+RLC-TM alone gets a real UE through
+# RACH/RRC Connected but PDU session establishment never completes,
+# exactly as ocudu#571 itself describes. This third patch (RLC AM) is
+# needed for a working tun_srsue interface -- accepted risk: the issue
+# says it breaks 58 of OCUDU's OWN upstream unit tests
+# (rlc_tx_am_test_each_sn_size/*), which don't run in this lab anyway.
+- name: Apply the ocudu#571 RLC AM patch (needed for PDU session establishment)
+  ansible.builtin.patch:
+    src: ocudu-571-rlc-am-workaround.patch
     basedir: /opt/ocudu
     strip: 1
 
