@@ -36,6 +36,12 @@
     dest: /opt/ocudu
     version: release_26_04
     force: false
+    # Once cloned, never touch this checkout again -- the ocudu#571
+    # workaround tasks below intentionally leave local modifications in
+    # it, which this module (with update defaulting to true) refuses to
+    # run over ("Local modifications exist ... force=no"), confirmed on
+    # a real run.
+    update: false
 
 # gitlab.com/ocudu/ocudu#571 -- cell_exec/pcell_executor never dispatch
 # deferred work under virtualization (confirmed on ESXi here, VirtualBox
