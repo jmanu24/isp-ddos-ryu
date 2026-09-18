@@ -1,0 +1,78 @@
+# Managed by Ansible (roles/ran_srsran) -- gNB config for when the UE
+# ALSO runs on this same VM (ue_srsue's roles applied here too),
+# reverting ru_sdr to loopback -- the actual documented, working
+# configuration per every OCUDU/srsRAN tutorial. Confirmed on a real
+# run: with gNB and UE on separate VMs, the ZMQ link connects (TCP
+# handshake succeeds both directions) but almost no bytes ever flow
+# past it -- identical for both srsUE and OAI's nrUE against this same
+# gNB build, isolating the cause to OCUDU's own gNB-side ZMQ driver's
+# timing over real network latency, not our addressing. AMF/E2 stay on
+# their real cross-VM addresses -- core5g and ric are still on their
+# own separate VMs, only the UE moved.
+#
+# To run: sudo ./gnb -c gnb_zmq_colocated.yaml
+
+cu_cp:
+  amf:
+    addr: {{ core5g_ran_addr | default('10.40.0.1') }}
+    port: 38412
+    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    supported_tracking_areas:
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  inactivity_timer: 7200
+
+ru_sdr:
+  device_driver: zmq
+  device_args: tx_port=tcp://127.0.0.1:2000,rx_port=tcp://127.0.0.1:2001,base_srate=11.52e6
+  srate: 11.52
+  tx_gain: 75
+  rx_gain: 75
+
+cell_cfg:
+  dl_arfcn: 368500
+  band: 3
+  channel_bandwidth_MHz: 10
+  common_scs: 15
+  plmn: "00101"
+  tac: 7
+  pdcch:
+    common:
+      ss0_index: 0
+      coreset0_index: 6
+    dedicated:
+      ss2_type: common
+      dci_format_0_1_and_1_1: false
+  prach:
+    prach_config_index: 1
+    total_nof_ra_preambles: 64
+    # See gnb_zmq.yaml.j2's own comment -- same real OCUDU upstream bug,
+    # deliberately NOT setting nof_ssb_per_ro here either.
+    nof_cb_preambles_per_ssb: 64
+  pdsch:
+    mcs_table: qam64
+  pusch:
+    mcs_table: qam64
+
+e2:
+  enable_du_e2: true
+  e2sm_kpm_enabled: true
+  e2sm_rc_enabled: true
+  addr: {{ ric_addr | default('10.10.0.4') }}
+  port: 36421
+  bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
+
+log:
+  filename: /tmp/gnb_colocated.log
+  all_level: info
+  e2ap_level: info
+  hex_max_size: 0
+
+pcap:
+  mac_enable: false
+  mac_filename: /tmp/gnb_colocated_mac.pcap
+  ngap_enable: false
+  ngap_filename: /tmp/gnb_colocated_ngap.pcap

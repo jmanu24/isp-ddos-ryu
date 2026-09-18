@@ -80,3 +80,10 @@
     src: gnb_zmq_oai.yaml.j2
     dest: /etc/srsran/gnb_zmq_oai.yaml
     mode: "0644"
+
+- name: Deploy gNB ZMQ config for when the UE runs on this same VM too
+        (see this template's own header comment for why)
+  ansible.builtin.template:
+    src: gnb_zmq_colocated.yaml.j2
+    dest: /etc/srsran/gnb_zmq_colocated.yaml
+    mode: "0644"
