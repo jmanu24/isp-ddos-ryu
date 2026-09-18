@@ -34,13 +34,17 @@
   ansible.builtin.command:
     cmd: ./build_oai -I
     chdir: /opt/openairinterface5g/cmake_targets
-    creates: /opt/openairinterface5g/cmake_targets/log/.build_oai_install_done
+    # Confirmed on a real run -- build_oai doesn't create its own "log/"
+    # dir before we'd need it for a creates: marker there, so the marker
+    # lives directly in cmake_targets/ instead, which definitely exists
+    # (it's this task's own chdir).
+    creates: /opt/openairinterface5g/cmake_targets/.build_oai_install_done
   environment:
     DEBIAN_FRONTEND: noninteractive
 
 - name: Mark build_oai -I done (it has no creates-friendly marker of its own)
   ansible.builtin.file:
-    path: /opt/openairinterface5g/cmake_targets/log/.build_oai_install_done
+    path: /opt/openairinterface5g/cmake_targets/.build_oai_install_done
     state: touch
     mode: "0644"
 
