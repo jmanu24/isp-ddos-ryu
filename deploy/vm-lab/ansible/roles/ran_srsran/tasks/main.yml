@@ -66,6 +66,21 @@
     basedir: /opt/ocudu
     strip: 1
 
+# Confirmed on a real run: even with the 3 patches above, a real UE gets
+# all the way through Registration Request/Authentication/Security Mode
+# Complete (previously unseen), but the AMF's next DownlinkNASTransport
+# (Registration Accept) reaches the gNB's NGAP/CU-CP layer fine and then
+# never reaches the UE -- a FOURTH executor-stall site NOT covered by
+# ocudu#571 itself, found by pattern-matching the same
+# ctrl_exec/pcell_executor.defer()/execute() anti-pattern in the DU's own
+# F1AP receive path (f1ap_du_impl::handle_message, the in-process
+# CU-to-DU handoff in OCUDU's fused CU+DU+RU binary).
+- name: Apply the ocudu#571-pattern F1AP-DU workaround (DL NAS/RRC forwarding)
+  ansible.builtin.patch:
+    src: ocudu-571-f1ap-du-workaround.patch
+    basedir: /opt/ocudu
+    strip: 1
+
 - name: Create build directory
   ansible.builtin.file:
     path: /opt/ocudu/build
