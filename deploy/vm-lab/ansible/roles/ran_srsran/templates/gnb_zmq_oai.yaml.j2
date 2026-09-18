@@ -1,0 +1,68 @@
+# Managed by Ansible (roles/ran_srsran) -- OCUDU gNB config for pairing
+# with the OAI nrUE (roles/ue_oai), verbatim from OCUDU's own official
+# tutorial (docs.ocudu.org/tutorials/oaiue/), adapted for this lab's
+# cross-VM addressing. SEPARATE from gnb_zmq.yaml (srsUE's config) --
+# band/numerology/gain are all different and NOT interchangeable; don't
+# merge these two files. See ue_oai's own role comment for why this
+# alternative to srsUE exists at all.
+#
+# To run: sudo ./gnb -c gnb_zmq_oai.yaml
+
+cu_cp:
+  amf:
+    addr: {{ core5g_ran_addr | default('10.40.0.1') }}
+    port: 38412
+    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    supported_tracking_areas:
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  inactivity_timer: 7200
+
+ru_sdr:
+  device_driver: zmq
+  # Each side uses its OWN real address for the channel IT owns --
+  # matching the confirmed-working community pattern for srsRAN's own
+  # cross-host ZMQ example (10.53.1.1/10.53.1.2, not a wildcard bind),
+  # since OAI's own docs don't specify bind/connect semantics
+  # explicitly for this radio driver.
+  device_args: tx_port=tcp://{{ ran_ran_addr | default('10.40.0.2') }}:4556,rx_port=tcp://{{ ue_ran_addr | default('10.40.0.3') }}:4557,base_srate=23.04e6
+  srate: 23.04
+  # -12dB, NOT this file's own srsUE-pairing sibling's 75/40 -- OCUDU's
+  # own tutorial: "OCUDU TX is designed to drive DAC hardware with a
+  # signal at full-scale...OAI uses fixed point FFT, requiring input
+  # well below full scale."
+  tx_gain: -12
+  rx_gain: 0
+
+cell_cfg:
+  dl_arfcn: 632628
+  band: 78
+  channel_bandwidth_MHz: 20
+  common_scs: 30
+  plmn: "00101"
+  tac: 7
+  tdd_ul_dl_cfg:
+    dl_ul_tx_period: 5
+    nof_dl_slots: 3
+    nof_dl_symbols: 10
+    nof_ul_slots: 1
+    nof_ul_symbols: 2
+  csi:
+    csi_rs_enabled: true
+  pucch:
+    nof_cell_csi_res: 1
+
+log:
+  filename: /tmp/gnb_oai.log
+  all_level: info
+  e2ap_level: info
+  hex_max_size: 0
+
+pcap:
+  mac_enable: false
+  mac_filename: /tmp/gnb_oai_mac.pcap
+  ngap_enable: false
+  ngap_filename: /tmp/gnb_oai_ngap.pcap

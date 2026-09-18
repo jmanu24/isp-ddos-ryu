@@ -73,3 +73,10 @@
     src: gnb_zmq.yaml.j2
     dest: /etc/srsran/gnb_zmq.yaml
     mode: "0644"
+
+- name: Deploy gNB ZMQ config for pairing with the OAI UE instead (see
+        ue_oai role and this template's own header comment for why)
+  ansible.builtin.template:
+    src: gnb_zmq_oai.yaml.j2
+    dest: /etc/srsran/gnb_zmq_oai.yaml
+    mode: "0644"

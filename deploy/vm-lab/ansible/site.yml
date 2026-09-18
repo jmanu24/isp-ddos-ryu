@@ -41,9 +41,9 @@
   hosts: ran_srsran
   roles: [ran_srsran]
 
-- name: UE (5x srsUE namespaces + GNU-Radio broker)
+- name: UE (5x srsUE namespaces + GNU-Radio broker, plus an OAI nrUE alternative)
   hosts: ue_srsue
-  roles: [ue_srsue]
+  roles: [ue_srsue, ue_oai]
 
 - name: PE (Open vSwitch, OpenFlow-controlled by the orchestrator)
   hosts: pe_ovs

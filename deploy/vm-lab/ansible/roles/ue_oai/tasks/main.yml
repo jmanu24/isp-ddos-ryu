@@ -1,0 +1,73 @@
+---
+# ue_oai role -- OAI (Duranta OpenAirInterface) nrUE, an alternative to
+# ue_srsue's srsRAN_4G-based srsUE for this lab's cross-VM gNB<->UE ZMQ
+# link. Added because srsUE never completes PHY sync when gNB and UE are
+# on different VMs -- confirmed on a real run: ZMQ TCP connections
+# ESTABLISH cleanly (both directions), basic network health is fine
+# (ping, full-MTU, fragmented-large-payload all 0% loss), yet almost no
+# bytes ever flow past the initial handshake, identical across every
+# topology/ordering/config tried (broker, direct 1:1, fresh restarts).
+# Matches a known, unresolved community report with the exact same
+# symptom: github.com/srsran/srsRAN_Project/issues/1467 ("srsUE hangs at
+# startup without attaching, tun_srsue not created", separate
+# containers, no fix ever posted, repo now archived).
+#
+# OCUDU's own tutorial (docs.ocudu.org/tutorials/oaiue/) requires OAI
+# 2026.w25 or later for ZMQ compatibility -- pinned to 2026.w29, the
+# earliest confirmed-existing tag at or after that.
+- name: Install build dependencies (git; build_oai's own -I step below
+        handles the rest)
+  ansible.builtin.apt:
+    name: [git, ninja-build]
+    state: present
+    update_cache: true
+
+- name: Clone Duranta OpenAirInterface5G (OAI's successor, matches OCUDU's
+        own successor-project relationship to srsRAN)
+  ansible.builtin.git:
+    repo: https://github.com/duranta-project/openairinterface5g.git
+    dest: /opt/openairinterface5g
+    version: "2026.w29"
+    force: false
+
+- name: Install OAI's own prerequisites (build_oai -I)
+  ansible.builtin.command:
+    cmd: ./build_oai -I
+    chdir: /opt/openairinterface5g/cmake_targets
+    creates: /opt/openairinterface5g/cmake_targets/log/.build_oai_install_done
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Mark build_oai -I done (it has no creates-friendly marker of its own)
+  ansible.builtin.file:
+    path: /opt/openairinterface5g/cmake_targets/log/.build_oai_install_done
+    state: touch
+    mode: "0644"
+
+- name: Build nrUE only (we use OCUDU for the gNB side, not OAI's own)
+  ansible.builtin.command:
+    cmd: ./build_oai --nrUE --ninja
+    chdir: /opt/openairinterface5g/cmake_targets
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Deploy OAI UE ZMQ config (real cross-VM addresses, see the
+        file's own header comment)
+  ansible.builtin.template:
+    src: oaiue_zmq.conf.j2
+    dest: /etc/srsran/oaiue_zmq.conf
+    mode: "0644"
+
+- name: Note about starting the OAI UE (no systemd service, same as
+        ran_srsran/ric_flexric)
+  ansible.builtin.debug:
+    msg: >-
+      Binary is at
+      /opt/openairinterface5g/cmake_targets/ran_build/build/nr-uesoftmodem.
+      Must run from that exact directory (uecap_file's path in
+      oaiue_zmq.conf.j2 is relative to it) -- sudo
+      ./nr-uesoftmodem -O /etc/srsran/oaiue_zmq.conf. Needs the gNB
+      running with the matching OAI-compatible cell config
+      (ran_srsran's gnb_zmq_oai.yaml, band 78/TDD/20MHz -- NOT the
+      default gnb_zmq.yaml, which is band 3/FDD for srsUE), started
+      first.
