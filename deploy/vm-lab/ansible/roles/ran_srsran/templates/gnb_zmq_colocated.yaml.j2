@@ -46,9 +46,15 @@ cell_cfg:
   pdcch:
     common:
       ss0_index: 0
-      # Matches docs.ocudu.org/tutorials/srsue/ for this exact
-      # band/bandwidth/scs -- was 6, tutorial uses 12.
-      coreset0_index: 12
+      # Tried 12 (docs.ocudu.org/tutorials/srsue/'s value) -- confirmed
+      # on a real run this is actually INVALID for this exact
+      # band/bandwidth/scs: "Unable to derive a valid SSB pointA and
+      # k_SSB for CORESET#0 index=12, SearchSpace#0 index=0 and cell
+      # bandwidth=10Mhz" (hard rejection, gNB refuses to start). The
+      # tutorial's scraped value doesn't apply to this exact
+      # dl_arfcn/bandwidth/scs combination -- 6 is the value confirmed
+      # working (SIB1 generated, AMF connected) on this cell_cfg.
+      coreset0_index: 6
     dedicated:
       ss2_type: common
       dci_format_0_1_and_1_1: false
