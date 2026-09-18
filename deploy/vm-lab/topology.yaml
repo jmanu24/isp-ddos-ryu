@@ -198,7 +198,14 @@ vms:
     role: ue_srsue
     template: ubuntu
     vcpu: 2
-    ram_mb: 2048
+    # 2048 was a real undersize -- confirmed on a real run -- each srsue
+    # instance uses ~600-900MB RSS, and running just 3 (of the planned 5)
+    # concurrently made the kernel OOM-killer kill one outright ("Out of
+    # memory: Killed process ... (srsue)"). ric/core5g/ran all get 4096
+    # for a SINGLE heavy process each; this role runs several
+    # concurrently plus the GNU-Radio broker, so it needs more, not the
+    # same or less.
+    ram_mb: 8192
     disk_gb: 10
     interfaces:
       - {network: MGMT, ip: "10.10.0.8"}
