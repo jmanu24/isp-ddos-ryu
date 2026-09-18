@@ -37,6 +37,19 @@
     version: release_26_04
     force: false
 
+# gitlab.com/ocudu/ocudu#571 -- cell_exec/pcell_executor never dispatch
+# deferred work under virtualization (confirmed on ESXi here, VirtualBox
+# in the upstream report), silently starving the gNB's own DL ZMQ
+# tx_channel of samples to send. MAC + RLC TM patches applied here, NOT
+# the RLC AM one (breaks 58 upstream unit tests per the issue). The
+# ansible.builtin.patch module is itself idempotent (dry-run check
+# first), safe to re-run.
+- name: Apply the ocudu#571 executor-stall workaround (MAC + RLC TM patches)
+  ansible.builtin.patch:
+    src: ocudu-571-executor-stall-workaround.patch
+    basedir: /opt/ocudu
+    strip: 1
+
 - name: Create build directory
   ansible.builtin.file:
     path: /opt/ocudu/build
