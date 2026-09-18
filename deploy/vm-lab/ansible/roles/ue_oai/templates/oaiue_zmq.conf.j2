@@ -32,7 +32,14 @@ zmq = (
 r               = 51;
 numerology      = 1;
 band            = 78;
-C               = 3489420000;
+# Confirmed on a real run -- a bare "3489420000" (exceeds INT32_MAX)
+# gets parsed by libconfig as a 32-bit int and overflows: exactly
+# 3489420000 - 2^32 = -805547296, matching the crash
+# ("Undefined Frequency Range for frequency -805547296 Hz") to the
+# integer. Needs the "L" suffix to force 64-bit parsing -- this is a
+# real libconfig gotcha, not specific to OAI. ue-scan-carrier was NOT
+# the cause (ruled out: identical crash at 0 and 1).
+C               = 3489420000L;
 ue-scan-carrier = 1;
 E               = 1;
 uecap_file      = "../../../targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports1.xml";

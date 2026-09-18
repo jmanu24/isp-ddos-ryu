@@ -48,9 +48,17 @@
     state: touch
     mode: "0644"
 
-- name: Build nrUE only (we use OCUDU for the gNB side, not OAI's own)
+- name: Build nrUE only (we use OCUDU for the gNB side, not OAI's own),
+        with ZMQ radio support
+  # -w ZMQ, NOT --build-lib -- confirmed on a real run -- --build-lib's
+  # own --help text lists a DIFFERENT set (telnetsrv, enbscope, uescope,
+  # nrscope, ldpc_aal, websrv, oai_iqplayer, imscope, imscope_record),
+  # none of them the ZMQ radio driver. Without -w ZMQ, nr-uesoftmodem
+  # builds fine but crashes at runtime: "liboai_zmqdevif.so: cannot open
+  # shared object file" (radio/zmq/CMakeLists.txt's target never gets
+  # included in the build without this flag).
   ansible.builtin.command:
-    cmd: ./build_oai --nrUE --ninja
+    cmd: ./build_oai --nrUE -w ZMQ --ninja
     chdir: /opt/openairinterface5g/cmake_targets
   environment:
     DEBIAN_FRONTEND: noninteractive
