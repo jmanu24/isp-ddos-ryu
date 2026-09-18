@@ -233,6 +233,7 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "core5g_ran_addr": net_ip("core5g", "RAN"),
         "ran_mgmt_addr": mgmt_ip("ran"),
         "ran_ran_addr": net_ip("ran", "RAN"),
+        "ue_ran_addr": net_ip("ue", "RAN"),
         "ric_addr": mgmt_ip("ric"),
         "orchestrator_addr": mgmt_ip("orchestrator"),
         "br_mgmt_addr": mgmt_ip("br"),

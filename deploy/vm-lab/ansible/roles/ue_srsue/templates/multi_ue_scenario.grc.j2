@@ -339,7 +339,13 @@ blocks:
 - name: zeromq_rep_sink_0_1
   id: zeromq_rep_sink
   parameters:
-    address: tcp://127.0.0.1:2001
+    # Managed by Ansible (roles/ue_srsue) -- this is the broker's OWN
+    # bind for the gNB's rx_port to connect into. Confirmed on a real
+    # run -- gNB and this broker are on DIFFERENT VMs (ran vs ue), so
+    # 127.0.0.1 (verbatim from srsRAN's single-PC tutorial) can never
+    # be reached by the remote gNB; 0.0.0.0 binds every interface,
+    # matching gnb_zmq.yaml.j2's rx_port pointing at ue_ran_addr.
+    address: tcp://0.0.0.0:2001
     affinity: ''
     alias: ''
     comment: ''
@@ -377,7 +383,11 @@ blocks:
 - name: zeromq_req_source_0
   id: zeromq_req_source
   parameters:
-    address: tcp://127.0.0.1:2000
+    # Managed by Ansible (roles/ue_srsue) -- connects OUT to the gNB's
+    # own tx_port bind. Confirmed on a real run -- same cross-VM issue
+    # as the rep_sink above, needs the gNB's real RAN-network address,
+    # not the tutorial's same-host 127.0.0.1.
+    address: tcp://{{ ran_ran_addr | default('10.40.0.2') }}:2000
     affinity: ''
     alias: ''
     comment: ''

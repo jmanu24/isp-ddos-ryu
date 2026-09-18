@@ -33,7 +33,13 @@ cu_cp:
 
 ru_sdr:
   device_driver: zmq
-  device_args: tx_port=tcp://127.0.0.1:2000,rx_port=tcp://127.0.0.1:2001,base_srate=11.52e6
+  # tx_port binds (0.0.0.0, every interface) for the UE broker (a
+  # DIFFERENT VM) to connect in; rx_port connects OUT to the broker's
+  # own bind on ue_ran_addr. Confirmed on a real run -- both were
+  # 127.0.0.1 (verbatim from srsRAN's single-PC tutorial), which only
+  # works when gNB and the UE broker share one machine -- see
+  # ue_srsue's multi_ue_scenario.grc.j2 for the matching broker-side fix.
+  device_args: tx_port=tcp://0.0.0.0:2000,rx_port=tcp://{{ ue_ran_addr | default('10.40.0.3') }}:2001,base_srate=11.52e6
   srate: 11.52
   tx_gain: 75
   rx_gain: 75

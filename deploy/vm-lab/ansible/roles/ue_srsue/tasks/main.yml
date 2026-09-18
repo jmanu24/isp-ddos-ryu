@@ -79,10 +79,13 @@
     mode: "0644"
   loop: "{{ range(1, 6) | list }}"
 
-- name: Deploy the GNU-Radio broker flow graph (REAL file, verbatim from
-        srsRAN's own docs repo -- .config/multi_ue/multi_ue_scenario.grc)
-  ansible.builtin.copy:
-    src: multi_ue_scenario.grc
+- name: Deploy the GNU-Radio broker flow graph (based on srsRAN's own docs
+        repo .config/multi_ue/multi_ue_scenario.grc, with the two
+        gNB-facing ZMQ addresses templated -- confirmed on a real run --
+        the original file's 127.0.0.1 on both those blocks assumes gNB
+        and this broker share one PC; here they're on different VMs)
+  ansible.builtin.template:
+    src: multi_ue_scenario.grc.j2
     dest: /etc/srsran/multi_ue_scenario.grc
     mode: "0644"
 
