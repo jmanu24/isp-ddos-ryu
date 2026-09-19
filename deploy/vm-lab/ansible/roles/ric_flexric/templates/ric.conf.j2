@@ -21,10 +21,16 @@
 # E2_Port, E42_Port kept as-is -- not yet confirmed whether `dev` reads
 # these from this file at all or only via CLI flags/hardcoded
 # defaults; no error surfaced for them yet, revisit if one does.
+#
+# No quotes around the IP value -- confirmed on a real run: the
+# extraction logic trims whitespace only, not quote characters, so a
+# quoted value literally including the quote marks gets fed straight
+# to inet_pton() and fails validation the same way an empty/garbage
+# value would.
 SM_DIR = "/usr/local/lib/flexric/"
 
 # supported name = NearRT_RIC, E2_Agent, E2_Proxy_Agent, xApp
 Name = "NearRT_RIC"
-NEAR_RIC_IP = "{{ ric_addr | default('10.10.0.4') }}"
+NEAR_RIC_IP = {{ ric_addr | default('10.10.0.4') }}
 E2_Port = 36421
 E42_Port = 36422
