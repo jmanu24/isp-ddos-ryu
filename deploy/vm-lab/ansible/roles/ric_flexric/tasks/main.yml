@@ -55,6 +55,7 @@
       - pkg-config
       - bison
       - flex
+      - gdb
       - libpcre2-dev
       - libconfig-dev
       - libconfig++-dev
@@ -134,6 +135,32 @@
     dest: /opt/flexric
     version: dev
     force: false
+    # Once cloned, never touch this checkout again -- the workaround
+    # patch below intentionally leaves local modifications in it, same
+    # reasoning as ran_srsran's OCUDU checkout.
+    update: false
+
+# Confirmed on a real run: FlexRIC dev's own E2SM-RC ASN.1 decoder
+# crashes on an OCUDU RAN Function Definition field it doesn't
+# implement (see ran_srsran's gnb_zmq_colocated.yaml.j2 comment on
+# e2sm_rc_enabled -- disabled there to avoid this entirely). With RC
+# disabled gNB-side, an E2SM-KPM subscription actually reaches this
+# xApp example, but it then segfaults twice on real (not
+# hypothetical) data from OCUDU: (1) main()'s report-style loop calls
+# through a NULL entry in get_kpm_act_def[] (OCUDU advertises 5 KPM
+# report styles, this example only implements styles 1 and 4), and
+# (2) match_meas_name_type() calls through a NULL entry in
+# get_meas_value[] for a real, legitimate "NO_VALUE" measurement
+# OCUDU reports. Both are missing NULL checks in the EXAMPLE xApp
+# code, not the core FlexRIC library -- this patch adds them. This is
+# what got a real, stable, multi-minute E2SM-KPM subscribe+indicate
+# cycle working end-to-end for the first time in this project.
+- name: Apply the xapp_kpm_moni NULL-check workaround (real OCUDU data
+        segfaults this example twice otherwise)
+  ansible.builtin.patch:
+    src: flexric-kpm-moni-workaround.patch
+    basedir: /opt/flexric
+    strip: 1
 
 - name: Remove any stale build directory from a previous branch's build
   # Confirmed necessary: switching branches on an existing checkout

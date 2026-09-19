@@ -72,7 +72,20 @@ cell_cfg:
 e2:
   enable_du_e2: true
   e2sm_kpm_enabled: true
-  e2sm_rc_enabled: true
+  # false, not true -- confirmed on a real run: FlexRIC dev's own
+  # E2SM-RC ASN.1 decoder hits an explicit, hardcoded
+  # `assert(src->ric_CallProcessIDFormat_Type == NULL && "Not
+  # implemented")` in src/sm/rc_sm/dec/rc_dec_asn.c while parsing
+  # OCUDU's RC RAN Function Definition -- crashes ANY xApp that
+  # connects (even a KPM-only one, since the RIC forwards the full RAN
+  # Function Definition for ALL advertised SMs regardless of which one
+  # the xApp actually wants), not something we can work around on the
+  # xApp side. Disabling RC advertisement here avoids the crash
+  # entirely and is what got real E2SM-KPM subscribe+indicate working
+  # end-to-end for the first time in this project. Revisit if FlexRIC
+  # ever implements this ASN.1 field, or if RC-based control
+  # (throttling) is needed -- that will hit this same wall.
+  e2sm_rc_enabled: false
   addr: {{ ric_addr | default('10.10.0.4') }}
   port: 36421
   bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
