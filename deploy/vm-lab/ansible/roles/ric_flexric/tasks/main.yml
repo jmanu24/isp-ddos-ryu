@@ -1,15 +1,31 @@
 ---
-# ric_flexric role -- FlexRIC on the `br-flexric` branch (commit 1a3903a7),
-# confirmed by srsRAN Project's own official application note as the
-# branch that interoperates with a REAL srsRAN gNB's native E2 interface
-# (E2SM_KPM + E2SM_RC). Deliberately NOT the `oie-ric-taap-xapps` branch
-# used by this repo's earlier, abandoned deploy/setup_ns_oran_flexric.sh
+# ric_flexric role -- FlexRIC, now on the `dev` branch (see below for why,
+# not the previous `br-flexric`). Deliberately NOT the `oie-ric-taap-xapps`
+# branch used by this repo's earlier, abandoned deploy/setup_ns_oran_flexric.sh
 # attempt (ns-3 simulation + Orange's ns-O-RAN-flexric fork) -- that path
 # had real, confirmed bugs (a heap buffer overflow in the ns-3 fork's own
 # ASN.1 measurement-name encoding, a bad_any_cast on Test Condition
 # Value, PRB-threshold gating) entirely inside Orange's ns-3 integration
 # layer, none of them in FlexRIC itself. This role never touches ns-3,
 # e2sim-kpmv3, or mmwave-LENA-oran at all.
+#
+# BRANCH HISTORY: originally on `br-flexric` @ 1a3903a7 (srsRAN Project's
+# own official application note's recommended branch) -- confirmed on a
+# real run to hit a genuine, long-standing, NEVER-FIXED upstream bug:
+# xApp KPM subscriptions crash with "Timeout waiting for Report.
+# Connection lost with the RIC?" and the gNB never even logs receiving
+# the subscription, matching github.com/srsran/srsRAN_Project#525
+# exactly (opened 2024, repo archived 2026-06-01, no fix ever posted) --
+# an ASN.1 wire-format mismatch between br-flexric's KPM encoder and
+# srsRAN/OCUDU's decoder, not a metric-name typo (checked: the one
+# metric xapp_kpm_rc.c requests, DRB.RlcSduDelayDl, IS correctly defined
+# in OCUDU's own e2sm_kpm_metric_defs.h). Switched to `dev` -- FlexRIC's
+# actively-maintained default branch (commits as recent as the day
+# before this switch, vs br-flexric's multi-year-old pin) -- as an
+# experiment to see if its KPM encoder has since become compatible with
+# OCUDU's current E2SM-KPM decoder. NOT independently confirmed
+# compatible by any tutorial as of this writing -- revert to
+# `br-flexric`/1a3903a7 (see git history) if this doesn't help either.
 #
 # CRITICAL: this FlexRIC branch only builds with gcc-10, not Ubuntu
 # 22.04's default gcc-11 -- the compiler-alternative switch below is not
@@ -49,13 +65,18 @@
   ansible.builtin.git:
     repo: https://gitlab.eurecom.fr/mosaic5g/flexric.git
     dest: /opt/flexric
-    version: br-flexric
+    version: dev
     force: false
 
-- name: Pin to the confirmed-working commit
-  ansible.builtin.command:
-    cmd: git checkout 1a3903a7
-    chdir: /opt/flexric
+- name: Remove any stale build directory from a previous branch's build
+  # Confirmed necessary: switching branches on an existing checkout
+  # doesn't invalidate the old CMakeCache.txt, and the cmake configure
+  # task below is guarded by `creates: .../CMakeCache.txt` -- without
+  # this, a branch switch would silently keep building the OLD branch's
+  # already-configured tree.
+  ansible.builtin.file:
+    path: /opt/flexric/build
+    state: absent
 
 - name: Create build directory
   ansible.builtin.file:
@@ -63,9 +84,13 @@
     state: directory
 
 - name: Configure FlexRIC (cmake)
-  # KPM_V3, not KPM_V3_00 -- confirmed on a real run against this pinned
-  # commit's src/xApp/CMakeLists.txt: it only accepts the bare KPM_V2/
-  # KPM_V3 strings and fails with "Unknown KPM version" otherwise.
+  # KPM_V3, not KPM_V3_00 -- confirmed on a real run against br-flexric's
+  # src/xApp/CMakeLists.txt: it only accepts the bare KPM_V2/KPM_V3
+  # strings and fails with "Unknown KPM version" otherwise. NOT yet
+  # re-confirmed against `dev`'s own CMakeLists.txt -- if this cmake
+  # step fails with an unknown-option error, check
+  # /opt/flexric/src/xApp/CMakeLists.txt on `ric` directly for `dev`'s
+  # actual accepted values before guessing.
   ansible.builtin.command:
     cmd: cmake -DKPM_VERSION=KPM_V3 -DXAPP_DB=NONE_XAPP ..
     chdir: /opt/flexric/build
