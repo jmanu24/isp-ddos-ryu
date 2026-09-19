@@ -1,0 +1,73 @@
+# Managed by Ansible (roles/ran_srsran) -- OCUDU gNB config for pairing with
+# the OAI nrUE (roles/ue_oai) WHEN THE UE ALSO RUNS ON THIS SAME VM, mirroring
+# gnb_zmq_colocated.yaml.j2's own reasoning for srsUE: cross-VM ZMQ connects
+# at the TCP level but almost no bytes ever flow past it, confirmed identical
+# for both srsUE and OAI's nrUE against this gNB build -- isolated to OCUDU's
+# own gNB-side ZMQ driver's timing over real network latency, not addressing.
+# AMF/E2 stay on their real cross-VM addresses -- core5g and ric are still on
+# their own separate VMs, only the UE moved. Band/numerology/gain match
+# gnb_zmq_oai.yaml.j2 verbatim (NOT gnb_zmq_colocated.yaml.j2's srsUE-pairing
+# band 3/FDD -- these two are not interchangeable).
+#
+# To run: sudo ./gnb -c gnb_zmq_oai_colocated.yaml
+
+cu_cp:
+  amf:
+    addr: {{ core5g_ran_addr | default('10.40.0.1') }}
+    port: 38412
+    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    supported_tracking_areas:
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  inactivity_timer: 7200
+
+ru_sdr:
+  device_driver: zmq
+  device_args: tx_port=tcp://127.0.0.1:4556,rx_port=tcp://127.0.0.1:4557,base_srate=23.04e6
+  srate: 23.04
+  tx_gain: -12
+  rx_gain: 0
+
+cell_cfg:
+  dl_arfcn: 632628
+  band: 78
+  channel_bandwidth_MHz: 20
+  common_scs: 30
+  plmn: "00101"
+  tac: 7
+  tdd_ul_dl_cfg:
+    dl_ul_tx_period: 5
+    nof_dl_slots: 3
+    nof_dl_symbols: 10
+    nof_ul_slots: 1
+    nof_ul_symbols: 2
+  csi:
+    csi_rs_enabled: true
+  pucch:
+    nof_cell_csi_res: 1
+
+e2:
+  enable_du_e2: true
+  e2sm_kpm_enabled: true
+  # false, not true -- same OCUDU/FlexRIC dev RC-decoder crash documented in
+  # gnb_zmq_colocated.yaml.j2's own comment, unrelated to which UE pairs with
+  # this gNB.
+  e2sm_rc_enabled: false
+  addr: {{ ric_addr | default('10.10.0.4') }}
+  port: 36421
+  bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
+
+log:
+  filename: /tmp/gnb_oai_colocated.log
+  all_level: info
+  e2ap_level: info
+  hex_max_size: 0
+
+pcap:
+  mac_enable: false
+  mac_filename: /tmp/gnb_oai_colocated_mac.pcap
+  ngap_enable: false
+  ngap_filename: /tmp/gnb_oai_colocated_ngap.pcap

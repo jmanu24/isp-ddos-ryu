@@ -34,7 +34,25 @@
     # working, don't float on `master`.
     version: "release_23_11"
     force: false
+    # Once cloned, never touch this checkout again -- our own ZMQ req/rep
+    # reconnect fix (rf_zmq_imp_rx.c/rf_zmq_imp_trx.h) intentionally leaves
+    # local modifications in it, which this module (update defaults to
+    # true) refuses to run over ("Local modifications exist ... force=no"),
+    # same reasoning as ocudu's own clone task above.
+    update: false
 
+
+# srsRAN_4G's own ZMQ RF driver (lib/src/phy/rf/rf_zmq_imp_rx.c) has the same
+# no-recovery gap as OCUDU's own ZMQ radio driver (see ran_srsran's own
+# ocudu-zmq-reconnect.patch task for the full explanation) -- its async RX
+# thread's ZMQ_REQ socket retries recv() forever on a connection the peer
+# (the gNB) may have already recreated, never resending a fresh request.
+# Adds the same "lazy pirate" reconnect-on-stall recovery.
+- name: Apply the ZMQ REQ stalled-cycle reconnect fix (rf_zmq_async_rx_thread)
+  ansible.builtin.patch:
+    src: srsran4g-zmq-reconnect.patch
+    basedir: /opt/srsRAN_4G
+    strip: 1
 - name: Create build directory
   ansible.builtin.file:
     path: /opt/srsRAN_4G/build

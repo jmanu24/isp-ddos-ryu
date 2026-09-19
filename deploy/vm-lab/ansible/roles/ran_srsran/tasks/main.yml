@@ -81,6 +81,27 @@
     basedir: /opt/ocudu
     strip: 1
 
+
+# gitlab.com/ocudu/ocudu's own ZMQ radio driver (lib/radio/zmq/) enforces
+# strict ZMQ REQ/REP request/reply alternation with NO recovery path --
+# confirmed on a real run: once a reply is missed for any reason (a
+# transient CPU-scheduling hiccup is enough on a colocated/shared VM),
+# both radio_zmq_rx_channel and radio_zmq_tx_channel wedge in
+# "Waiting for data"/"Waiting for request" forever, since a REQ/REP
+# socket has no API-level way to resend once desynced. This adds the
+# standard ZMQ "lazy pirate" recovery (close + reopen + reconnect/rebind
+# on a 1s stall) to both channels -- confirmed on a real run to reach a
+# full NAS registration + PDU session establishment for the first time
+# in this project (previously, any single missed reply wedged the gNB
+# permanently). The same underlying gap (and the same fix) also applies
+# to ue_srsue's srsRAN_4G driver and ue_oai's OAI driver -- see those
+# roles' own patches.
+- name: Apply the ZMQ REQ/REP stalled-cycle reconnect fix (radio_zmq_rx_channel
+        + radio_zmq_tx_channel)
+  ansible.builtin.patch:
+    src: ocudu-zmq-reconnect.patch
+    basedir: /opt/ocudu
+    strip: 1
 - name: Create build directory
   ansible.builtin.file:
     path: /opt/ocudu/build
@@ -130,4 +151,11 @@
   ansible.builtin.template:
     src: gnb_zmq_colocated.yaml.j2
     dest: /etc/srsran/gnb_zmq_colocated.yaml
+    mode: "0644"
+
+- name: Deploy gNB ZMQ config for pairing with the OAI UE when it ALSO runs
+        on this same VM (see this template's own header comment for why)
+  ansible.builtin.template:
+    src: gnb_zmq_oai_colocated.yaml.j2
+    dest: /etc/srsran/gnb_zmq_oai_colocated.yaml
     mode: "0644"

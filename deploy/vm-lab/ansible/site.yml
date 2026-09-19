@@ -39,7 +39,7 @@
 
 - name: RAN (srsRAN Project gNB, ZMQ RF, plus a co-located UE for same-VM testing)
   hosts: ran_srsran
-  roles: [ran_srsran, ue_srsue]
+  roles: [ran_srsran, ue_srsue, ue_oai]
 
 - name: UE (5x srsUE namespaces + GNU-Radio broker, plus an OAI nrUE alternative)
   hosts: ue_srsue

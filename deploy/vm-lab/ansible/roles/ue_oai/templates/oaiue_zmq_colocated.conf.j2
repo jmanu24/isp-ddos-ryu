@@ -1,0 +1,40 @@
+# Managed by Ansible (roles/ue_oai) -- same as oaiue_zmq.conf.j2 but for when
+# the gNB ALSO runs on this same VM (paired with ran_srsran's
+# gnb_zmq_oai_colocated.yaml.j2), mirroring ue_srsue's own
+# ue_direct_zmq_colocated.conf.j2 reasoning: cross-VM ZMQ connects at the TCP
+# level but almost no bytes ever flow past it, confirmed identical for both
+# srsUE and OAI's nrUE -- isolated to OCUDU's own gNB-side ZMQ driver, not
+# addressing. Reuses ue00's real subscriber_db.csv IMSI/key/opc, same as the
+# non-colocated variant.
+uicc0 = {
+  imsi = "001010123456780";
+  key = "00112233445566778899aabbccddeeff";
+  opc= "63bfa50ee6523365ff14c1f45f88737d";
+  pdu_sessions = ({ dnn = "internet";
+                     nssai_sst = 1;
+                     });
+};
+
+device = {
+  name = "oai_zmqdevif";
+};
+
+# Mirrored ports vs. gnb_zmq_oai_colocated.yaml.j2's device_args: the gNB's
+# tx_port (4556) is this UE's rx_channels, and the gNB's rx_port (4557) is
+# this UE's tx_channels -- both on loopback now, not the cross-VM addresses.
+zmq = (
+  {
+    tx_channels = ( "tcp://127.0.0.1:4557" );
+    rx_channels = ( "tcp://127.0.0.1:4556" );
+  }
+);
+
+r               = 51;
+numerology      = 1;
+band            = 78;
+# "L" suffix forces 64-bit parsing -- see oaiue_zmq.conf.j2's own comment for
+# why a bare 3489420000 overflows a 32-bit libconfig int.
+C               = 3489420000L;
+ue-scan-carrier = 1;
+E               = 1;
+uecap_file      = "../../../targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports1.xml";

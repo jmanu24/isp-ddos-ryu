@@ -29,6 +29,13 @@
     dest: /opt/openairinterface5g
     version: "2026.w29"
     force: false
+    # Once cloned, never touch this checkout again -- our own ZMQ REQ
+    # reconnect fix (radio/zmq/zmq_radio.cpp, zmq_imported.h/.cpp)
+    # intentionally leaves local modifications in it, which this module
+    # (update defaults to true) refuses to run over ("Local modifications
+    # exist ... force=no"), same reasoning as ran_srsran's own OCUDU clone
+    # task.
+    update: false
 
 - name: Install OAI's own prerequisites (build_oai -I)
   ansible.builtin.command:
@@ -48,6 +55,19 @@
     state: touch
     mode: "0644"
 
+
+# OAI's own ZMQ radio driver (radio/zmq/, based on OCUDU's own zmq library
+# per this file's own header comment) has the same no-recovery gap as
+# OCUDU's own ZMQ radio driver (see ran_srsran's own ocudu-zmq-reconnect.patch
+# task for the full explanation) -- its rx_poll_thread's ZMQ_REQ socket has
+# no recovery if a send()/recv() in its request/reply cycle fails once the
+# peer (the gNB) has recreated its own socket. Adds the same "lazy pirate"
+# reconnect-on-stall recovery.
+- name: Apply the ZMQ REQ stalled-cycle reconnect fix (rx_poll_thread)
+  ansible.builtin.patch:
+    src: oai-zmq-reconnect.patch
+    basedir: /opt/openairinterface5g
+    strip: 1
 - name: Build nrUE only (we use OCUDU for the gNB side, not OAI's own),
         with ZMQ radio support
   # -w ZMQ, NOT --build-lib -- confirmed on a real run -- --build-lib's
@@ -68,6 +88,13 @@
   ansible.builtin.template:
     src: oaiue_zmq.conf.j2
     dest: /etc/srsran/oaiue_zmq.conf
+    mode: "0644"
+
+- name: Deploy OAI UE ZMQ config for when the gNB ALSO runs on this same VM
+        (see this template's own header comment for why)
+  ansible.builtin.template:
+    src: oaiue_zmq_colocated.conf.j2
+    dest: /etc/srsran/oaiue_zmq_colocated.conf
     mode: "0644"
 
 - name: Note about starting the OAI UE (no systemd service, same as
