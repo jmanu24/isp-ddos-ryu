@@ -84,15 +84,17 @@
     state: directory
 
 - name: Configure FlexRIC (cmake)
-  # KPM_V3, not KPM_V3_00 -- confirmed on a real run against br-flexric's
-  # src/xApp/CMakeLists.txt: it only accepts the bare KPM_V2/KPM_V3
-  # strings and fails with "Unknown KPM version" otherwise. NOT yet
-  # re-confirmed against `dev`'s own CMakeLists.txt -- if this cmake
-  # step fails with an unknown-option error, check
-  # /opt/flexric/src/xApp/CMakeLists.txt on `ric` directly for `dev`'s
-  # actual accepted values before guessing.
+  # KPM_V3_00, not the bare KPM_V3 that br-flexric's OLDER CMakeLists.txt
+  # accepted -- confirmed on a real run against `dev`'s own
+  # src/lib/3gpp/dec/CMakeLists.txt: it only accepts the fully-qualified
+  # KPM_V2_01/KPM_V2_03/KPM_V3_00 strings now, "Unknown KPM version"
+  # otherwise. KPM_V3_00 chosen as the newest option, matching OCUDU's
+  # own metric table's ALL_LEVELS (node/cell/UE) support, itself an
+  # O-RAN.WG3.E2SM-KPM-R003-v3.00 feature -- NOT independently confirmed
+  # this is what OCUDU's own (non-configurable, hardcoded) KPM version
+  # actually is.
   ansible.builtin.command:
-    cmd: cmake -DKPM_VERSION=KPM_V3 -DXAPP_DB=NONE_XAPP ..
+    cmd: cmake -DKPM_VERSION=KPM_V3_00 -DXAPP_DB=NONE_XAPP ..
     chdir: /opt/flexric/build
     creates: /opt/flexric/build/CMakeCache.txt
 
