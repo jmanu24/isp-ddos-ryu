@@ -92,8 +92,25 @@ e2:
 
 log:
   filename: /tmp/gnb_colocated.log
-  all_level: info
+  # warning, not info -- confirmed on a real run: at least two of OCUDU's own
+  # per-message pretty-JSON debug dumps (the DU's SIB1 dump at startup, and
+  # again around F1SetupResponse, both of which serialize the same nested
+  # ASN.1-CHOICE cell config fields -- e.g. rach-ConfigCommon) are malformed
+  # (a doubled opening brace with no key) and hang/crash the logger thread
+  # deterministically. Every run at all_level: info truncated
+  # gnb_colocated.log mid-print at the exact same byte offset, with nothing
+  # logged after (100% reproducible across 20+ runs). This was chased as a
+  # possible cause of a separate, still-unexplained RACH failure (the UE's
+  # own PRACH preambles, confirmed transmitted via its own log, are never
+  # detected/answered by this gNB) -- warning does NOT fix that RACH issue
+  # (confirmed: still reproduces with this fix in place), but the malformed
+  # JSON dump is a real, independent bug worth avoiding regardless.
+  # e2ap_level/du_level stay separately overridable below if a specific
+  # channel's info-level detail is needed again once OCUDU's own serializer
+  # bug is fixed upstream.
+  all_level: warning
   e2ap_level: info
+  du_level: warning
   hex_max_size: 0
 
 pcap:

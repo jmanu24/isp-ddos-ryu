@@ -187,7 +187,7 @@ vms:
   - name: ran
     role: ran_srsran
     template: ubuntu
-    vcpu: 4
+    vcpu: 8
     ram_mb: 8192
     disk_gb: 20
     interfaces:
