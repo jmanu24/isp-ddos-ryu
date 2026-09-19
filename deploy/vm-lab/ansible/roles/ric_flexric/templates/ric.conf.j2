@@ -1,15 +1,25 @@
 # Managed by Ansible (roles/ric_flexric) -- `make install`'s own sample
-# config ships NearRT_RIC_IP = "127.0.0.1" (confirmed on a real run: found
+# config ships an IP of "127.0.0.1" (confirmed on a real run: found
 # at /usr/local/etc/flexric/ric.conf right after install), which is
 # loopback-only and unreachable from ran_srsran's gNB, which connects
 # to this IP (ric_addr, matching gnb_zmq.yaml.j2's e2.addr) over the
 # network for its E2 SCTP association. This template replaces it with
 # this VM's own real address every run, since `make install` re-copies
 # its sample on every build regardless of what's already there.
+#
+# NEAR_RIC_IP, not NearRT_RIC_IP -- confirmed on a real run against
+# `dev`'s own src/util/conf_file.c: get_near_ric_ip() does a literal
+# string search for the needle "NEAR_RIC_IP =" (dropped the "RT" and
+# changed casing vs br-flexric's field name), "IP address string
+# invalid" otherwise (the old field name is simply never found, and the
+# uninitialized/empty buffer fails inet_pton's validation). SM_DIR,
+# Name, E2_Port, E42_Port kept as-is -- not yet confirmed whether `dev`
+# reads these from this file at all or only via CLI flags/hardcoded
+# defaults; no error surfaced for them yet, revisit if one does.
 SM_DIR = "/usr/local/lib/flexric/"
 
 # supported name = NearRT_RIC, E2_Agent, E2_Proxy_Agent, xApp
 Name = "NearRT_RIC"
-NearRT_RIC_IP = "{{ ric_addr | default('10.10.0.4') }}"
+NEAR_RIC_IP = "{{ ric_addr | default('10.10.0.4') }}"
 E2_Port = 36421
 E42_Port = 36422
