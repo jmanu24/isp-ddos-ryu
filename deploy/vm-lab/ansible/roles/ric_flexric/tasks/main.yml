@@ -41,6 +41,7 @@
       - pkg-config
       - libconfig-dev
       - libconfig++-dev
+      - libsqlite3-dev
       - gcc-10
       - g++-10
       - git
@@ -93,8 +94,13 @@
   # O-RAN.WG3.E2SM-KPM-R003-v3.00 feature -- NOT independently confirmed
   # this is what OCUDU's own (non-configurable, hardcoded) KPM version
   # actually is.
+  #
+  # XAPP_DB=SQLITE3_XAPP, not NONE_XAPP -- confirmed on a real run: `dev`'s
+  # src/xApp/db/CMakeLists.txt dropped the NONE_XAPP option entirely
+  # (only SQLITE3_XAPP or a fatal error), needs libsqlite3-dev (added
+  # above).
   ansible.builtin.command:
-    cmd: cmake -DKPM_VERSION=KPM_V3_00 -DXAPP_DB=NONE_XAPP ..
+    cmd: cmake -DKPM_VERSION=KPM_V3_00 -DXAPP_DB=SQLITE3_XAPP ..
     chdir: /opt/flexric/build
     creates: /opt/flexric/build/CMakeCache.txt
 
