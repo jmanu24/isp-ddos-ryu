@@ -188,7 +188,7 @@ vms:
     role: ran_srsran
     template: ubuntu
     vcpu: 4
-    ram_mb: 4096
+    ram_mb: 8192
     disk_gb: 20
     interfaces:
       - {network: MGMT, ip: "10.10.0.6"}
