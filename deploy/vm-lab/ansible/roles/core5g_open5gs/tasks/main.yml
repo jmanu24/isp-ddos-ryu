@@ -132,3 +132,41 @@
       add_users.py call) -- nothing to do by hand. Only touch
       http://{{ core5g_addr }}:9999 (admin/1423) if you need to add an
       IMSI that isn't in this file.
+
+# Confirmed on a real run: a UE with a real PDU session (RACH -> RRC ->
+# PDU Session Establishment all succeeding) still got "Network is
+# unreachable" trying to reach the internet through it. Two gaps, both
+# on this VM, neither ever set up before now:
+# (1) FORWARD's default policy is DROP (Docker's own doing -- it inserts
+#     DOCKER-USER/DOCKER-FORWARD as the first jumps in FORWARD, and ogstun
+#     isn't a docker-managed interface, so traffic through it never
+#     matches any ACCEPT and falls through to the DROP policy).
+# (2) No masquerade existed for the UE pool (10.45.0.0/16, see
+#     open5gs.env.j2's UE_IP_BASE) -- so even once forwarded, a UE's
+#     packet would leave with a UE-pool source address the rest of this
+#     lab's routing (this VM's own default route via ens160, then the
+#     control node's OWN 10.10.0.0/24 masquerade -- see deploy/vm-lab/
+#     README.md's "control_node_ip" notes) has no return path for.
+# DOCKER-USER is the Docker-documented insertion point for custom
+# FORWARD rules -- it's evaluated first and, unlike raw edits to
+# FORWARD itself, survives `docker compose` restarts/reloads.
+- name: Allow forwarding for the UPF's ogstun interface (DOCKER-USER, both
+        directions -- see comment above for why this is needed)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -C DOCKER-USER -i ogstun -j ACCEPT 2>/dev/null ||
+      iptables -I DOCKER-USER -i ogstun -j ACCEPT;
+      iptables -C DOCKER-USER -o ogstun -j ACCEPT 2>/dev/null ||
+      iptables -I DOCKER-USER -o ogstun -j ACCEPT
+  changed_when: true
+  become: true
+
+- name: Masquerade the UE pool out through ens160 (see comment above for why
+        this is needed -- lands the traffic inside the control node's own
+        already-working 10.10.0.0/24 masquerade)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -t nat -C POSTROUTING -s 10.45.0.0/16 -o ens160 -j MASQUERADE 2>/dev/null ||
+      iptables -t nat -A POSTROUTING -s 10.45.0.0/16 -o ens160 -j MASQUERADE
+  changed_when: true
+  become: true
