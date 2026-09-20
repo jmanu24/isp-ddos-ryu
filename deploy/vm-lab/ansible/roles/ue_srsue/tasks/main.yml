@@ -20,6 +20,12 @@
       - libzmq3-dev
       - gnuradio
       - git
+      # For running the compiled multi_ue_scenario.grc headlessly (see
+      # this role's own "Compile the GNU-Radio broker" task below) --
+      # gnuradio-companion's own generated flowgraph is a Qt app
+      # (generate_options: qt_gui in the .grc itself), which needs a
+      # display even though nothing here ever needs to actually SEE it.
+      - xvfb
     state: present
     update_cache: true
 
@@ -106,6 +112,42 @@
     src: multi_ue_scenario.grc.j2
     dest: /etc/srsran/multi_ue_scenario.grc
     mode: "0644"
+  register: multi_ue_grc
+
+- name: Create /opt/multi_ue_scenario (grcc's own -o target directory)
+  ansible.builtin.file:
+    path: /opt/multi_ue_scenario
+    state: directory
+
+- name: Check whether the broker was already compiled
+  ansible.builtin.stat:
+    path: /opt/multi_ue_scenario/multi_ue_scenario.py
+  register: multi_ue_py
+
+- name: Compile the GNU-Radio broker flow graph to a standalone script
+  # Confirmed on a real run: `grcc` (GNU Radio Companion Compiler, ships
+  # with the gnuradio package) turns the .grc into a plain Python script
+  # using the gnuradio runtime -- no gnuradio-companion GUI needed to
+  # RUN it, only to edit it. This replaces the previously-documented
+  # "open in gnuradio-companion and click Execute" manual step with
+  # `xvfb-run -a python3 /opt/multi_ue_scenario/multi_ue_scenario.py`
+  # (started LAST, after the gNB and all srsue instances -- see this
+  # role's own "manual steps" debug task above for why).
+  #
+  # `or not multi_ue_py.stat.exists` -- confirmed necessary on a real
+  # run: gating solely on `multi_ue_grc.changed` skips this forever on
+  # any run where the .grc template's rendered content happens to be
+  # byte-identical to what's already deployed, EVEN on a host that has
+  # never actually run grcc yet (e.g. /opt/multi_ue_scenario/ existing
+  # but empty) -- ansible.builtin.template correctly reports "ok", not
+  # "changed", in that case, so `multi_ue_grc.changed` alone under-fires.
+  ansible.builtin.command:
+    cmd: grcc /etc/srsran/multi_ue_scenario.grc -o /opt/multi_ue_scenario
+  when: multi_ue_grc.changed or not multi_ue_py.stat.exists
+  changed_when: true
+  # grcc itself has no reliable idempotent "nothing to do" signal --
+  # `when` above already limits this to template-content changes.
+  changed_when: true
 
 - name: Deploy a direct-to-gNB single UE config (no broker, diagnostic --
         see the file's own header comment for why)
@@ -121,18 +163,46 @@
     dest: /etc/srsran/ue_direct_zmq_colocated.conf
     mode: "0644"
 
-- name: Note about the 4th/5th UE and run order (manual steps)
+- name: Note about the 4th/5th UE and the broker's confirmed UE-isolation gap
   ansible.builtin.debug:
     msg: >-
-      TWO manual steps this role cannot automate: (1) the deployed .grc
+      ONE manual step this role still can't automate: the deployed .grc
       only wires up 3 UEs (srsRAN's own documented limit for this
       example) -- to actually use UE4/UE5, open
       /etc/srsran/multi_ue_scenario.grc in `gnuradio-companion`, duplicate
       UE3's signal-path blocks twice more, and rewire them to ports
       2401/2400 and 2501/2500 (matching ue4/ue5_zmq.conf's own ports) --
       this needs interactive GUI editing, not something worth
-      hand-patching blind in raw XML. (2) Per srsRAN's own application
-      note, the ONLY correct start order is: 5G Core -> gNB -> ALL 5
-      srsue instances -> the GNU-Radio broker LAST (then click Execute
-      inside gnuradio-companion). Starting the broker early is a common
-      failure mode.
+      hand-patching blind in raw XML. Starting/run order (5G Core -> gNB
+      -> ALL srsue instances -> the broker LAST) and actually running the
+      broker headlessly ARE automated now -- see
+      ../../playbooks/test_three_ue_broker.yml. IMPORTANT, confirmed on a
+      real run of that playbook (2026-09-20): the broker runs and all 3
+      UEs individually report "RRC Connected" in their own logs, but the
+      gNB's own log shows only ONE real PRACH detection and ONE UE
+      context (ue=0, one c-rnti) ever created -- the broker does not
+      actually give each UE an isolated RF channel, so UE2/UE3's
+      "success" is a false positive with no real PDU session behind it
+      (confirmed: no tun_srsue interface ever appears in their netns).
+      Treat this multi-UE path as "runs, but only UE1 is real" until the
+      .grc's signal-combining logic is fixed to actually distinguish
+      simultaneous PRACH transmissions -- see docs/ran-testing.md.
+
+- name: Note about the direct-config UE's default route (manual step, runtime
+        only -- cannot be provisioned in advance)
+  ansible.builtin.debug:
+    msg: >-
+      A THIRD manual step, for ue_direct_zmq.conf specifically: confirmed
+      on a real run -- after a successful PDU Session Establishment,
+      pinging out through tun_srsue still fails with "Network is
+      unreachable". srsue's [gw] section creates the netns and the
+      tun_srsue interface with its assigned address, but never adds a
+      default route inside that netns -- and this can't be baked in
+      ahead of time by this role, since the netns/interface don't exist
+      until srsue is actually running. Once srsue reaches "PDU Session
+      Establishment successful", run:
+      ip netns exec ue1 ip link set lo up &&
+      ip netns exec ue1 ip route add default via <UPF's ogstun address
+      for this UE's subnet, e.g. 10.45.1.1> dev tun_srsue
+      -- see core5g_open5gs's own tasks/main.yml for the matching
+      core5g-side NAT/forwarding rules this also depends on.
