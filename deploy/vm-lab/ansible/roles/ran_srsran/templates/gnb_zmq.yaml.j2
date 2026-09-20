@@ -103,7 +103,20 @@ cell_cfg:
 e2:
   enable_du_e2: true
   e2sm_kpm_enabled: true
-  e2sm_rc_enabled: true
+  # false, not true -- confirmed on a real run: FlexRIC's own bundled
+  # xapp_kpm_moni example (examples/xApp/c/monitor/xapp_kpm_moni.c) calls
+  # abort() via an assert() while decoding the RC RAN Function this gNB
+  # advertises when e2sm_rc_enabled is true --
+  # rc_dec_asn.c:dec_ran_func_ctrl_it: "Assertion
+  # `src->ric_CallProcessIDFormat_Type == NULL && "Not implemented"'
+  # failed" -- an unimplemented ASN.1 field in THIS FlexRIC build's RC
+  # service-model decoder, unrelated to and hit before the xApp ever
+  # gets to subscribing to KPM. Since RIC Control isn't otherwise used
+  # in this lab, disabling RC sidesteps it entirely -- confirmed on a
+  # real run: with this off, xapp_kpm_moni's subscription attempt no
+  # longer crashes -- see this file's own `metrics:` block below for
+  # what was still needed after that to get real per-UE KPM data out.
+  e2sm_rc_enabled: false
   addr: {{ ric_addr | default('10.10.0.4') }}
   port: 36421
   # bind_addr defaults to 127.0.0.1 (confirmed via `./gnb e2 --help` on a
@@ -127,6 +140,35 @@ log:
   # agent simply never having tried.
   e2ap_level: info
   hex_max_size: 0
+
+# Without this whole block, E2SM-KPM RIC Report Style 4/5 (the per-UE,
+# matching-condition styles) silently subscribes successfully but NEVER
+# sends a single indication for it -- confirmed on a real run by tracing
+# srsRAN Project's own source: e2sm_kpm_report_service_style4's
+# collect_measurements() calls get_ues_matching_test_conditions(), which
+# only ever returns UEs found in e2sm_kpm_du_meas_provider_impl's
+# ue_aggr_rlc_metrics map -- and that map is only ever populated by
+# report_metrics(rlc_metrics), which is only ever wired up and called at
+# all when apps/units/.../o_du_high_unit_factory.cpp's
+# build_rlc_du_metrics() doesn't early-return, i.e. only when
+# metrics.layers.enable_rlc is true. Without it, every KPM indication
+# that DOES arrive is Style 1 (cell-aggregate, e2sm_kpm_impl.cpp's
+# process_action_definition_format1) -- no UE ID field exists on that
+# format at all, so there is genuinely no way to attribute KPM metrics
+# to a specific UE, not even in principle, until this is set.
+# du_report_period doesn't do this alone -- it only controls the
+# scheduler/cell-level metrics cadence; RLC metrics (and by extension
+# the per-UE KPM path) need this SEPARATE enable_rlc flag too. Confirmed
+# fixed on a real run: with both set, xapp_kpm_moni's per-UE indications
+# show "UE ID type = gNB-DU, gnb_cu_ue_f1ap = 0" and the SAME
+# DRB.UEThpDl/UEThpUl values a concurrent ping burst produced in the
+# Style 1 aggregate indication (0 -> 49/59 -> 98/89 -> 0 kbps), i.e. the
+# per-UE attribution is real, not a placeholder.
+metrics:
+  periodicity:
+    du_report_period: 1000
+  layers:
+    enable_rlc: true
 
 pcap:
   mac_enable: false
