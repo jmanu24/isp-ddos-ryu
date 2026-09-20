@@ -1,8 +1,22 @@
 ---
-# ran_srsran role -- OCUDU gNB (srsRAN Project's successor as of this
-# lab's build; CU+DU+RU fused, no F1 split), ZMQ RF driver (no SDR
-# hardware), built with the E2 interface enabled -- this is what the
-# ric_flexric role's FlexRIC actually talks to.
+# ran_srsran role -- srsRAN Project gNB (CU+DU+RU fused, no F1 split),
+# ZMQ RF driver (no SDR hardware), built with the E2 interface enabled --
+# this is what the ric_flexric role's FlexRIC actually talks to.
+#
+# Replaces OCUDU (srsRAN Project's own successor fork, used earlier in
+# this lab's build -- see this file's own git history for the RACH-
+# failure debugging session that led to trying the original project
+# instead). Not a claim that OCUDU was at fault -- srsRAN Project's own
+# README (commit 4bf1543, its own maintainer) now points users at OCUDU
+# as ITS successor, so this is a step back toward the more widely-used,
+# longer-battle-tested original, not a step forward. Same CU/CP/CU-UP/
+# DU/gNB app layout, same
+# ENABLE_EXPORT/ENABLE_ZEROMQ cmake options, same gnb binary name and
+# YAML config schema (cu_cp/ru_sdr/cell_cfg) -- this role's own
+# gnb_zmq.yaml.j2 template already targeted srsRAN Project's schema
+# before the OCUDU detour, confirmed compatible with release_25_10
+# unchanged. No UE component exists in either project -- ue_srsue stays
+# on srsRAN_4G unchanged.
 - name: Install build dependencies
   ansible.builtin.apt:
     name:
@@ -21,108 +35,103 @@
     state: present
     update_cache: true
 
-- name: Clone OCUDU (srsRAN Project's successor, Linux Foundation-governed)
-  # OCUDU replaces srsRAN_Project as of this lab's build -- confirmed via
-  # gitlab.com/ocudu/ocudu's own README/CMakeLists: same CU/CP/CU-UP/DU/
-  # gNB app layout, same ENABLE_EXPORT/ENABLE_ZEROMQ cmake options (both
-  # still option()-defined with identical names/semantics), same gnb
-  # binary name and YAML config schema (cu_cp/ru_sdr/cell_cfg) -- verified
-  # against OCUDU's own official "Using srsUE" tutorial, which pairs it
-  # with exactly the srsRAN_4G/srsUE this lab's ue_srsue role already
-  # builds (23.11+, matching our pinned release_23_11). No UE component
-  # exists in OCUDU itself -- ue_srsue stays on srsRAN_4G unchanged.
+- name: Clone srsRAN Project
   ansible.builtin.git:
-    repo: https://gitlab.com/ocudu/ocudu.git
-    dest: /opt/ocudu
-    version: release_26_04
+    repo: https://github.com/srsRAN/srsRAN_Project.git
+    dest: /opt/srsRAN_Project
+    # Pinned, not floating on main -- same reasoning as srsRAN_4G/OCUDU's
+    # own pinned checkouts. release_25_10 is the latest tagged release as
+    # of this lab's build (confirmed via `git ls-remote --tags`).
+    version: release_25_10
     force: false
-    # Once cloned, never touch this checkout again -- the ocudu#571
-    # workaround tasks below intentionally leave local modifications in
-    # it, which this module (with update defaulting to true) refuses to
-    # run over ("Local modifications exist ... force=no"), confirmed on
-    # a real run.
+    # Once cloned, never touch this checkout again -- the patch tasks
+    # below intentionally leave local modifications in it, which this
+    # module (with update defaulting to true) refuses to run over
+    # ("Local modifications exist ... force=no"), same reasoning as
+    # OCUDU's own clone task used to have.
     update: false
 
-# gitlab.com/ocudu/ocudu#571 -- cell_exec/pcell_executor never dispatch
-# deferred work under virtualization (confirmed on ESXi here, VirtualBox
-# in the upstream report), silently starving the gNB's own DL ZMQ
-# tx_channel of samples to send. The ansible.builtin.patch module is
-# itself idempotent (dry-run check first), safe to re-run.
-- name: Apply the ocudu#571 executor-stall workaround (MAC + RLC TM patches)
+# Ported from OCUDU's own ocudu-571-rlc-am-workaround.patch -- confirmed
+# on a real run that the SAME executor-stall anti-pattern this patch
+# works around (execute_and_continue_on_blocking()/defer_and_continue_on_
+# blocking() suspending forever under virtualization) is present
+# verbatim in srsRAN Project's own lib/rlc/rlc_tx_am_entity.cpp (same
+# function names, same call sites -- only line numbers/comments differ).
+# Needed for PDU session establishment (a working tun_srsue interface).
+- name: Apply the RLC AM executor-stall workaround (needed for PDU session
+        establishment)
   ansible.builtin.patch:
-    src: ocudu-571-executor-stall-workaround.patch
-    basedir: /opt/ocudu
+    src: srsran-rlc-am-executor-stall-workaround.patch
+    basedir: /opt/srsRAN_Project
     strip: 1
 
-# Confirmed on a real run: MAC+RLC-TM alone gets a real UE through
-# RACH/RRC Connected but PDU session establishment never completes,
-# exactly as ocudu#571 itself describes. This third patch (RLC AM) is
-# needed for a working tun_srsue interface -- accepted risk: the issue
-# says it breaks 58 of OCUDU's OWN upstream unit tests
-# (rlc_tx_am_test_each_sn_size/*), which don't run in this lab anyway.
-- name: Apply the ocudu#571 RLC AM patch (needed for PDU session establishment)
+# Ported from OCUDU's own ocudu-571-f1ap-du-workaround.patch -- same
+# reasoning as the RLC AM patch above, confirmed present verbatim in
+# lib/f1ap/du/f1ap_du_impl.cpp (DL NAS/RRC forwarding, the in-process
+# CU-to-DU handoff in this fused CU+DU+RU binary).
+- name: Apply the F1AP-DU executor-stall workaround (DL NAS/RRC forwarding)
   ansible.builtin.patch:
-    src: ocudu-571-rlc-am-workaround.patch
-    basedir: /opt/ocudu
+    src: srsran-f1ap-du-executor-stall-workaround.patch
+    basedir: /opt/srsRAN_Project
     strip: 1
 
-# Confirmed on a real run: even with the 3 patches above, a real UE gets
-# all the way through Registration Request/Authentication/Security Mode
-# Complete (previously unseen), but the AMF's next DownlinkNASTransport
-# (Registration Accept) reaches the gNB's NGAP/CU-CP layer fine and then
-# never reaches the UE -- a FOURTH executor-stall site NOT covered by
-# ocudu#571 itself, found by pattern-matching the same
-# ctrl_exec/pcell_executor.defer()/execute() anti-pattern in the DU's own
-# F1AP receive path (f1ap_du_impl::handle_message, the in-process
-# CU-to-DU handoff in OCUDU's fused CU+DU+RU binary).
-- name: Apply the ocudu#571-pattern F1AP-DU workaround (DL NAS/RRC forwarding)
+# NOT ported (yet): OCUDU's own MAC/RLC-TM executor-stall workaround
+# (ocudu-571-executor-stall-workaround.patch, targeting
+# lib/mac/mac_dl/mac_cell_processor.cpp). That file diverged too much
+# from OCUDU's patched version for the old patch to apply (4/4 hunks
+# failed) -- the same execute_and_continue_on_blocking()/
+# defer_and_continue_on_blocking() call sites DO exist here too
+# (mac_cell_processor::start()/add_ue(), confirmed via grep), so the
+# underlying bug may still be present, but hand-porting it blind wasn't
+# worth it before testing whether it actually reproduces on this exact
+# codebase -- if the gNB hangs at cell activation (the same symptom
+# ocudu#571 describes), port this one too.
+
+# srsRAN Project's own ZMQ radio driver (lib/radio/zmq/) has NO recovery
+# path for a desynced ZMQ REQ/REP pair (confirmed via grep: no
+# reconnect()/rebind() method exists in either channel) -- same gap
+# OCUDU had before its own zmq-reconnect patch, and the same "lazy
+# pirate" fix applies almost unchanged (channel_description's members,
+# state_fsm's has_wait_expired()/data_received() API, etc. are all
+# identical to OCUDU's -- only the constructor's parameter naming and a
+# couple of namespaces differ). Bundled together with the EAGAIN
+# busy-loop throttle from the same debugging session (see that patch's
+# own history for the full story) since both target the same two files.
+- name: Apply the ZMQ REQ/REP reconnect fix + EAGAIN busy-loop throttle
+        (radio_zmq_rx_channel + radio_zmq_tx_channel)
   ansible.builtin.patch:
-    src: ocudu-571-f1ap-du-workaround.patch
-    basedir: /opt/ocudu
+    src: srsran-zmq-reconnect.patch
+    basedir: /opt/srsRAN_Project
     strip: 1
 
-
-# gitlab.com/ocudu/ocudu's own ZMQ radio driver (lib/radio/zmq/) enforces
-# strict ZMQ REQ/REP request/reply alternation with NO recovery path --
-# confirmed on a real run: once a reply is missed for any reason (a
-# transient CPU-scheduling hiccup is enough on a colocated/shared VM),
-# both radio_zmq_rx_channel and radio_zmq_tx_channel wedge in
-# "Waiting for data"/"Waiting for request" forever, since a REQ/REP
-# socket has no API-level way to resend once desynced. This adds the
-# standard ZMQ "lazy pirate" recovery (close + reopen + reconnect/rebind
-# on a 1s stall) to both channels -- confirmed on a real run to reach a
-# full NAS registration + PDU session establishment for the first time
-# in this project (previously, any single missed reply wedged the gNB
-# permanently). The same underlying gap (and the same fix) also applies
-# to ue_srsue's srsRAN_4G driver and ue_oai's OAI driver -- see those
-# roles' own patches.
-- name: Apply the ZMQ REQ/REP stalled-cycle reconnect fix (radio_zmq_rx_channel
-        + radio_zmq_tx_channel)
-  ansible.builtin.patch:
-    src: ocudu-zmq-reconnect.patch
-    basedir: /opt/ocudu
-    strip: 1
 - name: Create build directory
   ansible.builtin.file:
-    path: /opt/ocudu/build
+    path: /opt/srsRAN_Project/build
     state: directory
 
 - name: Configure (cmake, ZMQ + export/E2 enabled)
   ansible.builtin.command:
     cmd: cmake ../ -DENABLE_EXPORT=ON -DENABLE_ZEROMQ=ON
-    chdir: /opt/ocudu/build
-    creates: /opt/ocudu/build/CMakeCache.txt
+    chdir: /opt/srsRAN_Project/build
+    creates: /opt/srsRAN_Project/build/CMakeCache.txt
 
-- name: Build (this takes a while -- gNB + all libraries)
+- name: Build (this takes a while -- ~15-20 min on 8 vCPUs -- gnb target only,
+        not the full project)
   ansible.builtin.command:
-    cmd: make -j{{ ansible_processor_vcpus | default(4) }}
-    chdir: /opt/ocudu/build
+    cmd: make -j{{ ansible_processor_vcpus | default(4) }} gnb
+    chdir: /opt/srsRAN_Project/build
 
 - name: Install
   ansible.builtin.command:
     cmd: make install
-    chdir: /opt/ocudu/build
+    chdir: /opt/srsRAN_Project/build
   become: true
+  # This step alone can run past ansible's default synchronous timeout
+  # expectations on a slow disk -- confirmed on a real run needing to be
+  # relaunched detached (nohup) when a 180s async window cut it off
+  # mid-install. async/poll here gives it real headroom instead.
+  async: 600
+  poll: 10
 
 - name: Create /etc/srsran
   # ansible.builtin.template doesn't create parent dirs -- confirmed on a

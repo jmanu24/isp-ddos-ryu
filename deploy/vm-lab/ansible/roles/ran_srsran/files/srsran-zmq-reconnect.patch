@@ -1,0 +1,292 @@
+--- a/lib/radio/zmq/radio_zmq_rx_channel.h
++++ b/lib/radio/zmq/radio_zmq_rx_channel.h
+@@ -45,16 +45,30 @@
+   const std::chrono::microseconds circ_buffer_try_push_sleep{1};
+   /// Wait time after a buffer try pop failed.
+   const std::chrono::microseconds circ_buffer_try_pop_sleep{1};
++  /// Wait time after a non-blocking recv found nothing to read (EAGAIN) -- without this,
++  /// once the peer stops replying (e.g. the UE tears down its RRC connection), run_async()'s
++  /// defer-and-retry loop has nothing else pacing it, since receive_response() itself returns
++  /// immediately on EAGAIN with no backoff -- confirmed on a real run (against OCUDU, srsRAN
++  /// Project's own successor/fork of this same file) via strace: thousands of zmq_recv()/poll()
++  /// syscalls/second indefinitely, a full CPU core burned with no forward progress.
++  const std::chrono::microseconds zmq_recv_eagain_sleep{500};
+   /// Indicates the stream identifier. Used for notifying events.
+   unsigned stream_id;
+   /// Channel identifier. Used for notifying events.
+   unsigned channel_id;
+   /// Indicates the current state of the stream.
+   radio_zmq_rx_channel_fsm state_fsm;
++  /// ZMQ context, kept so reconnect() can recreate the socket against it.
++  void* zmq_context;
+   /// ZMQ socket.
+   void* sock = nullptr;
+   /// ZMQ socket type.
+   int socket_type;
++  /// Address to connect to, kept so reconnect() can redo it.
++  std::string address;
++  /// Socket send/receive/linger timeouts, kept so reconnect() can reapply them.
++  unsigned trx_timeout_ms;
++  unsigned linger_timeout_ms;
+   /// Logger.
+   srslog::basic_logger& logger;
+   /// Stores transmit buffer.
+@@ -102,6 +116,12 @@
+ 
+   void receive_response();
+ 
++  /// Closes and reopens the socket against the same address/timeouts -- recovers a ZMQ REQ/REP
++  /// pair that has desynced (a REQ/REP socket has no API-level way to resend once desynced, so
++  /// once a reply is missed for any reason the pair wedges in "Waiting for data" forever without
++  /// this). Standard ZMQ "lazy pirate" pattern.
++  void reconnect();
++
+   void run_async();
+ 
+   void receive(span<cf_t> buffer);
+--- a/lib/radio/zmq/radio_zmq_rx_channel.cpp
++++ b/lib/radio/zmq/radio_zmq_rx_channel.cpp
+@@ -27,13 +27,17 @@
+ 
+ const std::set<int> radio_zmq_rx_channel::VALID_SOCKET_TYPES = {ZMQ_REQ};
+ 
+-radio_zmq_rx_channel::radio_zmq_rx_channel(void*                       zmq_context,
++radio_zmq_rx_channel::radio_zmq_rx_channel(void*                       zmq_context_,
+                                            const channel_description&  config,
+                                            radio_notification_handler& notification_handler_,
+                                            task_executor&              async_executor_) :
+   stream_id(config.stream_id),
+   channel_id(config.channel_id),
++  zmq_context(zmq_context_),
+   socket_type(config.socket_type),
++  address(config.address),
++  trx_timeout_ms(config.trx_timeout_ms),
++  linger_timeout_ms(config.linger_timeout_ms),
+   logger(srslog::fetch_basic_logger(config.channel_id_str, false)),
+   circular_buffer(config.buffer_size),
+   buffer(config.buffer_size * sizeof(cf_t)),
+@@ -91,6 +95,45 @@
+   state_fsm.init_successful();
+ }
+ 
++void radio_zmq_rx_channel::reconnect()
++{
++  if (sock != nullptr) {
++    zmq_close(sock);
++    sock = nullptr;
++  }
++
++  sock = zmq_socket(zmq_context, socket_type);
++  if (sock == nullptr) {
++    logger.error("Failed to reopen receiver socket ({}). {}.", address, zmq_strerror(zmq_errno()));
++    state_fsm.on_error();
++    return;
++  }
++
++  if (zmq_connect(sock, address.c_str()) == -1) {
++    logger.error("Failed to reconnect receiver socket ({}). {}.", address, zmq_strerror(zmq_errno()));
++    state_fsm.on_error();
++    return;
++  }
++
++  if (trx_timeout_ms) {
++    int timeout = trx_timeout_ms;
++    if (zmq_setsockopt(sock, ZMQ_RCVTIMEO, &timeout, sizeof(timeout)) == -1 ||
++        zmq_setsockopt(sock, ZMQ_SNDTIMEO, &timeout, sizeof(timeout)) == -1) {
++      logger.error("Failed to set timeout on reconnected socket. {}.", zmq_strerror(zmq_errno()));
++      state_fsm.on_error();
++      return;
++    }
++    timeout = linger_timeout_ms;
++    if (zmq_setsockopt(sock, ZMQ_LINGER, &timeout, sizeof(timeout)) == -1) {
++      logger.error("Failed to set linger on reconnected socket. {}.", zmq_strerror(zmq_errno()));
++      state_fsm.on_error();
++      return;
++    }
++  }
++
++  logger.info("Receiver socket reconnected ({}).", address);
++}
++
+ radio_zmq_rx_channel::~radio_zmq_rx_channel()
+ {
+   // Close socket if opened.
+@@ -154,7 +197,9 @@
+     // Error happened.
+     int err = zmq_errno();
+     if (err == EFSM || err == EAGAIN) {
+-      // Ignore timeout and FSM error.
++      // Ignore timeout and FSM error, but throttle the retry -- see zmq_recv_eagain_sleep's
++      // own comment for why this is needed.
++      std::this_thread::sleep_for(zmq_recv_eagain_sleep);
+       return;
+     }
+ 
+@@ -219,7 +264,15 @@
+ 
+   // Check if the state timer expired.
+   if (state_fsm.has_wait_expired()) {
+-    logger.info("Waiting for {}.", state_fsm.has_pending_response() ? "data" : "request");
++    bool was_waiting_for_data = state_fsm.has_pending_response();
++    logger.info("Waiting for {}.", was_waiting_for_data ? "data" : "request");
++
++    // Recover from a stalled request/response cycle instead of waiting forever -- see
++    // reconnect()'s own header comment for why this is needed and when it triggers.
++    if (was_waiting_for_data) {
++      reconnect();
++      state_fsm.data_received();
++    }
+   }
+ 
+   // Feedback task if not stopped.
+--- a/lib/radio/zmq/radio_zmq_tx_channel.h
++++ b/lib/radio/zmq/radio_zmq_tx_channel.h
+@@ -43,6 +43,9 @@
+   static const std::set<int> VALID_SOCKET_TYPES;
+   /// Wait time after a buffer try push failed.
+   const std::chrono::microseconds circ_buffer_try_push_sleep{1};
++  /// Wait time after a non-blocking recv found nothing to read (EAGAIN) -- see
++  /// radio_zmq_rx_channel.h's own zmq_recv_eagain_sleep comment for why this is needed.
++  const std::chrono::microseconds zmq_recv_eagain_sleep{500};
+   /// Maximum number of trials for binding.
+   static constexpr unsigned BIND_MAX_TRIALS = 10;
+   /// Sleep time after a bind failure in seconds.
+@@ -56,10 +59,17 @@
+   std::string channel_id_str;
+   /// Indicates the current state of the stream.
+   radio_zmq_tx_channel_fsm state_fsm;
++  /// ZMQ context, kept so rebind() can recreate the socket against it.
++  void* zmq_context;
+   /// ZMQ socket.
+   void* sock = nullptr;
+   /// ZMQ socket type.
+   int socket_type;
++  /// Address to bind to, kept so rebind() can redo it.
++  std::string address;
++  /// Socket send/receive/linger timeouts, kept so rebind() can reapply them.
++  unsigned trx_timeout_ms;
++  unsigned linger_timeout_ms;
+   /// Logger.
+   srslog::basic_logger& logger;
+   /// Stores transmit buffer.
+@@ -117,6 +127,10 @@
+ 
+   void send_response();
+ 
++  /// Closes and rebinds the socket against the same address/timeouts -- recovers a ZMQ REQ/REP
++  /// pair that has desynced, same reasoning as radio_zmq_rx_channel::reconnect()'s own comment.
++  void rebind();
++
+   void run_async();
+ 
+   bool align(uint64_t timestamp, std::chrono::milliseconds timeout);
+--- a/lib/radio/zmq/radio_zmq_tx_channel.cpp
++++ b/lib/radio/zmq/radio_zmq_tx_channel.cpp
+@@ -26,14 +26,18 @@
+ 
+ const std::set<int> radio_zmq_tx_channel::VALID_SOCKET_TYPES = {ZMQ_REP};
+ 
+-radio_zmq_tx_channel::radio_zmq_tx_channel(void*                       zmq_context,
++radio_zmq_tx_channel::radio_zmq_tx_channel(void*                       zmq_context_,
+                                            const channel_description&  config,
+                                            radio_notification_handler& notification_handler_,
+                                            task_executor&              async_executor_) :
+   stream_id(config.stream_id),
+   channel_id(config.channel_id),
+   channel_id_str(config.channel_id_str),
++  zmq_context(zmq_context_),
+   socket_type(config.socket_type),
++  address(config.address),
++  trx_timeout_ms(config.trx_timeout_ms),
++  linger_timeout_ms(config.linger_timeout_ms),
+   logger(srslog::fetch_basic_logger(config.channel_id_str, false)),
+   circular_buffer(config.buffer_size),
+   buffer(config.buffer_size * sizeof(cf_t)),
+@@ -124,6 +128,60 @@
+   }
+ }
+ 
++void radio_zmq_tx_channel::rebind()
++{
++  if (sock != nullptr) {
++    zmq_close(sock);
++    sock = nullptr;
++  }
++
++  sock = zmq_socket(zmq_context, socket_type);
++  if (sock == nullptr) {
++    logger.error("Failed to reopen transmitter socket ({}). {}.", address, zmq_strerror(zmq_errno()));
++    state_fsm.on_error();
++    return;
++  }
++
++  bool     bind_success     = false;
++  unsigned bind_trial_count = 0;
++  while (!bind_success && bind_trial_count != BIND_MAX_TRIALS) {
++    if (bind_trial_count != 0) {
++      zmq_sleep(BIND_FAILURE_SLEEP_SECONDS);
++    }
++    bind_success = (zmq_bind(sock, address.c_str()) == 0);
++    if (!bind_success) {
++      if (zmq_errno() != EADDRINUSE) {
++        break;
++      }
++      bind_trial_count++;
++    }
++  }
++
++  if (!bind_success) {
++    logger.error("Failed to rebind transmitter socket ({}). {}.", address, zmq_strerror(zmq_errno()));
++    state_fsm.on_error();
++    return;
++  }
++
++  if (trx_timeout_ms) {
++    int timeout = trx_timeout_ms;
++    if (zmq_setsockopt(sock, ZMQ_RCVTIMEO, &timeout, sizeof(timeout)) == -1 ||
++        zmq_setsockopt(sock, ZMQ_SNDTIMEO, &timeout, sizeof(timeout)) == -1) {
++      logger.error("Failed to set timeout on rebound socket. {}.", zmq_strerror(zmq_errno()));
++      state_fsm.on_error();
++      return;
++    }
++    timeout = linger_timeout_ms;
++    if (zmq_setsockopt(sock, ZMQ_LINGER, &timeout, sizeof(timeout)) == -1) {
++      logger.error("Failed to set linger on rebound socket. {}.", zmq_strerror(zmq_errno()));
++      state_fsm.on_error();
++      return;
++    }
++  }
++
++  logger.info("Transmitter socket rebound ({}).", address);
++}
++
+ void radio_zmq_tx_channel::receive_request()
+ {
+   // Receive Transmit request is socket type is REPLY and no request is available.
+@@ -144,7 +202,9 @@
+       // Error happened.
+       int err = zmq_errno();
+       if (err == EFSM || err == EAGAIN) {
+-        // Ignore timeout and FSM error.
++        // Ignore timeout and FSM error, but throttle the retry -- see zmq_recv_eagain_sleep's
++        // own comment for why this is needed.
++        std::this_thread::sleep_for(zmq_recv_eagain_sleep);
+       } else {
+         // This error cannot be ignored.
+         logger.error("Socket failed to receive request. {}.", zmq_strerror(zmq_errno()));
+@@ -208,7 +268,14 @@
+ 
+   // Check if the state timer expired.
+   if (state_fsm.has_wait_expired()) {
+-    logger.info("Waiting for {}.", state_fsm.has_pending_request() ? "data" : "request");
++    bool was_waiting_for_data = state_fsm.has_pending_request();
++    logger.info("Waiting for {}.", was_waiting_for_data ? "data" : "request");
++
++    // Recover a stalled wait for the peer's request (not for our own local data -- rebinding
++    // the socket wouldn't help that case) -- see rebind()'s own header comment for why.
++    if (!was_waiting_for_data) {
++      rebind();
++    }
+   }
+ 
+   // Feedback task if not stopped.
