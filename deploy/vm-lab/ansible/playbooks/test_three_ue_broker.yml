@@ -1,0 +1,131 @@
+---
+# test_three_ue_broker.yml -- multi-UE (ue1/ue2/ue3) GNU-Radio broker
+# test: gNB on `ran`, 3 srsue instances + the compiled multi_ue_scenario
+# broker all on the separate `ue` VM. Confirmed on a real run
+# (2026-09-20) that the long-documented "broker stalls after the ZMQ
+# handshake between VMs" finding was about never having actually run it
+# headless/in the right order -- it DOES run now (see ue_srsue role's
+# own grcc-compile task).
+#
+# IMPORTANT, also confirmed on that same real run: the broker running is
+# NOT the same as 3 isolated UEs. All 3 srsue instances individually log
+# "RRC Connected" with the IDENTICAL c-rnti and tti, but the gNB's own
+# log shows only ONE real PRACH detection and ONE UE context ever
+# created. UE2/UE3's "success" is a false positive -- no PDU Session, no
+# tun_srsue interface, "Network is unreachable" for anything they try to
+# send. This playbook's final report task makes that gap explicit rather
+# than declaring victory on the UE-side logs alone -- see
+# docs/ran-testing.md for the full story and what fixing it for real
+# would need (the .grc's signal-combining logic doesn't actually
+# distinguish simultaneous PRACH transmissions).
+#
+# Usage: ansible-playbook playbooks/test_three_ue_broker.yml
+
+- name: Kill any stale gNB/UE/broker processes and launch a fresh gNB
+  hosts: ran_srsran
+  gather_facts: false
+  tasks:
+    - name: Find any running gnb
+      ansible.builtin.shell: pgrep -f '^gnb -c' || true
+      register: stale_gnb
+      changed_when: false
+
+    - name: Kill it
+      ansible.builtin.shell: "kill -9 {{ stale_gnb.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_gnb.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch gNB
+      ansible.builtin.shell: >-
+        rm -f /tmp/gnb.log &&
+        nohup gnb -c /etc/srsran/gnb_zmq.yaml
+        > /tmp/gnb_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for the gNB's ZMQ cycle to stabilize
+      ansible.builtin.wait_for:
+        timeout: 8
+      delegate_to: localhost
+
+- name: Launch ue1/ue2/ue3, then the broker last
+  hosts: ue_srsue
+  gather_facts: false
+  tasks:
+    - name: Find any running srsue or broker
+      ansible.builtin.shell: pgrep -f '^srsue |multi_ue_scenario.py' || true
+      register: stale_procs
+      changed_when: false
+
+    - name: Kill them
+      ansible.builtin.shell: "kill -9 {{ stale_procs.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_procs.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch ue1, ue2, ue3
+      ansible.builtin.shell: >-
+        rm -f /tmp/ue{{ item }}.log /tmp/ue{{ item }}_stdout.log &&
+        nohup srsue /etc/srsran/ue{{ item }}_zmq.conf
+        > /tmp/ue{{ item }}_stdout.log 2>&1 < /dev/null &
+      loop: [1, 2, 3]
+      changed_when: true
+
+    - name: Give the UEs a moment to reach steady PHY sync before the broker
+            joins (per srsRAN's own documented start order)
+      ansible.builtin.wait_for:
+        timeout: 3
+      delegate_to: localhost
+
+    - name: Launch the broker LAST, headless under Xvfb
+      ansible.builtin.shell: >-
+        rm -f /tmp/broker_stdout.log &&
+        cd /opt/multi_ue_scenario &&
+        nohup xvfb-run -a python3 multi_ue_scenario.py
+        > /tmp/broker_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for RACH attempts to play out
+      # Confirmed on a real run -- 8s wasn't enough (UEs were still at
+      # "Attaching UE..." / PHY init, hadn't transmitted a single preamble
+      # yet); 20s reliably covers PHY init + at least one full RACH
+      # attempt cycle for all 3 UEs.
+      ansible.builtin.wait_for:
+        timeout: 20
+      delegate_to: localhost
+
+    - name: Collect each UE's own attach status
+      ansible.builtin.shell: "tail -n 3 /tmp/ue{{ item }}_stdout.log"
+      loop: [1, 2, 3]
+      register: ue_status
+      changed_when: false
+
+    - name: "UE-side (self-reported) status"
+      ansible.builtin.debug:
+        msg: "ue{{ item.item }}: {{ item.stdout_lines }}"
+      loop: "{{ ue_status.results }}"
+
+- name: Check the gNB's OWN ground truth (how many UEs it actually created)
+  hosts: ran_srsran
+  gather_facts: false
+  tasks:
+    - name: Count distinct PRACH detections
+      ansible.builtin.shell: grep -c 'prach(ra-rnti=' /tmp/gnb.log || true
+      register: prach_count
+      changed_when: false
+
+    - name: Count distinct UE contexts (F1 UE context created)
+      ansible.builtin.shell: grep -oE 'ue=[0-9]+ c-rnti=0x[0-9a-f]+' /tmp/gnb.log | sort -u | wc -l
+      register: ue_ctx_count
+      changed_when: false
+
+    - name: Ground-truth report
+      ansible.builtin.debug:
+        msg: >-
+          gNB-side ground truth: {{ prach_count.stdout | trim }} real PRACH
+          detection(s), {{ ue_ctx_count.stdout | trim }} distinct UE
+          context(s) actually created. If either number is less than 3,
+          the broker is NOT giving each srsue instance a real, isolated
+          RF channel -- compare against the "UE-side status" messages
+          above: any UE that self-reports RRC Connected but isn't
+          reflected here has no real connection (confirmed on a real run:
+          no tun_srsue interface, "Network is unreachable" for anything
+          it sends). See docs/ran-testing.md.

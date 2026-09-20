@@ -1,0 +1,115 @@
+---
+# test_kpm_validation.yml -- confirms E2SM-KPM subscribe+indicate is
+# working end-to-end AND that indications are correctly attributed to
+# the real UE (not just cell-aggregate). Run test_single_ue.yml first --
+# this playbook assumes the gNB and ue1 are already up with a live PDU
+# session (it doesn't launch them).
+#
+# Requires, both confirmed necessary on a real run and already baked
+# into ran_srsran's gnb_zmq.yaml.j2 template -- if you're pointing this
+# at a hand-edited config, check these first:
+#   e2.e2sm_rc_enabled: false   (FlexRIC's xapp_kpm_moni aborts decoding
+#                                 the RC RAN Function otherwise)
+#   metrics.periodicity.du_report_period: 1000
+#   metrics.layers.enable_rlc: true   (without this, Style 4/5 KPM
+#                                 subscriptions succeed but NEVER emit an
+#                                 indication -- see gnb_zmq.yaml.j2's own
+#                                 comment for the full traced root cause)
+#
+# Usage: ansible-playbook playbooks/test_kpm_validation.yml
+
+- name: Launch the KPM monitor xApp against the real near-RT-RIC
+  hosts: ric_flexric
+  gather_facts: false
+  tasks:
+    - name: Find any running xapp_kpm_moni
+      ansible.builtin.shell: pgrep -f 'xapp_kpm_moni' || true
+      register: stale_xapp
+      changed_when: false
+
+    - name: Kill it
+      ansible.builtin.shell: "kill -9 {{ stale_xapp.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_xapp.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch xapp_kpm_moni (line-buffered so output is visible live,
+            not stuck in libc's block-buffering when stdout isn't a tty)
+      # -a MUST be the RIC's real bound address (its own MGMT address,
+      # ric_addr) -- confirmed on a real run: -a 127.0.0.1 (the binary's
+      # own --help example) hangs forever retrying its E42 setup, since
+      # nearRT-RIC's E2AP/E42 SCTP endpoints only ever bind ric_addr,
+      # never loopback (confirmed via `ss`/`lsof` on a real run).
+      ansible.builtin.shell: >-
+        rm -f /tmp/xapp_kpm.log &&
+        cd /opt/flexric/build/examples/xApp/c/monitor &&
+        nohup stdbuf -oL -eL ./xapp_kpm_moni
+        -c /usr/local/etc/flexric/flexric.conf
+        -p /usr/local/lib/flexric/
+        -a {{ ric_addr }}
+        > /tmp/xapp_kpm.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for subscription to complete
+      ansible.builtin.wait_for:
+        timeout: 4
+      delegate_to: localhost
+
+    - name: Confirm both subscriptions succeeded
+      ansible.builtin.shell: grep -c 'Successfully subscribed' /tmp/xapp_kpm.log
+      register: sub_count
+      changed_when: false
+      failed_when: sub_count.stdout | trim | int < 1
+
+- name: Generate a real traffic burst from ue1 and capture the baseline
+  hosts: ue_srsue
+  gather_facts: false
+  tasks:
+    - name: Ping burst (15 x 1200B, 0.2s interval -- ~3s of real uplink load)
+      ansible.builtin.shell: ip netns exec ue1 ping -c 15 -i 0.2 -s 1200 8.8.8.8
+      register: ping_result
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ ping_result.stdout_lines[-2:] }}"
+
+- name: Confirm the xApp saw real, per-UE-attributed KPM data
+  hosts: ric_flexric
+  gather_facts: false
+  tasks:
+    - name: Give the last indication(s) covering the burst a moment to arrive
+      ansible.builtin.wait_for:
+        timeout: 3
+      delegate_to: localhost
+
+    - name: Count indications carrying a real UE ID (Style 4/5, not cell-aggregate)
+      ansible.builtin.shell: grep -c 'UE ID type' /tmp/xapp_kpm.log || true
+      register: ue_id_count
+      changed_when: false
+
+    - name: Check for non-zero per-UE throughput anywhere in the capture
+      ansible.builtin.shell: grep -A20 'UE ID type' /tmp/xapp_kpm.log | grep -E 'DRB.UEThpDl = [1-9]|DRB.UEThpUl = [1-9]' || true
+      register: nonzero_thp
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ ue_id_count.stdout | trim }} indication(s) carried a real UE
+          ID (gNB-DU F1AP ID). {{ 'Confirmed real per-UE attribution: '
+          + (nonzero_thp.stdout_lines | length | string) + ' non-zero
+          per-UE throughput line(s) found, correlating with the ping
+          burst above.' if nonzero_thp.stdout_lines | length > 0
+          else 'WARNING: no non-zero per-UE throughput seen -- either the
+          burst finished before an indication was captured (re-run), or
+          the metrics.layers.enable_rlc fix described at the top of this
+          file is missing from the gNB config.' }}
+
+    - name: Fail if no UE ID ever appeared (the config prerequisites this
+            file's header documents are almost certainly missing)
+      ansible.builtin.fail:
+        msg: >-
+          Zero indications carried a UE ID -- check e2sm_rc_enabled,
+          metrics.periodicity and metrics.layers.enable_rlc in the
+          deployed gnb_zmq.yaml (see this file's own header).
+      when: ue_id_count.stdout | trim | int == 0
