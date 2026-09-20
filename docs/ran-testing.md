@@ -2,8 +2,10 @@
 
 Estado: **1 UE real confirmado de punta a punta (RACH → RRC → PDU Session → internet real vía
 el UPF → tráfico real hasta `victim` → KPM por UE atribuido correctamente en el RIC).**
-Pendiente/limitación conocida: el camino multi-UE (broker GNU-Radio) corre, pero **no aísla
-RF entre UEs** — solo 1 de 3 UEs lanzados llega a ser una conexión real. Fecha: 2026-09-20.
+Multi-UE (broker GNU-Radio): **confirmado que SÍ puede aislar 3 UEs reales** (7 PRACH distintos
++ 1 attach completo en una corrida) tras arreglar dos causas raíz reales (preamble hardcodeado
+en srsRAN_4G, `ue` con vCPUs insuficientes) — pero sigue siendo no-determinístico, peor que el
+~50% de flakiness de RACH ya conocido para 1 solo UE. Fecha: 2026-09-20.
 
 Automatización: `deploy/vm-lab/ansible/playbooks/test_single_ue.yml`,
 `test_three_ue_broker.yml`, `test_kpm_validation.yml` — ver §5.
@@ -149,30 +151,63 @@ ansible-playbook playbooks/test_kpm_validation.yml                # §4 (requier
 ansible-playbook playbooks/test_three_ue_broker.yml                # §6 -- ver limitación abajo
 ```
 
-## 6. Multi-UE (broker GNU-Radio): corre, pero NO aísla — limitación conocida sin resolver
+## 6. Multi-UE (broker GNU-Radio): puede aislar 3 UEs reales, pero no de forma confiable
 
-El camino multi-UE (`multi_ue_scenario.grc`, combina el DL de 3 UEs hacia el gNB y reparte el
-UL) estaba documentado como roto entre VMs ("se cuelga después del handshake ZMQ"). Eso resultó
+El camino multi-UE (`multi_ue_scenario.grc`, combina el UL de 3 UEs hacia el gNB y reparte el
+DL) estaba documentado como roto entre VMs ("se cuelga después del handshake ZMQ"). Eso resultó
 ser cierto solo parcialmente: **nunca se había corrido headless/en el orden correcto.**
-`grcc` (ya persistido en `ue_srsue/tasks/main.yml`) compila el `.grc` a un script Python
-standalone que corre bajo `xvfb-run` sin necesitar GUI — y con eso, sí corre.
+`grcc` (persistido en `ue_srsue/tasks/main.yml`) compila el `.grc` a un script Python standalone
+que corre bajo `xvfb-run` sin necesitar GUI — y con eso, sí corre.
 
-**Pero no es un test de 3 UEs real.** Con `test_three_ue_broker.yml`:
-- Los 3 `srsue` reportan individualmente "RRC Connected" — con el **mismo** `c-rnti=0x4601` y
-  el **mismo** `tti=174`, exactos.
-- El propio log del gNB muestra **una sola** detección de PRACH real y **un solo** contexto de
-  UE creado (`ue=0`).
-- `ue2`/`ue3` nunca llegan a tener `tun_srsue` en su netns — "Network is unreachable" para
-  cualquier cosa que intenten enviar.
+### 6.1. Primer intento: no era un test de 3 UEs real — dos causas raíz reales
 
-Conclusión: el broker no le da a cada UE un canal de RF aislado — muy probablemente porque los
-3 transmiten su preamble con timing idéntico/determinístico y se combinan/suman en una sola
-detección en vez de llegar como intentos distintos y distinguibles para el detector de PRACH del
-gNB. Arreglarlo de verdad necesitaría tocar la lógica de combinación de señales del `.grc`
-(desincronizar el timing de transmisión entre UEs, o revisar cómo el broker suma las muestras de
-UL) — no investigado todavía.
+Con `test_three_ue_broker.yml` corriendo por primera vez: los 3 `srsue` reportaban
+individualmente "RRC Connected" con el **mismo** `c-rnti=0x4601` y el **mismo** `tti=174`
+exactos, pero el gNB solo veía una detección de PRACH y un contexto de UE. Dos causas reales,
+ninguna en el `.grc`:
 
-**Hasta que se resuelva: tratar el camino multi-UE como "corre, pero solo 1 UE es real".** Para
-cualquier prueba que necesite más de un UE simultáneo con conectividad real, usar múltiples
-corridas secuenciales de `test_single_ue.yml` (o replicar la topología en otra VM) en vez de
-depender del broker.
+1. **`preamble_index` hardcodeado a `0` en srsRAN_4G.** `proc_ra_nr.cc`'s
+   `ra_resource_selection()` (38.321 §5.1.2) está literalmente marcado `(TODO)` en su propio
+   comentario — nunca implementa selección de preamble, así que TODOS los UEs, siempre,
+   transmiten el preamble 0 en la ocasión 0. Bit-idénticos entre sí — ninguna lógica de
+   combinación del broker podría distinguirlos. Arreglado con
+   `srsran4g-random-preamble.patch` (`ue_srsue/files/`): aleatoriza `preamble_index` (seed por
+   proceso, PID+tiempo), reseleccionado en cada reintento.
+2. **`ue` con solo 2 vCPUs, 4x sobresuscrita.** Con 3 `srsue` + el broker corriendo DSP
+   real-time simultáneo: `load average: 6.95`, 7-9 procesos en cola, 92-102k context-switches/s
+   — mismo patrón que ya había forzado subir `ran` de 4 a 8 vCPUs (`f750440`). Redimensionado a
+   8 vCPUs (`govc vm.change -vm ue -c 8`, tras `vm.power -off`/`-on`).
+
+Efecto lateral encontrado al redimensionar: **un reboot borra los network namespaces** (viven en
+`/var/run/netns`, tmpfs) — `ue1`'s propio `srsue` fallaba con "Failed to setup/configure GW
+interface" porque su netns ya no existía. Arreglado con un servicio systemd oneshot
+(`srsue-netns.service`) que los recrea en cada boot, sin depender de volver a correr Ansible.
+
+### 6.2. Con ambos fixes: confirmado que SÍ puede aislar 3 UEs reales — pero no siempre
+
+En una corrida real: **7 detecciones de PRACH genuinamente distintas** en el log del gNB
+(`tc-rnti=0x4601` a `0x4607`, cada una con su propio `preamble` real), y **al menos 1 UE**
+completando el attach entero (RACH → RRC Connected → RRC NR reconfiguration successful). El
+broker no está fundamentalmente roto — puede darle a cada UE un canal de RF genuinamente
+distinguible.
+
+**Pero sigue siendo no-determinístico, y peor que el caso de 1 solo UE.** 4 corridas después del
+fix: 1 éxito (7 PRACH/1 attach completo), 3 con 0 detecciones — comparado con el ~50% de
+flakiness de RACH ya documentado para un solo UE (ver §2), esto parece contención adicional real
+entre los 3 UEs, no solo la misma flakiness de siempre.
+
+**Nuevo modo de fallo encontrado, distinto del original:** con la detección de PRACH ya
+funcionando, UE2/UE3 SÍ consiguen que el gNB les detecte el preamble y les agende una ocasión de
+PUSCH para el Msg3 (RRC Setup Request) — pero ese Msg3 llega con `crc=KO` sistemáticamente,
+descartado tras 4 reintentos (`sinr=infdB`, un valor sospechoso). La detección de PRACH es
+por correlación (tolerante a interferencia); el Msg3 es data real codificada, mucho más sensible.
+Hipótesis, no confirmada: el broker suma las muestras de los 3 UEs en el dominio temporal sin
+modelar un offset de timing/CFO por UE — necesario en OFDM real para que la ortogonalidad entre
+subportadoras de transmisores simultáneos no se rompa. Arreglarlo necesitaría rediseñar esa
+lógica de combinación en el `.grc` — no investigado más a fondo, es un trabajo de DSP más grande
+que un patch puntual.
+
+**Estado práctico: tratar "3 UEs reales" como posible pero no confiable.** Para cualquier prueba
+que necesite conectividad real con más de un UE de forma consistente, seguir usando corridas
+secuenciales de `test_single_ue.yml` en vez de depender del broker hasta que §6.2's modo de
+fallo del Msg3 se resuelva.
