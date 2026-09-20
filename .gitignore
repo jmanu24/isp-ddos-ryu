@@ -4,3 +4,9 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# VM lab installer media and generated sim output -- too large / regeneratable
+# to commit (see deploy/vm-lab/README.md for how to re-fetch the ISOs).
+deploy/vm-lab/*.iso
+deploy/vm-lab/lab_control_pubkey.pub
+simulation/output/
