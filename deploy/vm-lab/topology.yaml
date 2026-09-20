@@ -197,7 +197,16 @@ vms:
   - name: ue
     role: ue_srsue
     template: ubuntu
-    vcpu: 2
+    # 2 was a real undersize -- confirmed on a real run -- running the
+    # multi-UE broker scenario (3x srsue + the GNU-Radio broker, 4
+    # real-time DSP workloads at once) on 2 vCPUs showed load average
+    # 6.95 (3.5x the vCPU count), 7-9 processes waiting on the run
+    # queue, and a context-switch rate of 92-102k/s -- well past the
+    # 50-70k/s this same project already flagged as the smoking gun for
+    # `ran`'s own 4->8 vCPU bump (see that VM's own comment/commit
+    # f750440). Matches the same fix: give it real headroom instead of
+    # guessing at a smaller number.
+    vcpu: 8
     # 2048 was a real undersize -- confirmed on a real run -- each srsue
     # instance uses ~600-900MB RSS, and running just 3 (of the planned 5)
     # concurrently made the kernel OOM-killer kill one outright ("Out of

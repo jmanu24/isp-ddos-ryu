@@ -1,0 +1,58 @@
+--- a/srsue/src/stack/mac_nr/proc_ra_nr.cc
++++ b/srsue/src/stack/mac_nr/proc_ra_nr.cc
+@@ -23,6 +23,9 @@
+ #include "srsran/common/standard_streams.h"
+ #include "srsran/mac/mac_rar_pdu_nr.h"
+ #include "srsue/hdr/stack/mac_nr/mac_nr.h"
++#include <cstdlib>
++#include <ctime>
++#include <unistd.h>
+ 
+ namespace srsue {
+ 
+@@ -162,9 +165,31 @@
+   ra_resource_selection();
+ }
+ 
+-// 5.1.2 Random Access Resource selection (TODO)
++// 5.1.2 Random Access Resource selection
+ void proc_ra_nr::ra_resource_selection()
+ {
++  // Randomly select the preamble for this RA procedure -- confirmed on a real run: this used to
++  // be unconditionally preamble_index=0/prach_occasion=0 in ra_preamble_transmission() below (no
++  // selection at all, matching this function's own former "(TODO)" label). With multiple UEs
++  // sharing one gNB (e.g. this lab's multi-UE ZMQ broker, which combines several UEs into a
++  // single RF channel toward the gNB), every UE always picked the SAME preamble at the SAME
++  // occasion -- bit-identical PRACH transmissions, indistinguishable to the gNB's own PRACH
++  // detector no matter how the samples get combined upstream (confirmed: the gNB logged exactly
++  // ONE PRACH detection and ONE UE context for 3 simultaneously-attaching UEs). Seeded per-
++  // process (PID + time) so concurrent srsue instances reliably diverge. 64 matches this lab's
++  // own gNB cell_cfg.prach.total_nof_ra_preambles -- not read from rach_cfg_nr_t here because
++  // srsRAN_4G never threads that value down from RRC config into this struct in the first place
++  // (see rach_cfg_nr_t's own definition, srsran/interfaces/mac_interface_types.h -- no preamble
++  // -count field exists on it at all). prach_occasion selection among multiple configured
++  // occasions remains unimplemented (still effectively a TODO) -- out of scope for what this
++  // lab's single-occasion cell_cfg needs.
++  static bool seeded = false;
++  if (!seeded) {
++    std::srand(static_cast<unsigned>(std::time(nullptr)) ^ static_cast<unsigned>(getpid()));
++    seeded = true;
++  }
++  preamble_index = std::rand() % 64;
++  prach_occasion = 0;
+   ra_preamble_transmission();
+ }
+ 
+@@ -175,8 +200,10 @@
+   preamble_received_target_power = rach_cfg.PreambleReceivedTargetPower + delta_preamble +
+                                    (preamble_transmission_counter - 1) * rach_cfg.powerRampingStep +
+                                    power_offset_2step_ra;
+-  preamble_index = 0;
+-  prach_occasion = 0;
++  // preamble_index/prach_occasion already selected once in ra_resource_selection() above and
++  // held for this whole RA procedure's retries -- matches 38.321's own step numbering (5.1.2
++  // selects, 5.1.3 only transmits); NOT reselected here, so retransmissions of the same attempt
++  // keep using the same preamble, as spec'd.
+   // instruct the physical layer to transmit the Random Access Preamble using the selected PRACH occasion, corresponding
+   // RA-RNTI (if available), PREAMBLE_INDEX, and PREAMBLE_RECEIVED_TARGET_POWER.
+   phy->send_prach(prach_occasion, preamble_index, preamble_received_target_power);

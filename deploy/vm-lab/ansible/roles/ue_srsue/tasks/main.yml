@@ -59,6 +59,27 @@
     src: srsran4g-zmq-reconnect.patch
     basedir: /opt/srsRAN_4G
     strip: 1
+
+# proc_ra_nr.cc's own ra_resource_selection() is an upstream TODO (its own
+# comment says so) -- it never implements 3GPP 38.321 5.1.2's preamble
+# selection at all, just hardcodes preamble_index=0/prach_occasion=0 for
+# EVERY UE, EVERY attempt. Invisible with a single UE, but confirmed on a
+# real run to be the actual reason this lab's multi-UE ZMQ broker (which
+# combines multiple UEs into one RF channel toward the gNB) never produces
+# more than one real connection: all UEs' PRACH transmissions are
+# bit-identical, so the gNB's own PRACH detector sees (at most) one,
+# regardless of how the broker combines the samples upstream -- confirmed
+# via the gNB's own log: exactly one PRACH detection, one UE context, for 3
+# simultaneously-attaching UEs. Randomizes preamble_index (seeded per-
+# process) instead -- see the patch's own comment for why prach_occasion
+# stays fixed and why 64 is hardcoded rather than read from config.
+- name: Apply the RACH preamble randomization fix (needed for the multi-UE
+        broker to produce more than one real connection)
+  ansible.builtin.patch:
+    src: srsran4g-random-preamble.patch
+    basedir: /opt/srsRAN_4G
+    strip: 1
+
 - name: Create build directory
   ansible.builtin.file:
     path: /opt/srsRAN_4G/build
@@ -86,6 +107,43 @@
     cmd: "ip netns add ue{{ item }}"
     creates: "/var/run/netns/ue{{ item }}"
   loop: "{{ range(1, 6) | list }}"
+
+# Confirmed on a real run: a plain reboot (e.g. after a `govc vm.change -c`
+# vCPU resize) wipes ue1-ue5 -- `ip netns` state lives under /var/run/netns,
+# which is tmpfs, not persisted. The task above only ever runs once, at
+# provision time, so nothing recreated them, and every srsue instance
+# configured for one of these netns then fails with "Failed to
+# setup/configure GW interface" (the netns it's told to use in [gw]
+# doesn't exist) until someone notices and reruns `ip netns add` by hand.
+# A oneshot systemd service closes that gap for good, no ansible rerun
+# needed after any future reboot.
+- name: Deploy a systemd oneshot to recreate the UE netns on every boot
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/srsue-netns.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Recreate srsue's per-UE network namespaces (tmpfs, lost on reboot)
+      DefaultDependencies=no
+      Before=network-pre.target
+      Wants=network-pre.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'for i in 1 2 3 4 5; do ip netns add ue$i 2>/dev/null || true; done'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: srsue_netns_unit
+
+- name: Enable and start the netns oneshot (starts it now too, covering VMs
+        that were already up when this role first ran)
+  ansible.builtin.systemd:
+    name: srsue-netns.service
+    daemon_reload: "{{ srsue_netns_unit.changed }}"
+    enabled: true
+    state: started
 
 - name: Create /etc/srsran
   # Same fix as ran_srsran -- confirmed on a real run: neither the build
@@ -176,17 +234,21 @@
       hand-patching blind in raw XML. Starting/run order (5G Core -> gNB
       -> ALL srsue instances -> the broker LAST) and actually running the
       broker headlessly ARE automated now -- see
-      ../../playbooks/test_three_ue_broker.yml. IMPORTANT, confirmed on a
-      real run of that playbook (2026-09-20): the broker runs and all 3
-      UEs individually report "RRC Connected" in their own logs, but the
-      gNB's own log shows only ONE real PRACH detection and ONE UE
-      context (ue=0, one c-rnti) ever created -- the broker does not
-      actually give each UE an isolated RF channel, so UE2/UE3's
-      "success" is a false positive with no real PDU session behind it
-      (confirmed: no tun_srsue interface ever appears in their netns).
-      Treat this multi-UE path as "runs, but only UE1 is real" until the
-      .grc's signal-combining logic is fixed to actually distinguish
-      simultaneous PRACH transmissions -- see docs/ran-testing.md.
+      ../../playbooks/test_three_ue_broker.yml. That playbook's own
+      header has the full timeline: an initial run found every UE
+      colliding on the identical preamble (srsRAN_4G's own
+      ra_resource_selection() was an unimplemented upstream TODO, fixed
+      by srsran4g-random-preamble.patch below) plus `ue`'s original 2
+      vCPUs being badly oversubscribed once 3 srsue + the broker ran
+      concurrently (fixed by bumping to 8, see topology.yaml). With both
+      fixed, confirmed on a real run that the broker CAN give 3 UEs real,
+      distinguishable RF -- but not reliably: still non-deterministic
+      (worse than the well-documented single-UE RACH flakiness), and a
+      NEW failure mode once preamble detection itself started working
+      (Msg3 arriving with crc=KO for the non-first UE, likely the
+      broker's own sample-level combining not modeling per-UE timing/CFO
+      offsets real OFDM needs). Treat 3-real-UEs as "possible, not
+      reliable" -- see docs/ran-testing.md §6.
 
 - name: Note about the direct-config UE's default route (manual step, runtime
         only -- cannot be provisioned in advance)
