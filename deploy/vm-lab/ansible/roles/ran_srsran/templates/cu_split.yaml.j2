@@ -1,0 +1,142 @@
+# Managed by Ansible (roles/ran_srsran) -- srsRAN Project's combined CU
+# (CU-CP + CU-UP in one process, `srscu` binary), for a SPLIT CU/DU
+# deployment across TWO VMs (`ran` for the CU, `du` for the DU -- see
+# du_srsran role) -- F1 over the real RAN network, not loopback, on
+# explicit direction (a more realistic split-RAN deployment in its own
+# right; see du_split.yaml.j2's own header for why this wasn't done to
+# "fix" the earlier RACH-instability investigation -- that hypothesis
+# was ruled out by a real A/B test first). Schema based on configs/
+# cu.yml in the srsRAN Project source tree itself (the "locally
+# deployed CU" example), adapted for this lab's real AMF/E2 addressing
+# (same reasoning as gnb_zmq.yaml.j2's own header comment).
+#
+# WHY a split deployment at all, when gnb_zmq.yaml (fused CU+DU+RU)
+# already works: confirmed on a real run that srsRAN Project's E2SM-KPM
+# CU-CP measurement provider (e2sm_kpm_cu_meas_provider_impl) -- the
+# ONLY path to a UE's real amf_ue_ngap_id via KPM, instead of just the
+# DU's own internal gnb_cu_ue_f1ap index -- is never even instantiated
+# by the fused `gnb` binary (only apps/cu/cu.cpp -> lib/cu_cp/
+# o_cu_cp_factory.cpp ever calls create_e2_cu_cp_agent()). No amount of
+# code in that provider can matter until something actually runs it.
+#
+# To run: sudo ./srscu -c cu_split.yaml (start BEFORE the DU -- the DU's
+# own F1 setup needs the CU's f1ap.bind_addr already listening)
+
+cu_cp:
+  amf:
+    addr: {{ core5g_ran_addr | default('10.40.0.1') }}
+    port: 38412
+    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    supported_tracking_areas:
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  inactivity_timer: 7200
+  f1ap:
+    # This VM's own real RAN-network address, NOT loopback -- CU (this
+    # VM, `ran`) and DU (the separate `du` VM) are two different VMs now.
+    # ran_ran_addr is already this VM's own address (also used for the
+    # AMF-facing bind_addr above), reused here rather than adding a new
+    # dedicated F1 address -- nothing else on this VM's RAN interface
+    # conflicts with F1AP's own port.
+    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+
+cu_up:
+  # f1u IS nested under cu_up -- confirmed by reading srsRAN Project's own
+  # CLI11 registration (apps/cu/cu_appconfig_cli11_schema.cpp:
+  # add_subcommand(*cu_up_subcmd, "f1u", ...)) -- unlike the DU app, where
+  # f1u is a TOP-LEVEL subcommand instead (apps/du/du_appconfig_cli11_
+  # schema.cpp: app.add_subcommand("f1u", ...), no parent). Genuinely
+  # inconsistent nesting between the two apps' own schemas for the same
+  # concept -- confirmed the hard way: putting it top-level here (matching
+  # the DU app's own convention) produced "INI was not able to parse
+  # f1u.++" at startup, same class of per-app-inconsistent-schema gotcha
+  # as e2's own enable_cu_cp_e2/enable_du_e2 flag-name difference.
+  #
+  # bind_port: 2153, NOT the default (GTPU_PORT/2152) -- confirmed on a
+  # real run: f1u_sockets_appconfig::bind_port ALSO defaults to GTPU_PORT,
+  # same as cu_up's own N3/NG-U socket (apps/units/o_cu_up/o_cu_up_builder.
+  # cpp: n3_udp_cfg.bind_port = GTPU_PORT). Reusing ran_ran_addr for both
+  # N3 and F1-U, unmodified port, meant two separate GTP-U gateways in the
+  # SAME process both trying to bind the identical 10.40.0.2:2152 tuple --
+  # "Failed to bind UDP socket to 10.40.0.2:2152. Address already in use",
+  # CU aborting via its own emergency-flush handler before ever reaching
+  # UE/DU setup. A raw Python socket.bind() to that same tuple succeeds
+  # fine moments after the crash (confirmed: not an external process, an
+  # internal self-conflict from the two GTP-U gateways sharing an
+  # address). Distinct port, same address, is the fix -- N3 and F1-U
+  # don't need to be on different IPs, just different ports.
+  f1u:
+    bind_port: 2153
+    socket:
+      - bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+
+# Gives the CU-CP its OWN E2 agent (separate SCTP association from the
+# DU's own, confirmed via apps/cu/cu.cpp: create_e2_gateway_client()
+# called for cu_cp AND cu_up independently) -- this is what makes
+# e2sm_kpm_cu_meas_provider_impl reachable at all. Same addr/bind_addr
+# reasoning as gnb_zmq.yaml.j2's own e2: block.
+#
+# enable_cu_cp_e2, NOT enable_du_e2 -- confirmed on a real run ("INI was
+# not able to parse e2.enable_du_e2"): the CU app shares a generic
+# e2_config struct/CLI11 schema (apps/helpers/e2/e2_cli11_schema.cpp)
+# with the DU/fused-gnb apps, but each caller passes its OWN enable-flag
+# NAME into it (apps/units/o_cu_cp/e2/o_cu_cp_e2_config_cli11_schema.cpp:
+# configure_cli11_with_e2_config_schema(..., "--enable_cu_cp_e2", ...)) --
+# every other field name (addr/port/bind_addr/e2sm_kpm_enabled/
+# e2sm_rc_enabled) is shared verbatim and does NOT change between apps.
+#
+# enable_cu_up_e2 lives in this SAME e2: block, not a separate cu_up:
+# e2: sub-section -- confirmed via apps/units/o_cu_up/e2/
+# o_cu_up_e2_config_yaml_writer.cpp: fill_o_cu_up_e2_config_in_yaml_schema()
+# writes into node["e2"], the exact same YAML node the CU-CP schema above
+# writes into (apps/cu/cu.cpp registers BOTH o_cu_cp_app_unit and
+# o_cu_up_app_unit's CLI11 schemas on the same top-level `app`/config
+# file). This gives CU-UP its OWN E2 agent/SCTP association (confirmed:
+# apps/cu/cu.cpp calls generate_e2_client_gateway_config() separately for
+# o_cu_cp_app_unit and o_cu_up_app_unit), which is what makes
+# e2sm_kpm_cu_up_meas_provider_impl's own PDCP metrics
+# (DRB.PdcpReordDelayUl/DRB.PacketSuccessRateUlgNBUu -- registered in
+# e2sm_kpm_cu_meas_provider_impl.cpp but never reachable before this,
+# same "provider exists but no agent runs it" story as CU-CP's own
+# amf_ue_ngap_id fix) actually reach the RIC. Note: those 2 metrics are
+# E2_NODE_LEVEL only in upstream srsRAN Project -- they will NOT carry
+# amf_ue_ngap_id (that's CU-CP-only, this session's own patch) unless
+# e2sm_kpm_cu_meas_provider_impl.cpp is extended further to wire a
+# cu_configurator into e2_cu_up_factory.cpp too.
+e2:
+  enable_cu_cp_e2: true
+  enable_cu_up_e2: true
+  e2sm_kpm_enabled: true
+  e2sm_rc_enabled: false
+  addr: {{ ric_addr | default('10.10.0.4') }}
+  port: 36421
+  bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
+
+log:
+  filename: /tmp/cu.log
+  # warning, not info -- confirmed on a real run: with this at info, the
+  # CU's own log stayed at 0 bytes for 60+ seconds despite real, confirmed
+  # activity (a real F1 SCTP association to the DU was up per
+  # /proc/net/sctp/assocs), and the UE never even attempted a PRACH
+  # transmission afterward -- consistent with the SAME malformed-JSON
+  # logger hang du_split.yaml.j2's own comment documents (setup_release_c
+  # <T>::to_json() in lib/asn1/asn1_utils.h), triggered THIS time by the
+  # CU-CP logging the DU's cell config as received in F1SetupRequest
+  # (same nested ASN.1-CHOICE fields, e.g. rach-ConfigCommon) instead of
+  # the DU logging its own SIB1/F1SetupResponse. No separate cu_level/
+  # f1ap_level exists to scope this more narrowly the way du_level does
+  # for the DU app (confirmed via apps/helpers/logger/
+  # logger_appconfig_cli11_schema.cpp: all_level here covers "PHY, MAC,
+  # RLC, PDCP, RRC, SDAP, NGAP and GTPU" -- no per-channel override for
+  # whatever logs the received F1SetupRequest's cell config) -- warning
+  # for everything is the only option that avoids it.
+  all_level: warning
+  e2ap_level: info
+  hex_max_size: 0
+
+pcap:
+  ngap_enable: false
+  ngap_filename: /tmp/cu_ngap.pcap

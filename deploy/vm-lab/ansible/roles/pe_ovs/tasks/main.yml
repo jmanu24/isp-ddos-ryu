@@ -34,9 +34,30 @@
       iface {{ pe_ent_dc_iface }} inet manual
   notify: restart networking
 
-- name: Flush handlers now -- eth2 must actually be up (ifup'd) before the
-        ovs-vsctl add-port below, not just at end-of-play as notify
-        handlers normally run
+- name: Configure the 3 VLAN_BACKBONE interfaces (eth3/eth4/eth5 -- same
+        hot-added, no-cloud-init-ever-saw-them situation as eth2 above,
+        confirmed by hand via `ip -br link show` after each `govc
+        vm.network.add`). One per domain (mobile/core5g, fixed/bng,
+        peering/br) -- see topology.yaml's own BACKBONE_MOBILE comment
+        for why these are 3 SEPARATE point-to-point links and not one
+        shared segment -- each remote VM is alone with pe on its own
+        portgroup, so pe's bridge is the only way any of them reaches
+        victim, the same property ENT_LAN/ENT_DC already have.
+  ansible.builtin.blockinfile:
+    path: /etc/network/interfaces
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- {{ item }} iface"
+    block: |
+      auto {{ item }}
+      iface {{ item }} inet manual
+  loop:
+    - "{{ pe_backbone_mobile_iface }}"
+    - "{{ pe_backbone_fixed_iface }}"
+    - "{{ pe_backbone_peering_iface }}"
+  notify: restart networking
+
+- name: Flush handlers now -- every new iface must actually be up (ifup'd)
+        before the ovs-vsctl add-port tasks below, not just at
+        end-of-play as notify handlers normally run
   ansible.builtin.meta: flush_handlers
 
 - name: Attach the enterprise-LAN NIC to the bridge
@@ -53,6 +74,18 @@
   # saw nothing during a real, live hping3 flood.
   ansible.builtin.command:
     cmd: "ovs-vsctl --may-exist add-port br-ent {{ ent_dc_iface | default('eth2') }}"
+
+- name: Attach the 3 VLAN_BACKBONE NICs to the SAME bridge -- br-ent goes
+        from 2 ports to 5. Ryu's own forwarding (forwarding/learning_switch.py)
+        is a generic L2 learning switch with no per-port hardcoding, so
+        these 3 more ports need no controller-side code change -- just
+        wiring, confirmed by reading that module before this change.
+  ansible.builtin.command:
+    cmd: "ovs-vsctl --may-exist add-port br-ent {{ item }}"
+  loop:
+    - "{{ pe_backbone_mobile_iface }}"
+    - "{{ pe_backbone_fixed_iface }}"
+    - "{{ pe_backbone_peering_iface }}"
 
 - name: Point the bridge at the orchestrator's OpenFlow controller
   ansible.builtin.command:

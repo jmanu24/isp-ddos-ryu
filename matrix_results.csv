@@ -1,7 +1,25 @@
 domain,vector,mode,scenario,Td_s,Tm_s,Tu_s,note
-bgp,SYN,DoS,matrix_bgp_SYN_DoS,6.0,0.0,60.0,
-bgp,SYN,DDoS,matrix_bgp_SYN_DDoS,1.0,0.0,69.0,
-bgp,UDP,DoS,matrix_bgp_UDP_DoS,6.0,0.0,60.0,
-bgp,UDP,DDoS,matrix_bgp_UDP_DDoS,1.0,0.0,,
-bgp,ICMP,DoS,matrix_bgp_ICMP_DoS,2.0,0.0,0.0,
-bgp,ICMP,DDoS,matrix_bgp_ICMP_DDoS,1.0,0.0,79.0,
+enterprise,SYN,DoS,matrix_enterprise_SYN_DoS,2.0,0.0,56.0,
+enterprise,SYN,DDoS,matrix_enterprise_SYN_DDoS,0.0,0.0,67.0,
+enterprise,UDP,DoS,matrix_enterprise_UDP_DoS,0.0,0.0,83.0,
+enterprise,UDP,DDoS,matrix_enterprise_UDP_DDoS,1.0,0.0,82.0,
+enterprise,ICMP,DoS,matrix_enterprise_ICMP_DoS,,0.0,53.0,
+enterprise,ICMP,DDoS,matrix_enterprise_ICMP_DDoS,1.0,0.0,,
+mobile,SYN,DoS,matrix_mobile_SYN_DoS,,,,sin mitigacion detectada en su ventana
+mobile,SYN,DDoS,matrix_mobile_SYN_DDoS,,,,sin mitigacion detectada en su ventana
+mobile,UDP,DoS,matrix_mobile_UDP_DoS,,,,sin mitigacion detectada en su ventana
+mobile,UDP,DDoS,matrix_mobile_UDP_DDoS,,,,sin mitigacion detectada en su ventana
+mobile,ICMP,DoS,matrix_mobile_ICMP_DoS,,,,sin mitigacion detectada en su ventana
+mobile,ICMP,DDoS,matrix_mobile_ICMP_DDoS,,,,sin mitigacion detectada en su ventana
+broadband,SYN,DoS,matrix_broadband_SYN_DoS,2.0,2.0,60.0,
+broadband,SYN,DDoS,matrix_broadband_SYN_DDoS,4.0,1.0,60.0,
+broadband,UDP,DoS,matrix_broadband_UDP_DoS,3.0,1.0,60.0,
+broadband,UDP,DDoS,matrix_broadband_UDP_DDoS,5.0,1.0,60.0,
+broadband,ICMP,DoS,matrix_broadband_ICMP_DoS,2.0,0.0,60.0,
+broadband,ICMP,DDoS,matrix_broadband_ICMP_DDoS,,,60.0,
+bgp,SYN,DoS,matrix_bgp_SYN_DoS,,,,sin mitigacion detectada en su ventana
+bgp,SYN,DDoS,matrix_bgp_SYN_DDoS,,,,sin mitigacion detectada en su ventana
+bgp,UDP,DoS,matrix_bgp_UDP_DoS,,,,sin mitigacion detectada en su ventana
+bgp,UDP,DDoS,matrix_bgp_UDP_DDoS,,,,sin mitigacion detectada en su ventana
+bgp,ICMP,DoS,matrix_bgp_ICMP_DoS,,,,sin mitigacion detectada en su ventana
+bgp,ICMP,DDoS,matrix_bgp_ICMP_DDoS,,,,sin mitigacion detectada en su ventana

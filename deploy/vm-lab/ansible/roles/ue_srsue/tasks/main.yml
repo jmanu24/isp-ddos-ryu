@@ -221,6 +221,24 @@
     dest: /etc/srsran/ue_direct_zmq_colocated.conf
     mode: "0644"
 
+- name: Deploy a direct-to-DU single UE config for the split CU/DU
+        deployment (radio lives on `du`, not `ran` -- see the file's own
+        header comment for why)
+  ansible.builtin.template:
+    src: ue_direct_zmq_split_du.conf.j2
+    dest: /etc/srsran/ue_direct_zmq_split_du.conf
+    mode: "0644"
+
+- name: Deploy 4 more direct-to-DU UE configs, one per dedicated du2-du5
+        (each its own real ZMQ RF pair, no broker -- see
+        ue_direct_zmq_multi_du.conf.j2's own header for why this avoids
+        SS6.2's Msg3 CRC bug entirely)
+  ansible.builtin.template:
+    src: ue_direct_zmq_multi_du.conf.j2
+    dest: "/etc/srsran/ue_direct_zmq_du{{ item }}.conf"
+    mode: "0644"
+  loop: [2, 3, 4, 5]
+
 - name: Note about the 4th/5th UE and the broker's confirmed UE-isolation gap
   ansible.builtin.debug:
     msg: >-

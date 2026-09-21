@@ -29,6 +29,18 @@ router bgp {{ bgp_br_as }}
   ! `network` statement if a matching route already exists in the RIB --
   ! the loopback address itself provides that as a connected /32.
   network 10.99.0.1/32
+  ! VLAN_BACKBONE -- advertises victim's real network (same one pe's own
+  ! bridge already uses for ENT_LAN/ent-site traffic, now doubling as
+  ! the pe<->victim backbone leg) to peer-router the same real-BGP way
+  ! as the two entries above. Deliberately NOT masqueraded anywhere on
+  ! br's side (see br's own tasks/main.yml comment) -- config/settings.py's
+  ! PER_SOURCE_MITIGATION_DOMAINS detection for this domain depends on
+  ! seeing the real (possibly spoofed) source IP all the way to victim,
+  ! same reasoning docs/peering-plan.md's own allowlist->denylist
+  ! rewrite already documents. Needs a matching route in br's own RIB
+  ! first (see the backbone-route.service oneshot) or FRR won't
+  ! advertise this at all -- same rule as the loopback entry above.
+  network {{ ent_dc_cidr }}
  exit-address-family
 !
 line vty

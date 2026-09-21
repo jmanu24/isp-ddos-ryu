@@ -15,7 +15,15 @@
 - name: Configure the ENT_DC interface (eth1 -- hot-added via govc
         vm.network.add after this VM was already provisioned; this is the
         actual attack-target address now, see topology.yaml's victim
-        entry and ENT_DC comment for why it moved off MGMT-only)
+        entry and ENT_DC comment for why it moved off MGMT-only). Also
+        doubles as the VLAN_BACKBONE-facing interface -- no new NIC
+        needed for that, this same eth1/pe bridge is now the pe<->victim
+        leg of the backbone too, so the gateway-less routes below (one
+        per domain that NATs its traffic -- mobile/core5g,
+        fixed/bng -- plus the /30 pe<->br link itself) sit right
+        alongside the pre-existing ent_lan_cidr one, exact same pattern.
+        peering_cidr is the ONE exception -- see its own route below for
+        why that one needs a real `via`, not this gateway-less style.
   ansible.builtin.blockinfile:
     path: /etc/network/interfaces
     marker: "# {mark} ANSIBLE MANAGED BLOCK -- ent_dc iface"
@@ -25,6 +33,10 @@
           address {{ victim_ent_dc_addr }}
           netmask 255.255.255.0
           post-up ip route add {{ ent_lan_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ backbone_mobile_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ backbone_fixed_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ backbone_peering_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ peering_cidr }} via {{ hostvars['br'].own_backbone_addr }} dev {{ victim_ent_dc_iface }} || true
   notify: restart networking
 
 - name: Flush handlers now -- eth1 must be up before victim-http (bound to

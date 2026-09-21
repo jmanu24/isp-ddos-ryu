@@ -1,5 +1,5 @@
 ---
-# site.yml -- configures all 16 VMs. Each play targets one Ansible group
+# site.yml -- configures all 17 VMs. Each play targets one Ansible group
 # from ../generated/ansible/inventory.ini (one group per topology.yaml
 # `role:`), running the one role that installs/configures that role's
 # real software stack.
@@ -40,6 +40,11 @@
 - name: RAN (srsRAN Project gNB, ZMQ RF, plus a co-located UE for same-VM testing)
   hosts: ran_srsran
   roles: [ran_srsran, ue_srsue, ue_oai]
+
+- name: DU (srsRAN Project srsdu, split from ran_srsran's srscu -- real
+    F1 over the RAN network, not loopback)
+  hosts: du_srsran
+  roles: [du_srsran]
 
 - name: UE (5x srsUE namespaces + GNU-Radio broker, plus an OAI nrUE alternative)
   hosts: ue_srsue

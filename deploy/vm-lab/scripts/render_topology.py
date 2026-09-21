@@ -61,7 +61,26 @@ def render_cloud_init(vm: dict, networks: dict, out_dir: Path) -> None:
     netplan_lines = ["network:", "  version: 2", "  ethernets:"]
     for i, iface in enumerate(vm["interfaces"]):
         net = networks[iface["network"]]
-        ifname = f"ens{160 + i}" if i > 0 else "ens160"  # vmxnet3 default naming
+        # vmxnet3 naming on this ESXi host's real PCI-slot assignment --
+        # NOT sequential (ens160/161/162...) despite that being the
+        # obvious guess. Confirmed wrong on a real run for every 2-NIC
+        # ubuntu VM in this lab so far (bng, ran, ue, du all came up with
+        # their 2nd NIC as ens192, never ens161) -- same finding already
+        # documented for hot-added NICs elsewhere in this file
+        # (bng_access_iface/suscriptor_access_iface's own comments), it
+        # turns out to apply to cloud-init-time NICs too, not just
+        # hot-added ones. No VM in this lab has ever needed a 3rd
+        # ethernet interface via this cloud-init path (alpine VMs with
+        # 3 NICs go through render_alpine_answerfile instead), so there's
+        # no real-run data for i>=2 -- falls back to the original
+        # (unverified) sequential guess rather than inventing a 2nd
+        # unconfirmed constant.
+        if i == 0:
+            ifname = "ens160"
+        elif i == 1:
+            ifname = "ens192"
+        else:
+            ifname = f"ens{160 + i}"
         netplan_lines.append(f"    {ifname}:")
         if iface["ip"] is None:
             netplan_lines.append("      dhcp4: true")
@@ -233,6 +252,8 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "core5g_ran_addr": net_ip("core5g", "RAN"),
         "ran_mgmt_addr": mgmt_ip("ran"),
         "ran_ran_addr": net_ip("ran", "RAN"),
+        "du_mgmt_addr": mgmt_ip("du"),
+        "du_ran_addr": net_ip("du", "RAN"),
         "ue_ran_addr": net_ip("ue", "RAN"),
         "ric_addr": mgmt_ip("ric"),
         "orchestrator_addr": mgmt_ip("orchestrator"),
@@ -266,6 +287,44 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         "enterprise_ent_lan_iface": "ens160",
         "mgmt_control_node_ip": topology["networks"]["MGMT"]["control_node_ip"],
         "ent_dc_cidr": topology["networks"]["ENT_DC"]["cidr"],
+        # VLAN_BACKBONE's 3 point-to-point legs -- victim needs all 3 as
+        # gateway-less `ip route add <cidr> dev <ent_dc_iface>` entries
+        # (exact same pattern it already uses for ent_lan_cidr below) so
+        # core5g/bng/br become reachable across pe's bridge the same way
+        # the 5 ent-sites already are.
+        "backbone_mobile_cidr": topology["networks"]["BACKBONE_MOBILE"]["cidr"],
+        "backbone_fixed_cidr": topology["networks"]["BACKBONE_FIXED"]["cidr"],
+        "backbone_peering_cidr": topology["networks"]["BACKBONE_PEERING"]["cidr"],
+        # Real PEERING CIDR (10.30.0.0/29) -- victim needs this as a
+        # REAL gateway route (via br's own backbone address), NOT a
+        # gateway-less one like ENT_LAN/BACKBONE_*. Confirmed on a real
+        # run: br deliberately does no NAT for this domain (preserves
+        # real/spoofed source IPs for its own detection logic, see
+        # docs/peering-plan.md), so peer-router's traffic reaches
+        # victim with its OWN 10.30.0.0/29 source address, a network
+        # that is NOT directly on pe's bridge the way BACKBONE_PEERING
+        # itself is -- br is a genuine router hop in between, so victim
+        # needs `via`, not a same-L2-segment shortcut.
+        "peering_cidr": topology["networks"]["PEERING"]["cidr"],
+        # Real BB_ACCESS CIDR (10.20.0.0/24) -- NOT the same thing as
+        # bng_pool_range ("10.20.0.10-200", accel-ppp's own ippool.c
+        # "a.b.c.d-N" parse2() format, not a real CIDR string, see that
+        # var's own comment). bng's MASQUERADE rule needs a real network,
+        # not accel-ppp's pool syntax.
+        "bb_access_cidr": topology["networks"]["BB_ACCESS"]["cidr"],
+        # Real interface names, confirmed by hand via `ip -br link show`
+        # after each `govc vm.network.add` hot-add -- same
+        # can't-trust-the-naming-formula gotcha as every other hot-added
+        # NIC in this lab (pe_ent_dc_iface, victim_ent_dc_iface, etc.).
+        # pe's 3 new ports landed eth3/eth4/eth5 in the exact order they
+        # were added (mobile, fixed, peering); core5g/bng/br each only
+        # gained ONE new NIC and all 3 happened to land on ens224.
+        "pe_backbone_mobile_iface": "eth3",
+        "pe_backbone_fixed_iface": "eth4",
+        "pe_backbone_peering_iface": "eth5",
+        "core5g_backbone_iface": "ens224",
+        "bng_backbone_iface": "ens224",
+        "br_backbone_iface": "ens224",
         # Broadband domain distributed mode -- accel-ppp + FreeRADIUS
         # (deploy/vm-lab/ansible/roles/bng + roles/suscriptor, and
         # config/settings.py's BNG_DIST_* on the app-code branch,
@@ -274,7 +333,15 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # the earlier BNGBlaster-based group_vars (bng_target_ip stays;
         # everything else here is new) -- see bngblaster_broadband_
         # pipeline_status memory for why BNGBlaster itself was dropped.
-        "bng_target_ip": mgmt_ip("victim"),
+        #
+        # net_ip(victim, ENT_DC), NOT mgmt_ip(victim) -- moved on
+        # explicit direction, VLAN_BACKBONE work: subscriber attack
+        # traffic must reach victim over the real, monitored backbone
+        # (through pe's OVS bridge), not victim's own MGMT/OOB address.
+        # Also used as a fallback default in the RAN test playbooks
+        # (test_single_ue.yml etc.) for the exact same reason -- one
+        # variable, same fix, both domains.
+        "bng_target_ip": net_ip("victim", "ENT_DC"),
         # bng's own 2nd NIC (BB_ACCESS). render_cloud_init's own
         # `ens{160+i}` naming COMMENT claims this should be sequential
         # (ens161) -- confirmed WRONG on a real run: this ESXi host's
@@ -341,6 +408,55 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
     (group_vars_dir / "all.yml").write_text("\n".join(lines) + "\n")
 
 
+def render_ansible_host_vars(topology: dict, out_dir: Path) -> None:
+    """Per-host `own_ran_addr`/`own_mgmt_addr` -- needed once more than
+    one VM shares the same role (du_srsran: du, du2, du3...).
+    render_ansible_group_vars's du_ran_addr/du_mgmt_addr are SINGLE
+    global values hardcoded to the VM literally named `du` -- confirmed
+    on a real run that this makes every du2-du5 bind to du's own RAN
+    address instead of its own ("Failed to bind UDP socket to
+    10.40.0.4:2152. Cannot assign requested address" on du2, du3, du4
+    AND du5 alike, all trying to claim the same IP `du` already holds),
+    and their E2 agents all bind to du's own MGMT address too (silently
+    wrong, no error -- just never noticed because du2-du5's E2 traffic
+    hadn't been checked yet). host_vars override group_vars in Ansible's
+    variable precedence, so a template can use own_ran_addr/
+    own_mgmt_addr for ITS OWN address while a same-named group_var
+    (ran_ran_addr, ric_addr, etc.) stays correctly shared/fixed across
+    every host that legitimately points AT that one other VM."""
+    host_vars_dir = out_dir / "ansible" / "host_vars"
+    host_vars_dir.mkdir(parents=True, exist_ok=True)
+    written = set()
+    for vm in topology["vms"]:
+        mgmt_ips = [i["ip"] for i in vm["interfaces"] if i["ip"] is not None]
+        ran_ips = [i["ip"] for i in vm["interfaces"] if i["network"] == "RAN" and i["ip"] is not None]
+        # own_backbone_addr: same reasoning as own_ran_addr above, for
+        # the 3 point-to-point VLAN_BACKBONE spokes (core5g/bng/br each
+        # get ONE, no VM has more than one, so this stays a single field
+        # rather than needing a per-network suffix).
+        backbone_ips = [
+            i["ip"]
+            for i in vm["interfaces"]
+            if i["network"].startswith("BACKBONE_") and i["ip"] is not None
+        ]
+        if not mgmt_ips and not ran_ips and not backbone_ips:
+            continue
+        lines = ["---", "# Generated by render_topology.py -- do not hand-edit, edit topology.yaml"]
+        if mgmt_ips:
+            lines.append(f'own_mgmt_addr: "{mgmt_ips[0]}"')
+        if ran_ips:
+            lines.append(f'own_ran_addr: "{ran_ips[0]}"')
+        if backbone_ips:
+            lines.append(f'own_backbone_addr: "{backbone_ips[0]}"')
+        (host_vars_dir / f"{vm['name']}.yml").write_text("\n".join(lines) + "\n")
+        written.add(vm["name"])
+    # Stale host_vars files for VMs removed from topology.yaml since the
+    # last render would otherwise linger and silently keep applying.
+    for existing in host_vars_dir.glob("*.yml"):
+        if existing.stem not in written:
+            existing.unlink()
+
+
 def render_govc_csv(vms: list, out_dir: Path) -> None:
     govc_dir = out_dir / "govc"
     govc_dir.mkdir(parents=True, exist_ok=True)
@@ -371,6 +487,7 @@ def main() -> None:
 
     render_ansible_inventory(vms, templates, OUT_DIR)
     render_ansible_group_vars(topology, OUT_DIR)
+    render_ansible_host_vars(topology, OUT_DIR)
     render_govc_csv(vms, OUT_DIR)
 
     print(f"Generado en {OUT_DIR}:")

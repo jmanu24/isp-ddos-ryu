@@ -130,7 +130,22 @@ e2:
 
 log:
   filename: /tmp/gnb.log
-  all_level: info
+  # warning, not info -- SAME bug as gnb_zmq_colocated.yaml.j2's own
+  # all_level (see that file's own comment for the full original
+  # investigation): OCUDU's DU-MNG channel prints a malformed pretty-JSON
+  # dump of the negotiated cell config (a doubled opening brace with no
+  # key in rach-ConfigCommon) that hangs/crashes the logger thread
+  # deterministically. This config was never given the fix -- confirmed
+  # on a real run: with all_level: info, the gNB process didn't just
+  # truncate its own log, it failed to even come up (`pgrep -f '^gnb -c'`
+  # found nothing after the launch task's own "still up" check), while
+  # test_single_ue.yml was being used to validate `ran`'s vCPU count
+  # after a resize -- 3 of 4 consecutive runs also failed attach with the
+  # gNB apparently alive, consistent with the same instability. warning
+  # avoids the buggy print path the same way it does for the colocated
+  # config.
+  all_level: warning
+  du_level: warning
   # e2ap_level is a SEPARATE field from all_level, NOT covered by it --
   # confirmed via OCUDU's own source (apps/helpers/logger/logger_appconfig.h)
   # -- it defaults to `warning`, which silently swallows the INFO-level

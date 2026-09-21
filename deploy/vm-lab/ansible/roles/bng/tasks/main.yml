@@ -74,6 +74,65 @@
         accel-ppp tries to bind its RADIUS socket to it
   ansible.builtin.meta: flush_handlers
 
+- name: Deploy netplan for the VLAN_BACKBONE interface (hot-added, cloud-init
+        never saw it -- see the template's own header)
+  ansible.builtin.template:
+    src: 98-backbone.yaml.j2
+    dest: /etc/netplan/98-backbone.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- the backbone iface must be up before the
+        MASQUERADE/route tasks below
+  ansible.builtin.meta: flush_handlers
+
+- name: Masquerade subscriber traffic out the VLAN_BACKBONE interface, NOT
+        MGMT (moved on explicit direction -- separate node OOB management
+        from the user-plane/attack-traffic path. Confirmed on a real run
+        this was a genuine mixing case -- subscriber traffic used to
+        forward straight from BB_ACCESS to this VM's own MGMT NIC to
+        reach victim's MGMT address -- now it takes a real, monitored
+        path, bng to pe's OVS bridge (br-ent, OpenFlow-controlled by
+        ryu-manager) to victim. MASQUERADE, not a plain route, because
+        unlike br/peering this domain's own detection doesn't depend
+        on seeing each subscriber's individual real source IP past bng,
+        accel-ppp/FreeRADIUS's own accounting records already identify
+        the subscriber upstream of this point.)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -t nat -C POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE 2>/dev/null ||
+      iptables -t nat -A POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE
+  changed_when: true
+  become: true
+
+- name: Deploy a systemd oneshot to add the gateway-less route to victim's
+        subnet on every boot (same pattern as core5g_open5gs's own
+        backbone-route.service)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/backbone-route.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'ip route add {{ ent_dc_cidr }} dev {{ bng_backbone_iface }} 2>/dev/null || true'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: backbone_route_unit
+
+- name: Enable and start the backbone route oneshot
+  ansible.builtin.systemd:
+    name: backbone-route.service
+    daemon_reload: "{{ backbone_route_unit.changed }}"
+    enabled: true
+    state: started
+
 - name: Clone Tesis_Controller (for deploy/install_accelppp.sh)
   ansible.builtin.git:
     repo: "{{ tesis_controller_repo_url }}"

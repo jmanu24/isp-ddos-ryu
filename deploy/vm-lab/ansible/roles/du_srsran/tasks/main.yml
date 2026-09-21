@@ -1,0 +1,128 @@
+---
+# du_srsran role -- srsRAN Project's DU-only binary (`srsdu`), on its
+# own VM, paired over F1 with ran_srsran's `srscu` on the `ran` VM.
+# Split off from ran_srsran (which used to build+run srsdu itself,
+# same-VM, F1 over loopback) on explicit direction, as a more realistic
+# split-RAN deployment in its own right -- see du_split.yaml.j2's own
+# header for why this is NOT a fix for the RACH-instability
+# investigation that preceded it (that hypothesis was ruled out by a
+# real A/B test before this split was requested).
+#
+# Same clone/patches/build approach as ran_srsran -- this VM needs its
+# own full srsRAN Project checkout, it can't share ran's build tree
+# across VMs. Only the RLC-AM, F1AP-DU and ZMQ-reconnect patches are
+# ported here (not the fused-gnb-only build target) -- all 3 target
+# code paths srsdu itself exercises (RLC lives in the DU side of a real
+# split, same as F1AP-DU and the ZMQ radio driver); ran_srsran's own
+# copies stay there too since that VM still builds the fused `gnb` for
+# the non-split test scenarios, which need them independently.
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - cmake
+      - make
+      - gcc
+      - g++
+      - pkg-config
+      - libfftw3-dev
+      - libmbedtls-dev
+      - libsctp-dev
+      - libyaml-cpp-dev
+      - libgtest-dev
+      - libzmq3-dev
+      - git
+    state: present
+    update_cache: true
+
+- name: Clone srsRAN Project
+  ansible.builtin.git:
+    repo: https://github.com/srsRAN/srsRAN_Project.git
+    dest: /opt/srsRAN_Project
+    # Same pin as ran_srsran -- CU and DU must be built from the same
+    # release for F1AP/F1U wire compatibility.
+    version: release_25_10
+    force: false
+    update: false
+
+- name: Apply the RLC AM executor-stall workaround (needed for PDU session
+        establishment)
+  ansible.builtin.patch:
+    src: srsran-rlc-am-executor-stall-workaround.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+- name: Apply the F1AP-DU executor-stall workaround (DL NAS/RRC forwarding)
+  ansible.builtin.patch:
+    src: srsran-f1ap-du-executor-stall-workaround.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+- name: Apply the ZMQ REQ/REP reconnect fix + EAGAIN busy-loop throttle
+        (radio_zmq_rx_channel + radio_zmq_tx_channel)
+  ansible.builtin.patch:
+    src: srsran-zmq-reconnect.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+# NOT applied (deliberately) -- srsran-mac-rlc-tm-executor-stall-
+# workaround.patch (still kept in files/ for the full story, see its own
+# header) was an earlier attempt at fixing "DU never activates the cell"
+# by making mac_cell_processor's start()/add_ue()/addmod_bearers() and
+# rlc_tx_tm_entity's handle_changed_buffer_state() run inline instead of
+# hopping to cell_exec/pcell_executor. It "fixed" cell activation but
+# broke the DRB uplink data path -- confirmed on a real run: full RRC/NAS
+# attach succeeded, but ICMP traffic never reached core5g at all (RLC TX
+# SDU queue grew without bound, no BSR/SR ever sent) -- because going
+# inline drops the thread-safety guarantee cell_exec provided (all
+# scheduler-state mutations serialized onto ONE thread), not just the
+# "avoid blocking" one.
+#
+# Root cause, confirmed via `ps -T` on the actual running process: this
+# VM's real-time worker pool (apps/services/worker_manager/
+# worker_manager.cpp: get_default_nof_workers(), formula
+# max(min(estimated, avail_cpus - min(avail_cpus, 3)), 1)) had exactly
+# ONE thread (`main_pool#0`) at 4 vCPUs, vs. FIVE (`main_pool#0-4`) on
+# ran's own 8-vCPU build of the same code for the fused `gnb` -- 3 vCPUs
+# are ALWAYS reserved as "spare" regardless of total count, so 4 vCPUs
+# left only 1 for everything else. A single-threaded pool guarantees a
+# deadlock for any task that depends on another task queued to that same
+# thread -- exactly what cell_exec/pcell_executor hit. Fixed by bumping
+# this VM to 8 vCPUs (topology.yaml) instead -- the real fix, not a code
+# patch. See docs/ran-testing.md SS8.4 for the full story.
+- name: Create build directory
+  ansible.builtin.file:
+    path: /opt/srsRAN_Project/build
+    state: directory
+
+- name: Configure (cmake, ZMQ + export/E2 enabled)
+  ansible.builtin.command:
+    cmd: cmake ../ -DENABLE_EXPORT=ON -DENABLE_ZEROMQ=ON
+    chdir: /opt/srsRAN_Project/build
+    creates: /opt/srsRAN_Project/build/CMakeCache.txt
+
+- name: Build srsdu only (this VM never runs gnb/srscu -- no reason to pay
+        for building them)
+  ansible.builtin.command:
+    cmd: make -j{{ ansible_processor_vcpus | default(4) }} srsdu
+    chdir: /opt/srsRAN_Project/build
+
+- name: Install
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /opt/srsRAN_Project/build
+  become: true
+  async: 600
+  poll: 10
+
+- name: Create /etc/srsran
+  ansible.builtin.file:
+    path: /etc/srsran
+    state: directory
+    mode: "0755"
+
+- name: Deploy the split DU config (srsdu -- pairs with ran_srsran's
+        cu_split.yaml over the real RAN network, not loopback)
+  ansible.builtin.template:
+    src: du_split.yaml.j2
+    dest: /etc/srsran/du_split.yaml
+    mode: "0644"

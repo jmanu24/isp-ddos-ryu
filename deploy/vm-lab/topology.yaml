@@ -25,8 +25,19 @@ networks:
   # necessary on a real run: every VM's manually-patched default route
   # (via control_node_ip) reverted on its own reboot, requiring the same
   # fix over and over until this was made part of the generated config.
+  # promiscuous: true -- ONLY on portgroups where a VM legitimately needs
+  # to see/send frames not addressed to its own vNIC MAC: macvlan
+  # sub-interfaces sharing one physical NIC (BB_ACCESS) or a VM acting as
+  # a real bridge/switch between 2+ of its own ports (ENT_LAN/ENT_DC/
+  # BACKBONE_* -- pe's br-ent). Confirmed necessary on a real run for the
+  # 3 BACKBONE_* networks specifically: without it, ARP for a destination
+  # on the OTHER side of pe's bridge never resolved at all ("Destination
+  # Host Unreachable" from the packet's OWN source address -- looks like
+  # a routing bug, isn't one). Omitted (defaults to false) on portgroups
+  # where every VM only ever sends/receives its own traffic (MGMT,
+  # PEERING, RAN).
   MGMT:        {portgroup: "VLAN-MGMT",       cidr: "10.10.0.0/24",  gateway: "10.10.0.1",  control_node_ip: "10.10.0.254"}
-  BB_ACCESS:   {portgroup: "VLAN-BB-ACCESS",  cidr: "10.20.0.0/24",  gateway: "10.20.0.1",  control_node_ip: "10.20.0.254"}
+  BB_ACCESS:   {portgroup: "VLAN-BB-ACCESS",  cidr: "10.20.0.0/24",  gateway: "10.20.0.1",  control_node_ip: "10.20.0.254",  promiscuous: true}
   # /29, not the textbook /30 for a point-to-point eBGP link -- the
   # control node also needs its own address on every one of these
   # segments to reach br/peer-router directly, and a /30 has no room
@@ -53,7 +64,7 @@ networks:
   # correlation/detection, no matter how large the flood. A real hping3
   # test against victim produced zero log activity even past
   # SYN_THRESHOLD=10pps by a factor of 100000x until this was found.
-  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.70.0.0/24",  gateway: null}
+  ENT_LAN:     {portgroup: "VLAN-ENT-LAN",    cidr: "10.70.0.0/24",  gateway: null,  promiscuous: true}
   # NEW: the "protected/inside" side of pe's bridge, where victim
   # actually lives -- confirmed necessary on a real run: with victim only
   # ever on MGMT and ENT_LAN only ever holding the 5 attacker sites, a
@@ -66,7 +77,49 @@ networks:
   # gets a real 2nd bridged port here (see its own interfaces comment)
   # so ent-site-N -> victim traffic has NO path except through pe's
   # OpenFlow-controlled dataplane.
-  ENT_DC:      {portgroup: "VLAN-ENT-DC",     cidr: "10.55.0.0/24",  gateway: null}
+  #
+  # portgroup renamed VLAN-ENT-DC -> VLAN-BACKBONE-ENTERPRISE on the real
+  # ESXi host (same VLAN ID, same 2 active ports -- pe, victim -- nothing
+  # about the actual wiring changed) -- confirmed on a real run while
+  # building setup_portgroups.sh: this lab's own real vSwitch state no
+  # longer matched what this file said, `VLAN-ENT-DC` simply didn't exist
+  # anymore. Kept the new name here rather than renaming it back --
+  # BACKBONE-ENTERPRISE also happens to accurately describe what this
+  # segment actually does now (see the VLAN_BACKBONE comment just below:
+  # this is the pe<->victim leg of it).
+  ENT_DC:      {portgroup: "VLAN-BACKBONE-ENTERPRISE", cidr: "10.55.0.0/24",  gateway: null,  promiscuous: true}
+  # VLAN_BACKBONE, on explicit direction: separate node OOB management
+  # (MGMT) from the "attack traffic" data path across domains, and route
+  # that data path through a real, monitored chokepoint instead of the
+  # ad-hoc paths it used before (core5g/bng were each MASQUERADE-ing
+  # UE/subscriber traffic out their OWN MGMT NIC to reach victim's MGMT
+  # address -- confirmed in core5g_open5gs's own `-o ens160` MASQUERADE
+  # rule -- exactly the mixing this network removes).
+  #
+  # NOT one shared broadcast domain -- 3 separate point-to-point /30
+  # links (pe<->core5g, pe<->bng, pe<->br), each its own portgroup/VLAN,
+  # deliberately mirroring the existing ENT_LAN/ENT_DC design: pe is
+  # already a genuine 2-port OVS bridge (br-ent) precisely so ent-site-N
+  # traffic has NO path to victim except through the OpenFlow-monitored
+  # switch (see ENT_DC's own comment above -- the same reasoning that
+  # already burned this project once). If core5g/bng/br shared ONE flat
+  # backbone portgroup with pe and victim, their traffic could reach
+  # victim as direct L2 neighbors at the ESXi vSwitch level, bypassing
+  # pe's bridge entirely and making it invisible to ryu-manager again --
+  # same bug, different network. Each spoke gets its OWN portgroup so
+  # the ONLY way off it is through pe's br-ent (now a 5-port bridge:
+  # ENT_LAN, ENT_DC, and these 3 new ports). Confirmed via
+  # enterprise_site/victim's own existing pattern (gateway-less
+  # `ip route add <cidr> dev <iface>`, crossing pe's bridge by plain L2
+  # ARP/forwarding, no L3 routing needed inside pe) that this
+  # generalizes cleanly -- same no-gateway route pattern, 3 more times.
+  # /30, not the domain networks' own /24 -- these are pure
+  # point-to-point links (no control_node_ip needed: core5g/bng/br/pe
+  # all already have their own separate MGMT NIC for Ansible, unlike
+  # PEERING's /29 which specifically had to fit a 3rd host).
+  BACKBONE_MOBILE:   {portgroup: "VLAN-BACKBONE-MOBILE",   cidr: "10.91.0.0/30", gateway: null, promiscuous: true}
+  BACKBONE_FIXED:    {portgroup: "VLAN-BACKBONE-FIXED",    cidr: "10.92.0.0/30", gateway: null, promiscuous: true}
+  BACKBONE_PEERING:  {portgroup: "VLAN-BACKBONE-PEERING",  cidr: "10.93.0.0/30", gateway: null, promiscuous: true}
 
 templates:
   alpine:  {source_vm: "tpl-alpine",       os_family: "alpine"}
@@ -118,6 +171,10 @@ vms:
     interfaces:
       - {network: MGMT, ip: "10.10.0.2"}
       - {network: BB_ACCESS, ip: "10.20.0.1"}
+      # Point-to-point leg to `pe` (see BACKBONE_FIXED's own comment) --
+      # subscriber attack traffic now masquerades/routes out this NIC
+      # instead of MGMT.
+      - {network: BACKBONE_FIXED, ip: "10.92.0.2"}
 
   - name: suscriptor
     role: suscriptor
@@ -150,6 +207,11 @@ vms:
     interfaces:
       - {network: MGMT, ip: "10.10.0.3"}
       - {network: PEERING, ip: "10.30.0.1"}
+      # Point-to-point leg to `pe` (see BACKBONE_PEERING's own comment)
+      # -- peer-router has no MGMT NIC of its own at all (its only
+      # interface is PEERING), so `br` is the domain's real gateway for
+      # this too, same as it already is for eBGP.
+      - {network: BACKBONE_PEERING, ip: "10.93.0.2"}
 
   - name: peer-router
     role: peer_router
@@ -183,16 +245,131 @@ vms:
     interfaces:
       - {network: MGMT, ip: "10.10.0.5"}
       - {network: RAN, ip: "10.40.0.1"}
+      # Point-to-point leg to `pe` (see BACKBONE_MOBILE's own comment) --
+      # replaces this VM's own MASQUERADE -o ens160 (its MGMT NIC) for
+      # the UE pool (10.45.0.0/16); UE-attributable traffic to victim
+      # now exits here instead of riding on the SSH/Ansible interface.
+      - {network: BACKBONE_MOBILE, ip: "10.91.0.2"}
 
   - name: ran
     role: ran_srsran
     template: ubuntu
-    vcpu: 8
+    # 4, NOT 8 -- final value after a real back-and-forth, confirmed safe
+    # for THIS role specifically (srscu -- CU-CP+CU-UP only, no PHY/MAC
+    # real-time scheduling). History: the original 4->8 bump (f750440)
+    # was speculative (its own commit message admits it "did NOT fix the
+    # RACH issue" being chased then). Reverting to 4 and testing with the
+    # FUSED `gnb` binary (test_single_ue.yml, used only for non-split
+    # scenarios) DID reproduce a real bug: `ps -T` showed exactly ONE
+    # real-time worker thread (`main_pool#0`) at 4 vCPU -- the same
+    # single-thread starvation root-caused for `du` in SS8.4 (srsRAN
+    # Project's get_default_nof_workers() always reserves 3 vCPUs as
+    # "spare"). But `ran` no longer runs that fused binary in this
+    # split-CU/DU deployment -- it only runs `srscu`, and `ps -T` on
+    # srscu at 4 vCPU ALSO shows only 1 thread, yet CU-CP/CU-UP has no
+    # hard real-time PHY/MAC dependency on that pool the way a DU does --
+    # confirmed on real runs: F1 setup, KPM capture, and full UE3/UE4
+    # PDU-session attaches all succeeded cleanly at 4 vCPU. If `ran` ever
+    # goes back to running the fused `gnb` binary, re-run the `ps -T`
+    # check before trusting 4 vCPU again.
+    vcpu: 4
     ram_mb: 8192
     disk_gb: 20
     interfaces:
       - {network: MGMT, ip: "10.10.0.6"}
       - {network: RAN, ip: "10.40.0.2"}
+
+  - name: du
+    role: du_srsran
+    # Split off from `ran` (which keeps only srscu, CU-CP+CU-UP combined)
+    # -- confirmed on a real run that a bad Send-Q backlog / RACH
+    # instability under repeated UE reattach was NOT explained by
+    # cu_up_e2 CPU contention on a real A/B test (0/8 vs 1/8 success,
+    # same failure rate with CU-UP's E2 agent enabled or disabled) --
+    # this split is being tried anyway per explicit direction, as a more
+    # realistic split-RAN deployment in its own right, not because the
+    # contention hypothesis was confirmed.
+    template: ubuntu
+    # 8, matching ran/ue -- REVISED from an original 4 that was WRONG,
+    # confirmed on a real run: cumulative %CPU usage (the reasoning the
+    # original 4 was based on) doesn't capture what actually matters --
+    # srsRAN Project's own worker_manager.cpp sizes its real-time worker
+    # pool as max(min(estimated_workers, avail_cpus - min(avail_cpus, 3)),
+    # 1) (apps/services/worker_manager/worker_manager.cpp:
+    # get_default_nof_workers()) -- 3 vCPUs are ALWAYS reserved as
+    # "spare" (kernel packet processing, RU timing) regardless of total
+    # count. At 4 vCPUs this left exactly 1 real-time worker thread
+    # (confirmed via `ps -T`: only `main_pool#0`, vs. 5 threads
+    # `main_pool#0-4` on ran's own 8-vCPU srsdu build) -- a single-
+    # threaded pool guarantees a deadlock/stall for any task that depends
+    # on another task queued to that same one thread, which is exactly
+    # what cell_exec/pcell_executor hit (see docs/ran-testing.md SS8.2's
+    # own executor-stall investigation -- the workaround patched there
+    # was masking THIS root cause, not fixing a virtualization-inherent
+    # bug as originally assumed).
+    vcpu: 8
+    ram_mb: 8192
+    # 20, matching `ran` -- this VM clones + builds the full srsRAN
+    # Project source tree itself (same as ran_srsran), not just runs a
+    # prebuilt binary; disk_gb: 10 (ue_srsue's size) was undersized for
+    # that on `ran` early in this lab's build history.
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.10"}
+      - {network: RAN, ip: "10.40.0.4"}
+
+  # du2-du5: 4 more dedicated DUs, one per additional UE -- deliberately
+  # NOT the GNU-Radio broker path (docs/ran-testing.md SS6: confirmed
+  # unreliable past 1 UE, real unsolved Msg3 CRC failure from the
+  # combiner not modeling per-UE timing/CFO offset). Each of these gets
+  # its own real ZMQ RF pair to a dedicated srsue *process* on the
+  # existing `ue` VM (no new UE VMs -- see that VM's own comment: RAM is
+  # not the constraint, ~600-900MB per srsue instance) -- since there's
+  # no RF combining at all, the broker's own combiner bug doesn't apply
+  # here. Same sizing as `du` in every respect (8 vCPU/8GB/20GB): that
+  # sizing is a confirmed hard requirement (docs/ran-testing.md SS8.4),
+  # not a per-instance guess -- srsRAN Project's own worker-pool formula
+  # gives exactly 1 real-time thread at 4 vCPUs regardless of which `du`
+  # instance it is.
+  - name: du2
+    role: du_srsran
+    template: ubuntu
+    vcpu: 8
+    ram_mb: 8192
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.11"}
+      - {network: RAN, ip: "10.40.0.5"}
+
+  - name: du3
+    role: du_srsran
+    template: ubuntu
+    vcpu: 8
+    ram_mb: 8192
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.12"}
+      - {network: RAN, ip: "10.40.0.6"}
+
+  - name: du4
+    role: du_srsran
+    template: ubuntu
+    vcpu: 8
+    ram_mb: 8192
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.13"}
+      - {network: RAN, ip: "10.40.0.7"}
+
+  - name: du5
+    role: du_srsran
+    template: ubuntu
+    vcpu: 8
+    ram_mb: 8192
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.14"}
+      - {network: RAN, ip: "10.40.0.8"}
 
   - name: ue
     role: ue_srsue
@@ -236,6 +413,16 @@ vms:
       # own comment above for the real run that found this gap.
       - {network: ENT_LAN, ip: null}
       - {network: ENT_DC, ip: null}
+      # 3 more bridged ports, same as above (no L3 address -- pe stays a
+      # pure L2 switch, it never routes). br-ent goes from 2 ports to 5:
+      # ENT_LAN + ENT_DC + these. Each of core5g/bng/br is alone with pe
+      # on its own portgroup (see BACKBONE_MOBILE/FIXED/PEERING's own
+      # comment for why that isolation matters), so the only way any of
+      # them reaches victim is through this bridge -- same property
+      # ENT_LAN/ENT_DC already have, now extended to 3 more domains.
+      - {network: BACKBONE_MOBILE, ip: null}
+      - {network: BACKBONE_FIXED, ip: null}
+      - {network: BACKBONE_PEERING, ip: null}
 
   - name: ent-site-1
     role: enterprise_site

@@ -1,0 +1,11 @@
+# Managed by Ansible (roles/br). Explicit netplan for the VLAN_BACKBONE
+# interface -- hot-added via govc vm.network.add AFTER this VM was already
+# provisioned, so cloud-init's own generated 99-lab.yaml never saw it
+# (same gap bng's own 97-bb-access.yaml.j2 documents for the exact same
+# reason). Confirmed by hand via `ip -br link show` that this landed on
+# {{ br_backbone_iface }}, not a guessed name.
+network:
+  version: 2
+  ethernets:
+    {{ br_backbone_iface }}:
+      addresses: [{{ own_backbone_addr }}/30]

@@ -7,3 +7,6 @@
 - name: reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
+
+- name: netplan apply
+  ansible.builtin.command: netplan apply

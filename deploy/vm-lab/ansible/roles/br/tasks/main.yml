@@ -179,3 +179,56 @@
     user: "{{ ansible_user }}"
     key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"
   when: "'orchestrator_ssh_pubkey' in hostvars['orchestrator']"
+
+- name: Enable IPv4 forwarding (needed now that br also forwards
+        peer-router's traffic toward victim over VLAN_BACKBONE --
+        br never forwarded anything before this)
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Deploy netplan for the VLAN_BACKBONE interface (hot-added, cloud-init
+        never saw it -- see the template's own header)
+  ansible.builtin.template:
+    src: 98-backbone.yaml.j2
+    dest: /etc/netplan/98-backbone.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- the backbone iface must actually be up before
+        the route below, not just at end-of-play
+  ansible.builtin.meta: flush_handlers
+
+- name: Deploy a systemd oneshot to add the gateway-less route to victim's
+        subnet on every boot (same pattern as core5g_open5gs's own
+        backbone-route.service). This route also feeds bgpd.conf.j2's own
+        `network {{ ent_dc_cidr }}` statement -- FRR only advertises a
+        network if a matching route already exists in the RIB, same rule
+        its own loopback entry already relies on.
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/backbone-route.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'ip route add {{ ent_dc_cidr }} dev {{ br_backbone_iface }} 2>/dev/null || true'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: backbone_route_unit
+
+- name: Enable and start the backbone route oneshot
+  ansible.builtin.systemd:
+    name: backbone-route.service
+    daemon_reload: "{{ backbone_route_unit.changed }}"
+    enabled: true
+    state: started

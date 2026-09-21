@@ -1,0 +1,289 @@
+diff --git a/include/srsran/cu_cp/cu_configurator.h b/include/srsran/cu_cp/cu_configurator.h
+index 586f1ca6b7..cb342937d5 100644
+--- a/include/srsran/cu_cp/cu_configurator.h
++++ b/include/srsran/cu_cp/cu_configurator.h
+@@ -29,6 +29,7 @@
+ #include "srsran/ran/nr_cgi.h"
+ #include "srsran/ran/qos/qos_flow_id.h"
+ #include <map>
++#include <vector>
+ 
+ namespace srsran {
+ 
+@@ -63,6 +64,22 @@ public:
+   /// Get PCI for a given NR Cell Global ID.
+   virtual pci_t get_pci(const nr_cell_global_id_t& nr_cgi) const = 0;
+ 
++  /// Get the AMF-UE-NGAP-ID and serving GUAMI for a given UE index. Used by E2SM-KPM to identify a UE via its real
++  /// AMF-assigned ID instead of only a RAN-internal index. Returns false if the UE has no NGAP context yet.
++  virtual bool get_amf_ue_id_and_guami(const srs_cu_cp::ue_index_t& ue_index,
++                                       srs_cu_cp::amf_ue_id_t&      amf_ue_id,
++                                       srs_cu_cp::guami_t&          guami) const = 0;
++
++  /// Get the UE indexes of all UEs currently known to the CU-CP. Used by E2SM-KPM to enumerate UEs for a KPM
++  /// subscription, the same way the DU-side provider already enumerates its own UEs via its own metrics map.
++  virtual std::vector<srs_cu_cp::ue_index_t> get_ue_indexes() const = 0;
++
++  /// Get the gNB-CU-UE-F1AP-ID for a given UE index. Used by E2SM-KPM so the CU-CP's own amf_ue_ngap_id-carrying
++  /// KPM indications can also carry the SAME F1AP ID the DU's own KPM provider already exposes (gnb_cu_ue_f1ap),
++  /// letting an xApp correlate the two without a separate NGAP/F1AP cross-reference. Returns
++  /// gnb_cu_ue_f1ap_id_t::invalid if the UE has no DU/F1AP association yet.
++  virtual gnb_cu_ue_f1ap_id_t get_f1ap_ue_id_for_kpm(const srs_cu_cp::ue_index_t& ue_index) const = 0;
++
+   /// Trigger UE Handover.
+   virtual async_task<srs_cu_cp::cu_cp_intra_cu_handover_response>
+   trigger_handover(const srs_cu_cp::du_index_t&                      source_du_index,
+diff --git a/include/srsran/f1ap/cu_cp/f1ap_cu.h b/include/srsran/f1ap/cu_cp/f1ap_cu.h
+index a549fd5ca6..96d2912408 100644
+--- a/include/srsran/f1ap/cu_cp/f1ap_cu.h
++++ b/include/srsran/f1ap/cu_cp/f1ap_cu.h
+@@ -151,6 +151,21 @@ public:
+   virtual size_t get_nof_ues() const = 0;
+ };
+ 
++/// \brief Interface to map a CU-CP UE index to its own gNB-CU-UE-F1AP-ID. Mirrors ngap_ue_id_translator's own
++/// shape/naming (see srsran/ngap/ngap.h) -- used by E2SM-KPM to let the CU-CP's own amf_ue_ngap_id-carrying KPM
++/// indications (e2sm_kpm_cu_meas_provider_impl) also carry the SAME gnb_cu_ue_f1ap_id the DU's own KPM provider
++/// already exposes, so an xApp can correlate the two without needing a separate F1AP/NGAP cross-reference.
++class f1ap_ue_id_translator
++{
++public:
++  virtual ~f1ap_ue_id_translator() = default;
++
++  /// \brief Map ue_index to its gNB-CU-UE-F1AP-ID.
++  /// \param[in] ue_index of a given UE.
++  /// \return The gNB-CU-UE-F1AP-ID, or gnb_cu_ue_f1ap_id_t::invalid if the UE has no F1AP context.
++  virtual gnb_cu_ue_f1ap_id_t get_f1ap_ue_id_for_kpm(ue_index_t ue_index) = 0;
++};
++
+ /// Handle UE context removal
+ class f1ap_ue_context_removal_handler
+ {
+@@ -184,7 +199,8 @@ class f1ap_cu : public f1ap_message_handler,
+                 public f1ap_paging_manager,
+                 public f1ap_ue_context_removal_handler,
+                 public f1ap_nrppa_message_handler,
+-                public f1ap_interface_management_handler
++                public f1ap_interface_management_handler,
++                public f1ap_ue_id_translator
+ {
+ public:
+   virtual ~f1ap_cu() = default;
+diff --git a/lib/cu_cp/cu_configurator_impl.cpp b/lib/cu_cp/cu_configurator_impl.cpp
+index 9dd640e144..d2a09da8c0 100644
+--- a/lib/cu_cp/cu_configurator_impl.cpp
++++ b/lib/cu_cp/cu_configurator_impl.cpp
+@@ -57,6 +57,43 @@ pci_t cu_configurator_impl::get_pci(const nr_cell_global_id_t& nr_cgi) const
+   return du_db.get_du_processor(du_index).get_context()->find_cell(nr_cgi)->pci;
+ }
+ 
++bool cu_configurator_impl::get_amf_ue_id_and_guami(const ue_index_t& ue_index,
++                                                    amf_ue_id_t&      amf_ue_id,
++                                                    guami_t&          guami) const
++{
++  for (auto& kv : ngap_db.get_ngaps()) {
++    ngap_interface* ngap = kv.second;
++    if (ngap == nullptr) {
++      continue;
++    }
++    amf_ue_id_t id = ngap->get_ngap_ue_id_translator().get_amf_ue_id(ue_index);
++    if (id != amf_ue_id_t::invalid) {
++      amf_ue_id = id;
++      guami     = ngap->get_ngap_ue_id_translator().get_guami(ue_index);
++      return true;
++    }
++  }
++  return false;
++}
++
++std::vector<ue_index_t> cu_configurator_impl::get_ue_indexes() const
++{
++  return ue_mng.get_ue_indexes();
++}
++
++gnb_cu_ue_f1ap_id_t cu_configurator_impl::get_f1ap_ue_id_for_kpm(const ue_index_t& ue_index) const
++{
++  cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
++  if (ue == nullptr) {
++    return gnb_cu_ue_f1ap_id_t::invalid;
++  }
++  du_index_t du_index = ue->get_du_index();
++  if (du_index == du_index_t::invalid or du_db.find_du_processor(du_index) == nullptr) {
++    return gnb_cu_ue_f1ap_id_t::invalid;
++  }
++  return du_db.get_du_processor(du_index).get_f1ap_handler().get_f1ap_ue_id_for_kpm(ue_index);
++}
++
+ async_task<cu_cp_intra_cu_handover_response> cu_configurator_impl::return_handover_response(bool ack)
+ {
+   return launch_async([ack](coro_context<async_task<cu_cp_intra_cu_handover_response>>& ctx) {
+diff --git a/lib/cu_cp/cu_configurator_impl.h b/lib/cu_cp/cu_configurator_impl.h
+index 10cfbefa9a..b7862697d3 100644
+--- a/lib/cu_cp/cu_configurator_impl.h
++++ b/lib/cu_cp/cu_configurator_impl.h
+@@ -53,6 +53,14 @@ public:
+   /// Get PCI for a given NR Cell Global ID.
+   pci_t get_pci(const nr_cell_global_id_t& nr_cgi) const override;
+ 
++  bool get_amf_ue_id_and_guami(const srs_cu_cp::ue_index_t& ue_index,
++                               srs_cu_cp::amf_ue_id_t&      amf_ue_id,
++                               srs_cu_cp::guami_t&          guami) const override;
++
++  std::vector<srs_cu_cp::ue_index_t> get_ue_indexes() const override;
++
++  gnb_cu_ue_f1ap_id_t get_f1ap_ue_id_for_kpm(const srs_cu_cp::ue_index_t& ue_index) const override;
++
+   async_task<srs_cu_cp::cu_cp_intra_cu_handover_response>
+   trigger_handover(const srs_cu_cp::du_index_t&                      source_du_index,
+                    const srs_cu_cp::cu_cp_intra_cu_handover_request& handover_req) override;
+diff --git a/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.cpp b/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.cpp
+index 948b3893c7..90d58a5fe2 100644
+--- a/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.cpp
++++ b/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.cpp
+@@ -26,9 +26,24 @@ using namespace asn1::e2ap;
+ using namespace asn1::e2sm;
+ using namespace srsran;
+ 
+-e2sm_kpm_cu_meas_provider_impl::e2sm_kpm_cu_meas_provider_impl() : logger(srslog::fetch_basic_logger("E2SM-KPM")) {}
++e2sm_kpm_cu_meas_provider_impl::e2sm_kpm_cu_meas_provider_impl(cu_configurator* cu_cfg_) :
++  logger(srslog::fetch_basic_logger("E2SM-KPM")), cu_cfg(cu_cfg_)
++{
++}
+ 
+-e2sm_kpm_cu_cp_meas_provider_impl::e2sm_kpm_cu_cp_meas_provider_impl() : e2sm_kpm_cu_meas_provider_impl() {}
++e2sm_kpm_cu_cp_meas_provider_impl::e2sm_kpm_cu_cp_meas_provider_impl(cu_configurator& cu_cfg_) :
++  e2sm_kpm_cu_meas_provider_impl(&cu_cfg_)
++{
++  // NRCellCU, E2_NODE_LEVEL | UE_LEVEL per e2sm_kpm_metric_defs.h -- the only metric this provider had zero of
++  // before this patch (upstream's e2sm_kpm_cu_cp_meas_provider_impl registered nothing at all). Its real purpose
++  // here isn't the aggregate value -- it's that a UE-level subscription to it forces get_ues_matching_test_
++  // conditions()/get_meas_data() to run the ue_id_gnb_s path below, which is what actually carries a real
++  // amf_ue_ngap_id out in the E2 Indication instead of just a RAN-internal index.
++  supported_metrics.emplace(
++      "RRC.ConnMean",
++      e2sm_kpm_supported_metric_t{
++          NO_LABEL, E2_NODE_LEVEL | UE_LEVEL, false, &e2sm_kpm_cu_cp_meas_provider_impl::get_rrc_conn_mean});
++}
+ 
+ bool e2sm_kpm_cu_meas_provider_impl::check_e2sm_kpm_metrics_definitions(span<const e2sm_kpm_metric_t> metric_defs)
+ {
+@@ -111,10 +126,54 @@ bool e2sm_kpm_cu_meas_provider_impl::is_metric_supported(const asn1::e2sm::meas_
+   return false;
+ }
+ 
++// Fills ueid with a real amf_ue_ngap_id (+ GUAMI), sourced from NGAP via cu_cfg -- confirmed on a real run that
++// upstream's own get_ues_matching_test_conditions() (`return true` with `ues` left untouched) is why
++// amf_ue_ngap_id never reached E2SM-KPM at all: the CU-CP provider had no CU-CP/NGAP reference to read it from,
++// same root cause as the CU-CP variant registering zero metrics in the first place.
++static bool
++append_gnb_ue_id(cu_configurator* cu_cfg, srs_cu_cp::ue_index_t ue_index, std::vector<asn1::e2sm::ue_id_c>& ues)
++{
++  srs_cu_cp::amf_ue_id_t amf_ue_id;
++  srs_cu_cp::guami_t     guami;
++  if (!cu_cfg->get_amf_ue_id_and_guami(ue_index, amf_ue_id, guami)) {
++    return false;
++  }
++  asn1::e2sm::ue_id_c     ueid;
++  asn1::e2sm::ue_id_gnb_s ueid_gnb{};
++  ueid_gnb.amf_ue_ngap_id = srs_cu_cp::amf_ue_id_to_uint(amf_ue_id);
++  ueid_gnb.guami.plmn_id = guami.plmn.to_bytes();
++  ueid_gnb.guami.amf_region_id.from_number(guami.amf_region_id);
++  ueid_gnb.guami.amf_set_id.from_number(guami.amf_set_id);
++  ueid_gnb.guami.amf_pointer.from_number(guami.amf_pointer);
++  // Also carry the SAME gnb_cu_ue_f1ap_id the DU's own KPM provider already exposes (see
++  // e2sm_kpm_du_meas_provider_impl.cpp's own get_ues_matching_test_conditions()) -- lets an xApp correlate a
++  // CU-CP indication (amf_ue_ngap_id) with a DU indication (gnb_cu_ue_f1ap) for the same physical UE, without
++  // needing to touch CU-UP's own separate UE-index space at all (see docs/ran-testing.md's own note on why
++  // extending this to CU-UP specifically needs an E1AP-based bridge instead -- this F1AP one didn't).
++  gnb_cu_ue_f1ap_id_t f1ap_id = cu_cfg->get_f1ap_ue_id_for_kpm(ue_index);
++  if (f1ap_id != gnb_cu_ue_f1ap_id_t::invalid) {
++    asn1::e2sm::ue_id_gnb_cu_cp_f1ap_id_item_s f1ap_item{};
++    f1ap_item.gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(f1ap_id);
++    ueid_gnb.gnb_cu_ue_f1ap_id_list.push_back(f1ap_item);
++  }
++  ueid.set_gnb_ue_id() = ueid_gnb;
++  ues.push_back(ueid);
++  return true;
++}
++
+ bool e2sm_kpm_cu_meas_provider_impl::get_ues_matching_test_conditions(
+     const asn1::e2sm::matching_cond_list_l& matching_cond_list,
+     std::vector<asn1::e2sm::ue_id_c>&       ues)
+ {
++  // TODO: add test condition checking, now return all UEs -- same simplification the DU-side provider already
++  // makes (e2sm_kpm_du_meas_provider_impl::get_ues_matching_test_conditions).
++  if (cu_cfg == nullptr) {
++    // CU-UP: unchanged from before this patch -- it has no NGAP visibility of its own.
++    return true;
++  }
++  for (const auto& ue_index : cu_cfg->get_ue_indexes()) {
++    append_gnb_ue_id(cu_cfg, ue_index, ues);
++  }
+   return true;
+ }
+ 
+@@ -122,6 +181,12 @@ bool e2sm_kpm_cu_meas_provider_impl::get_ues_matching_test_conditions(
+     const asn1::e2sm::matching_ue_cond_per_sub_list_l& matching_ue_cond_list,
+     std::vector<asn1::e2sm::ue_id_c>&                  ues)
+ {
++  if (cu_cfg == nullptr) {
++    return true;
++  }
++  for (const auto& ue_index : cu_cfg->get_ue_indexes()) {
++    append_gnb_ue_id(cu_cfg, ue_index, ues);
++  }
+   return true;
+ }
+ 
+@@ -180,6 +245,32 @@ void e2sm_kpm_cu_meas_provider_impl::report_metrics(const pdcp_metrics_container
+   }
+ }
+ 
++bool e2sm_kpm_cu_meas_provider_impl::get_rrc_conn_mean(const asn1::e2sm::label_info_list_l          label_info_list,
++                                                        const std::vector<asn1::e2sm::ue_id_c>&      ues,
++                                                        const std::optional<asn1::e2sm::cgi_c>       cell_global_id,
++                                                        std::vector<asn1::e2sm::meas_record_item_c>& items)
++{
++  if (cu_cfg == nullptr) {
++    return handle_no_meas_data_available(ues, items, asn1::e2sm::meas_record_item_c::types::options::integer);
++  }
++  if (ues.empty()) {
++    // E2 node-level: number of UEs currently known to the CU-CP.
++    meas_record_item_c meas_record_item;
++    meas_record_item.set_integer() = static_cast<int64_t>(cu_cfg->get_ue_indexes().size());
++    items.push_back(meas_record_item);
++    return true;
++  }
++  // UE-level: each matched UE contributes exactly 1 to the connection count -- the point isn't this value, it's
++  // that get_ues_matching_test_conditions() already put a real amf_ue_ngap_id in this record's own ueid field
++  // (see append_gnb_ue_id above), which is what an xApp actually reads to identify the UE.
++  for (size_t i = 0; i < ues.size(); ++i) {
++    meas_record_item_c meas_record_item;
++    meas_record_item.set_integer() = 1;
++    items.push_back(meas_record_item);
++  }
++  return true;
++}
++
+ e2sm_kpm_cu_up_meas_provider_impl::e2sm_kpm_cu_up_meas_provider_impl() : e2sm_kpm_cu_meas_provider_impl()
+ {
+   supported_metrics.emplace(
+diff --git a/lib/f1ap/cu_cp/f1ap_cu_impl.h b/lib/f1ap/cu_cp/f1ap_cu_impl.h
+index 94ed058ffe..32165f6be9 100644
+--- a/lib/f1ap/cu_cp/f1ap_cu_impl.h
++++ b/lib/f1ap/cu_cp/f1ap_cu_impl.h
+@@ -75,6 +75,14 @@ public:
+   // f1ap_statistics_handler functions.
+   size_t get_nof_ues() const override { return ue_ctxt_list.size(); }
+ 
++  gnb_cu_ue_f1ap_id_t get_f1ap_ue_id_for_kpm(ue_index_t ue_index) override
++  {
++    if (!ue_ctxt_list.contains(ue_index)) {
++      return gnb_cu_ue_f1ap_id_t::invalid;
++    }
++    return ue_ctxt_list[ue_index].ue_ids.cu_ue_f1ap_id;
++  }
++
+   // f1ap_ue_context_removal_handler functions.
+   void remove_ue_context(ue_index_t ue_index) override;
+ 

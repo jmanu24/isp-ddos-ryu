@@ -161,12 +161,72 @@
   changed_when: true
   become: true
 
-- name: Masquerade the UE pool out through ens160 (see comment above for why
-        this is needed -- lands the traffic inside the control node's own
-        already-working 10.10.0.0/24 masquerade)
+- name: Masquerade the UE pool out through the VLAN_BACKBONE interface, NOT
+        ens160/MGMT (moved on explicit direction -- separate node OOB
+        management from the user-plane/attack-traffic path. Confirmed on
+        a real run this was a genuine mixing case -- UE traffic used to
+        exit via this VM's own MGMT NIC and land in the control node's
+        MGMT-wide masquerade to reach victim's MGMT address -- now it
+        takes a real, monitored path instead, core5g to pe's OVS bridge
+        (br-ent, OpenFlow-controlled by ryu-manager) to victim)
   ansible.builtin.shell:
     cmd: >-
-      iptables -t nat -C POSTROUTING -s 10.45.0.0/16 -o ens160 -j MASQUERADE 2>/dev/null ||
-      iptables -t nat -A POSTROUTING -s 10.45.0.0/16 -o ens160 -j MASQUERADE
+      iptables -t nat -C POSTROUTING -s 10.45.0.0/16 -o {{ core5g_backbone_iface }} -j MASQUERADE 2>/dev/null ||
+      iptables -t nat -A POSTROUTING -s 10.45.0.0/16 -o {{ core5g_backbone_iface }} -j MASQUERADE
   changed_when: true
   become: true
+
+- name: Remove the OLD ens160/MGMT masquerade rule -- confirmed on a real
+        run this doesn't happen on its own, adding the new rule above
+        leaves the old one in place too (both active at once, defeating
+        the actual point of this change -- traffic still had a live path
+        out through MGMT, just an unused second one alongside it)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -t nat -D POSTROUTING -s 10.45.0.0/16 -o ens160 -j MASQUERADE 2>/dev/null || true
+  changed_when: true
+  become: true
+
+- name: Deploy netplan for the VLAN_BACKBONE interface (hot-added, cloud-init
+        never saw it -- see the template's own header)
+  ansible.builtin.template:
+    src: 98-backbone.yaml.j2
+    dest: /etc/netplan/98-backbone.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- the backbone iface must actually be up before
+        the route below, not just at end-of-play
+  ansible.builtin.meta: flush_handlers
+
+- name: Deploy a systemd oneshot to add the gateway-less route to victim's
+        subnet on every boot (same pattern as ue_srsue's own
+        srsue-netns.service -- a plain `ip route add` doesn't survive a
+        reboot, and netplan's own routes stanza needs a `via`, which a
+        route across pe's pure-L2 bridge deliberately doesn't have. Same
+        no-gateway-route-crosses-a-bridge mechanism victim/enterprise_site
+        already rely on for ent_lan_cidr, just the reverse direction)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/backbone-route.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'ip route add {{ ent_dc_cidr }} dev {{ core5g_backbone_iface }} 2>/dev/null || true'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: backbone_route_unit
+
+- name: Enable and start the backbone route oneshot
+  ansible.builtin.systemd:
+    name: backbone-route.service
+    daemon_reload: "{{ backbone_route_unit.changed }}"
+    enabled: true
+    state: started

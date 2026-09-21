@@ -155,8 +155,19 @@
 # code, not the core FlexRIC library -- this patch adds them. This is
 # what got a real, stable, multi-minute E2SM-KPM subscribe+indicate
 # cycle working end-to-end for the first time in this project.
-- name: Apply the xapp_kpm_moni NULL-check workaround (real OCUDU data
-        segfaults this example twice otherwise)
+#
+# 3rd fix bundled in here (log_gnb_ue_id()): confirmed on a real run
+# that once ran_srsran's own srsran-cu-f1ap-ue-id-kpm-correlation.patch
+# started filling BOTH amf_ue_ngap_id and gnb_cu_ue_f1ap_lst in the same
+# KPM record, this xApp's own if/else printed ONLY the F1AP-ID line and
+# silently dropped amf_ue_ngap_id from its output -- the underlying
+# E2SM-KPM message carried both correctly the whole time, this was a
+# display bug in the example xApp, not a protocol-level regression. See
+# docs/ran-testing.md SS9 for the full story.
+- name: Apply the xapp_kpm_moni NULL-check + UE-ID display workaround
+        (real OCUDU data segfaults this example twice otherwise, and its
+        own log_gnb_ue_id() hid amf_ue_ngap_id whenever gnb_cu_ue_f1ap
+        was also present)
   ansible.builtin.patch:
     src: flexric-kpm-moni-workaround.patch
     basedir: /opt/flexric
