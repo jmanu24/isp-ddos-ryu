@@ -1,0 +1,90 @@
+# Managed by Ansible (roles/ue_srsue) -- UE {{ item }}, direct to its OWN
+# dedicated DU (du{{ item }}, real RAN-network address), NOT the GNU-Radio
+# broker path ue_zmq.conf.j2 uses. Deliberately: docs/ran-testing.md SS6.2
+# found the broker's own RF combiner doesn't model per-UE timing/CFO
+# offset, causing a real, unresolved Msg3 CRC failure for every UE past
+# the first -- since each of these UEs gets its own dedicated ZMQ RF pair
+# to its own dedicated DU, there is NO combining at all, so that bug
+# class doesn't apply here. IMSI/k/imei selection copied verbatim from
+# ue_zmq.conf.j2's own item==2..5 branches (same subscriber_db.csv rows,
+# ue02-ue05) -- reusing those pre-provisioned identities rather than
+# adding new ones.
+#
+# tx_port is LOCAL to this VM (`ue`) and must be unique per UE instance --
+# unlike ue_zmq.conf.j2's broker scenario (all on loopback, one gNB), here
+# multiple independent srsue processes run concurrently on this same VM,
+# each needing its own non-colliding bind port. rx_port targets item's
+# own DU directly (10.40.0.{{ item + 3 }} -- du2=.5 .. du5=.8 per
+# topology.yaml) at that DU's fixed port 2000 (each DU is its own VM, so
+# no cross-UE port collision on that side).
+
+[rf]
+freq_offset = 0
+tx_gain = 50
+rx_gain = 40
+srate = 11.52e6
+nof_antennas = 1
+
+device_name = zmq
+device_args = tx_port=tcp://0.0.0.0:{{ 2000 + item * 100 + 1 }},rx_port=tcp://10.40.0.{{ item + 3 }}:2000,base_srate=11.52e6
+
+[rat.eutra]
+dl_earfcn = 2850
+nof_carriers = 0
+
+[rat.nr]
+bands = 3
+nof_carriers = 1
+max_nof_prb = 52
+nof_prb = 52
+
+[pcap]
+enable = none
+mac_filename = /tmp/ue{{ item }}_direct_mac.pcap
+mac_nr_filename = /tmp/ue{{ item }}_direct_mac_nr.pcap
+nas_filename = /tmp/ue{{ item }}_direct_nas.pcap
+
+[log]
+all_level = info
+phy_lib_level = none
+all_hex_limit = 32
+filename = /tmp/ue{{ item }}_direct.log
+file_max_size = -1
+
+[usim]
+mode = soft
+algo = milenage
+opc  = 63bfa50ee6523365ff14c1f45f88737d
+{% if item == 2 -%}
+k    = 00112233445566778899aabbccddef00
+imsi = 001010123456790
+imei = 353490069873318
+{%- elif item == 3 -%}
+k    = 00112233445566778899aabbccddef01
+imsi = 001010123456791
+imei = 353490069873312
+{%- elif item == 4 -%}
+k    = 00112233445566778899aabbccddef02
+imsi = 001010123456792
+imei = 353490069873313
+{%- else -%}
+k    = 00112233445566778899aabbccddef03
+imsi = 001010123456793
+imei = 353490069873314
+{%- endif %}
+
+[rrc]
+release = 15
+ue_category = 4
+
+[nas]
+apn = srsapn
+apn_protocol = ipv4
+
+[gw]
+netns = ue{{ item }}
+ip_devname = tun_srsue
+ip_netmask = 255.255.255.0
+
+[gui]
+enable = false

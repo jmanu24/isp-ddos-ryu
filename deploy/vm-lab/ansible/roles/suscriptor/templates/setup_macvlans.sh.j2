@@ -1,0 +1,22 @@
+#!/bin/sh
+# Managed by Ansible (roles/suscriptor). Creates one macvlan sub-
+# interface per simulated subscriber on top of {{ suscriptor_access_iface }}
+# -- each gets its own MAC, so each looks like a distinct physical
+# subscriber device to accel-ppp's ipoe module on `bng` (which
+# authenticates/accounts by Calling-Station-Id = MAC, see roles/bng's
+# accel-ppp.conf.j2). Run at boot by bng-macvlans.service, before
+# bng-subscriber-agent.service starts driving DHCP leases on these.
+#
+# 02:00:00:00:00:0N -- same locally-administered MAC convention
+# BNGBlaster itself used (session N -> 02:00:00:00:00:0N), kept purely
+# for continuity/readability across this project's Broadband-domain
+# history, not required by accel-ppp itself.
+set -e
+
+PARENT="{{ suscriptor_access_iface }}"
+ip link set "$PARENT" up
+
+{% for n in range(1, bng_subscriber_count + 1) %}
+ip link add link "$PARENT" name macvlan{{ n }} address 02:00:00:00:00:{{ '%02x' % n }} type macvlan mode bridge 2>/dev/null || true
+ip link set macvlan{{ n }} up
+{% endfor %}

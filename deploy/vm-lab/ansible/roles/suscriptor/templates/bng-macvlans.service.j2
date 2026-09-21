@@ -1,0 +1,14 @@
+# Managed by Ansible (roles/suscriptor).
+[Unit]
+Description=Create per-subscriber macvlan interfaces (Broadband domain, distributed mode)
+After=network-online.target
+Wants=network-online.target
+Before=bng-subscriber-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/bng-subscribers/setup_macvlans.sh
+
+[Install]
+WantedBy=multi-user.target

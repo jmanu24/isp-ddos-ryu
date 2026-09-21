@@ -1,0 +1,192 @@
+# Managed by Ansible (roles/ran_srsran) -- schema verified against
+# OCUDU's own official "Using srsUE" tutorial (docs.ocudu.org/tutorials/
+# srsue/), which uses this same cu_cp/ru_sdr/cell_cfg layout -- OCUDU is
+# srsRAN Project's successor as of this lab's build, and this file
+# originated from srsRAN Project's own "gNB with srsUE" application note
+# config, adapted for this lab's cross-VM addressing.
+#
+# IMPORTANT, NOT present in the original tutorial: that config has the
+# gNB and Open5GS core on the SAME machine, reaching the AMF at Docker's
+# own internal bridge IP (10.53.1.2). In this lab the core runs on a
+# DIFFERENT VM (core5g), so 10.53.1.2 is not reachable from here --
+# core5g_open5gs's 5gc container runs with network_mode: host and binds
+# the AMF's N2/SCTP directly on core5g's real RAN-network address
+# ({{ core5g_ran_addr | default('10.40.0.1') }}, confirmed via `ss -a -A sctp`
+# on a real run -- see open5gs.env.j2's own OPEN5GS_IP comment). Use the
+# RAN network end to end here too (not MGMT) so N2 traffic never needs
+# cross-subnet/asymmetric routing between the two VMs.
+#
+# To run: sudo ./gnb -c gnb_zmq.yaml
+
+cu_cp:
+  amf:
+    addr: {{ core5g_ran_addr | default('10.40.0.1') }}
+    port: 38412
+    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    supported_tracking_areas:
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  inactivity_timer: 7200
+
+ru_sdr:
+  device_driver: zmq
+  # tx_port binds (0.0.0.0, every interface) for the UE broker (a
+  # DIFFERENT VM) to connect in; rx_port connects OUT to the broker's
+  # own bind on ue_ran_addr. Confirmed on a real run -- both were
+  # 127.0.0.1 (verbatim from srsRAN's single-PC tutorial), which only
+  # works when gNB and the UE broker share one machine -- see
+  # ue_srsue's multi_ue_scenario.grc.j2 for the matching broker-side fix.
+  device_args: tx_port=tcp://0.0.0.0:2000,rx_port=tcp://{{ ue_ran_addr | default('10.40.0.3') }}:2001,base_srate=11.52e6
+  srate: 11.52
+  # Matches docs.ocudu.org/tutorials/srsue/ (the one config confirmed
+  # working for this exact band/bandwidth/scs) verbatim -- was 75/75,
+  # not what the tutorial uses (0/0), tried while chasing the ZMQ
+  # tx_channel stall (see gnb_zmq_colocated.yaml.j2's own comment).
+  tx_gain: 0
+  rx_gain: 0
+
+cell_cfg:
+  dl_arfcn: 368500
+  band: 3
+  channel_bandwidth_MHz: 10
+  common_scs: 15
+  plmn: "00101"
+  tac: 7
+  pdcch:
+    common:
+      ss0_index: 0
+      # Tried 12 (docs.ocudu.org/tutorials/srsue/'s value) -- confirmed
+      # on a real run this is actually INVALID for this exact
+      # band/bandwidth/scs: "Unable to derive a valid SSB pointA and
+      # k_SSB for CORESET#0 index=12, SearchSpace#0 index=0 and cell
+      # bandwidth=10Mhz" (hard rejection, gNB refuses to start). The
+      # tutorial's scraped value doesn't apply to this exact
+      # dl_arfcn/bandwidth/scs combination -- 6 is the value confirmed
+      # working (SIB1 generated, AMF connected) on this cell_cfg.
+      coreset0_index: 6
+    dedicated:
+      ss2_type: common
+      dci_format_0_1_and_1_1: false
+  prach:
+    prach_config_index: 1
+    total_nof_ra_preambles: 64
+    # Deliberately NOT setting nof_ssb_per_ro -- confirmed on a real run --
+    # OCUDU release_26_04 has a real upstream bug that makes explicitly
+    # setting it to "1" (copied here from the upstream app note, meant as
+    # "ratio 1") actually crash the gNB. Its CLI option has no custom
+    # string->enum converter, so CLI11 parses the raw "1" as the
+    # ssb_per_rach_occasions enum's ordinal 1 (one_forth = ratio 0.25),
+    # not the ratio "1" (ordinal 3, one). Worse, its own
+    # asn1_rrc_config_helpers.cpp compares that ratio against literal
+    # "1 / 4" -- integer division, always 0, never 0.25 -- so even the
+    # 0.25 branch can never match, and it falls through to
+    # `report_fatal_error("Invalid nof. SSB per RACH occasion value 0.25")`.
+    # Leaving this key OUT entirely skips CLI11's parsing of it altogether
+    # (the field keeps its C++ default, ssb_per_rach_occasions::one, ratio
+    # 1.0), landing on the one branch of that same function, which is
+    # correctly implemented (unlike the ==4/==8/==16 branches right after
+    # it, which are ALSO missing their `return;` and fall through even on
+    # a match -- don't set this to 4, 8, or 16 either).
+    nof_cb_preambles_per_ssb: 64
+  pdsch:
+    mcs_table: qam64
+  pusch:
+    mcs_table: qam64
+
+# Not in the base tutorial config -- added here so the gNB's E2 interface
+# is up and subscribable by ric_flexric's FlexRIC. Cross-check field names
+# against the exact commit of srsRAN_Project/main you built (the E2 config
+# block has changed across releases) before your first attach attempt.
+e2:
+  enable_du_e2: true
+  e2sm_kpm_enabled: true
+  # false, not true -- confirmed on a real run: FlexRIC's own bundled
+  # xapp_kpm_moni example (examples/xApp/c/monitor/xapp_kpm_moni.c) calls
+  # abort() via an assert() while decoding the RC RAN Function this gNB
+  # advertises when e2sm_rc_enabled is true --
+  # rc_dec_asn.c:dec_ran_func_ctrl_it: "Assertion
+  # `src->ric_CallProcessIDFormat_Type == NULL && "Not implemented"'
+  # failed" -- an unimplemented ASN.1 field in THIS FlexRIC build's RC
+  # service-model decoder, unrelated to and hit before the xApp ever
+  # gets to subscribing to KPM. Since RIC Control isn't otherwise used
+  # in this lab, disabling RC sidesteps it entirely -- confirmed on a
+  # real run: with this off, xapp_kpm_moni's subscription attempt no
+  # longer crashes -- see this file's own `metrics:` block below for
+  # what was still needed after that to get real per-UE KPM data out.
+  e2sm_rc_enabled: false
+  addr: {{ ric_addr | default('10.10.0.4') }}
+  port: 36421
+  # bind_addr defaults to 127.0.0.1 (confirmed via `./gnb e2 --help` on a
+  # real run) -- binding the E2 client's LOCAL SCTP endpoint to loopback
+  # while connecting OUT to ric's real network address makes the
+  # association impossible, and OCUDU's E2 client apparently fails this
+  # silently (no error at any log level we found). ric has no separate
+  # RAN-network address (unlike core5g/ran/ue), so E2 traffic stays on
+  # MGMT end to end, matching this VM's own MGMT address.
+  bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
+
+log:
+  filename: /tmp/gnb.log
+  # warning, not info -- SAME bug as gnb_zmq_colocated.yaml.j2's own
+  # all_level (see that file's own comment for the full original
+  # investigation): OCUDU's DU-MNG channel prints a malformed pretty-JSON
+  # dump of the negotiated cell config (a doubled opening brace with no
+  # key in rach-ConfigCommon) that hangs/crashes the logger thread
+  # deterministically. This config was never given the fix -- confirmed
+  # on a real run: with all_level: info, the gNB process didn't just
+  # truncate its own log, it failed to even come up (`pgrep -f '^gnb -c'`
+  # found nothing after the launch task's own "still up" check), while
+  # test_single_ue.yml was being used to validate `ran`'s vCPU count
+  # after a resize -- 3 of 4 consecutive runs also failed attach with the
+  # gNB apparently alive, consistent with the same instability. warning
+  # avoids the buggy print path the same way it does for the colocated
+  # config.
+  all_level: warning
+  du_level: warning
+  # e2ap_level is a SEPARATE field from all_level, NOT covered by it --
+  # confirmed via OCUDU's own source (apps/helpers/logger/logger_appconfig.h)
+  # -- it defaults to `warning`, which silently swallows the INFO-level
+  # connection-establishment messages (E2 Setup Request/Response) the
+  # same way NGAP's own logs show for the AMF connection. Without this,
+  # there's no way to tell a real E2/RIC connection failure from the E2
+  # agent simply never having tried.
+  e2ap_level: info
+  hex_max_size: 0
+
+# Without this whole block, E2SM-KPM RIC Report Style 4/5 (the per-UE,
+# matching-condition styles) silently subscribes successfully but NEVER
+# sends a single indication for it -- confirmed on a real run by tracing
+# srsRAN Project's own source: e2sm_kpm_report_service_style4's
+# collect_measurements() calls get_ues_matching_test_conditions(), which
+# only ever returns UEs found in e2sm_kpm_du_meas_provider_impl's
+# ue_aggr_rlc_metrics map -- and that map is only ever populated by
+# report_metrics(rlc_metrics), which is only ever wired up and called at
+# all when apps/units/.../o_du_high_unit_factory.cpp's
+# build_rlc_du_metrics() doesn't early-return, i.e. only when
+# metrics.layers.enable_rlc is true. Without it, every KPM indication
+# that DOES arrive is Style 1 (cell-aggregate, e2sm_kpm_impl.cpp's
+# process_action_definition_format1) -- no UE ID field exists on that
+# format at all, so there is genuinely no way to attribute KPM metrics
+# to a specific UE, not even in principle, until this is set.
+# du_report_period doesn't do this alone -- it only controls the
+# scheduler/cell-level metrics cadence; RLC metrics (and by extension
+# the per-UE KPM path) need this SEPARATE enable_rlc flag too. Confirmed
+# fixed on a real run: with both set, xapp_kpm_moni's per-UE indications
+# show "UE ID type = gNB-DU, gnb_cu_ue_f1ap = 0" and the SAME
+# DRB.UEThpDl/UEThpUl values a concurrent ping burst produced in the
+# Style 1 aggregate indication (0 -> 49/59 -> 98/89 -> 0 kbps), i.e. the
+# per-UE attribution is real, not a placeholder.
+metrics:
+  periodicity:
+    du_report_period: 1000
+  layers:
+    enable_rlc: true
+
+pcap:
+  mac_enable: false
+  mac_filename: /tmp/gnb_mac.pcap
+  ngap_enable: false
+  ngap_filename: /tmp/gnb_ngap.pcap

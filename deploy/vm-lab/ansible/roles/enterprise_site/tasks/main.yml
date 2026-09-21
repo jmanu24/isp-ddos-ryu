@@ -1,0 +1,93 @@
+---
+# enterprise_site role -- one of 5 identical "CPE+Firewall" sites, each a
+# real, distinct traffic source needed to cross DIST_MIN_SOURCES=5 for
+# enterprise DDoS (enterprise never spoofs -- see the conversation history
+# in docs/peering-plan.md and config/settings.py's TOPOLOGY_NUM_SWITCHES
+# comment for the full reasoning). Deliberately unspoofed, matching
+# webtool/enterprise_ops.py's own "an enterprise host attacks as itself"
+# design.
+- name: Install packages
+  # apt, not apk -- confirmed on a real run: hping3 was dropped from
+  # Alpine's stable repos entirely (only in edge/testing, unmaintained
+  # since 2017), so this role (and peer_router, and topology.yaml) moved
+  # to the ubuntu template. openssh-server isn't listed -- tpl-ubuntu-2204
+  # already has it, unlike tpl-alpine which needed it added explicitly.
+  ansible.builtin.apt:
+    name: [hping3, nftables, iproute2]
+    state: present
+    update_cache: true
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Deploy a basic nftables ruleset (default accept -- this VM IS the
+        attacker in most test scenarios, a restrictive firewall would
+        defeat the point)
+  ansible.builtin.copy:
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input   { type filter hook input priority 0; policy accept; }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output  { type filter hook output priority 0; policy accept; }
+      }
+    dest: /etc/nftables.nft
+    mode: "0644"
+  notify: reload nftables
+
+- name: Enable and start nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Configure the MGMT interface (hot-added via govc vm.network.add
+        after this VM was already provisioned -- cloud-init's own
+        99-lab.yaml never saw this NIC, so it needs its own netplan file.
+        ansible_host is ALREADY this address, since the inventory itself
+        points here now -- see topology.yaml's enterprise_site interfaces
+        for why MGMT moved off ENT_LAN)
+  ansible.builtin.copy:
+    content: |
+      network:
+        version: 2
+        ethernets:
+          {{ enterprise_mgmt_iface }}:
+            addresses: [{{ ansible_host }}/24]
+            routes:
+              - to: default
+                via: {{ mgmt_control_node_ip }}
+            nameservers:
+              addresses: [8.8.8.8]
+    dest: /etc/netplan/99-mgmt.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Add the on-link route to ENT_DC over the EXISTING ENT_LAN interface
+        (pe bridges ENT_LAN+ENT_DC at L2 -- see topology.yaml's ENT_DC
+        comment -- but they're different IP subnets, so without an
+        explicit on-link route here this host never even ARPs for
+        victim's address; scope=link is netplan's equivalent of
+        `ip route add ... dev ens160` with no gateway)
+  ansible.builtin.copy:
+    content: |
+      network:
+        version: 2
+        ethernets:
+          {{ enterprise_ent_lan_iface }}:
+            routes:
+              - to: {{ ent_dc_cidr }}
+                scope: link
+    dest: /etc/netplan/98-ent-dc-route.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- confirm netplan actually applied before this
+        role finishes
+  ansible.builtin.meta: flush_handlers

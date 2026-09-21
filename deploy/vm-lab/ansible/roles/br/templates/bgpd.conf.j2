@@ -1,0 +1,47 @@
+! Managed by Ansible (roles/br) -- real eBGP with peer-router, SEPARATE
+! from flow<->exabgp's own internal FlowSpec control channel.
+!
+! `no bgp ebgp-requires-policy` is load-bearing, not decoration --
+! confirmed on a real run: without it, FRR 8.x's default RFC-8212
+! enforcement silently discards every inbound/outbound update on an
+! eBGP session with no route-map/prefix-list attached, even though the
+! session itself shows Established -- "show ip bgp neighbors" reported
+! "Inbound/Outbound updates discarded due to missing policy" and
+! "0 accepted prefixes" despite messages flowing normally.
+frr version 8.0
+frr defaults traditional
+hostname br
+!
+router bgp {{ bgp_br_as }}
+ bgp router-id 10.30.0.1
+ no bgp ebgp-requires-policy
+ neighbor 10.30.0.2 remote-as {{ bgp_peer_router_as }}
+ !
+ address-family ipv4 unicast
+  network 10.10.0.0/24
+  ! Advertises reachability to the dummy "central_server" address
+  ! (config/settings.py's PEERING_CENTRAL_SERVER_IP, added to br's own
+  ! loopback by the "Add dummy central_server address" task) to
+  ! peer-router over the REAL eBGP session -- so peer-router learns how
+  ! to reach it dynamically via BGP, the same way any other real network
+  ! announces its own prefixes, instead of a manually-added static route
+  ! on peer-router that wouldn't survive a reboot. FRR only announces a
+  ! `network` statement if a matching route already exists in the RIB --
+  ! the loopback address itself provides that as a connected /32.
+  network 10.99.0.1/32
+  ! VLAN_BACKBONE -- advertises victim's real network (same one pe's own
+  ! bridge already uses for ENT_LAN/ent-site traffic, now doubling as
+  ! the pe<->victim backbone leg) to peer-router the same real-BGP way
+  ! as the two entries above. Deliberately NOT masqueraded anywhere on
+  ! br's side (see br's own tasks/main.yml comment) -- config/settings.py's
+  ! PER_SOURCE_MITIGATION_DOMAINS detection for this domain depends on
+  ! seeing the real (possibly spoofed) source IP all the way to victim,
+  ! same reasoning docs/peering-plan.md's own allowlist->denylist
+  ! rewrite already documents. Needs a matching route in br's own RIB
+  ! first (see the backbone-route.service oneshot) or FRR won't
+  ! advertise this at all -- same rule as the loopback entry above.
+  network {{ ent_dc_cidr }}
+ exit-address-family
+!
+line vty
+!

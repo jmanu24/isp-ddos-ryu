@@ -1,0 +1,111 @@
+diff --git a/lib/src/phy/rf/rf_zmq_imp_rx.c b/lib/src/phy/rf/rf_zmq_imp_rx.c
+index 657733f01..d7aec5591 100644
+--- a/lib/src/phy/rf/rf_zmq_imp_rx.c
++++ b/lib/src/phy/rf/rf_zmq_imp_rx.c
+@@ -26,6 +26,55 @@
+ #include <string.h>
+ #include <zmq.h>
+ 
++// Recreates the socket and reconnects to the peer. ZeroMQ's REQ socket enforces strict
++// send/recv alternation -- once a request goes unanswered there is no API-level way to
++// resend on the same socket. Confirmed on a real run: the colocated gNB+UE ZMQ loopback
++// can permanently wedge this thread in zmq_recv() after a NAS signaling burst desyncs the
++// per-TTI request/reply cadence, with the peer's own socket having since been recreated
++// (see the gNB-side radio_zmq_rx_channel::reconnect() fix this mirrors) -- retrying recv()
++// on the old connection then waits forever for a reply that will never come, since the new
++// peer socket has no record of the stale request. This closes and reopens the socket so the
++// caller can fall back to the outer loop and send a fresh request.
++static void rf_zmq_rx_reconnect(rf_zmq_rx_t* q)
++{
++  rf_zmq_info(q->id, "Request/response cycle stalled. Reconnecting receiver socket.\n");
++
++  if (q->sock) {
++    zmq_close(q->sock);
++    q->sock = NULL;
++  }
++
++  q->sock = zmq_socket(q->zmq_ctx, q->socket_type);
++  if (!q->sock) {
++    fprintf(stderr, "[zmq] Error: recreating receiver socket: %s\n", zmq_strerror(zmq_errno()));
++    return;
++  }
++
++  if (zmq_connect(q->sock, q->sock_args)) {
++    fprintf(stderr, "[zmq] Error: reconnecting receiver socket: %s\n", zmq_strerror(zmq_errno()));
++    return;
++  }
++
++  if (q->trx_timeout_ms) {
++    int timeout = q->trx_timeout_ms;
++    if (zmq_setsockopt(q->sock, ZMQ_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
++      fprintf(stderr, "[zmq] Error: setting receive timeout on rx socket\n");
++      return;
++    }
++    if (zmq_setsockopt(q->sock, ZMQ_SNDTIMEO, &timeout, sizeof(timeout)) == -1) {
++      fprintf(stderr, "[zmq] Error: setting send timeout on rx socket\n");
++      return;
++    }
++    timeout = 0;
++    if (zmq_setsockopt(q->sock, ZMQ_LINGER, &timeout, sizeof(timeout)) == -1) {
++      fprintf(stderr, "[zmq] Error: setting linger timeout on rx socket\n");
++      return;
++    }
++  }
++
++  rf_zmq_info(q->id, "Receiver socket reconnected.\n");
++}
++
+ static void* rf_zmq_async_rx_thread(void* h)
+ {
+   rf_zmq_rx_t* q = (rf_zmq_rx_t*)h;
+@@ -56,6 +105,15 @@ static void* rf_zmq_async_rx_thread(void* h)
+     for (n = (n < 0) ? 0 : -1; n < 0 && rf_zmq_rx_is_running(q);) {
+       n = zmq_recv(q->sock, q->temp_buffer, ZMQ_MAX_BUFFER_SIZE, 0);
+       if (n == -1) {
++        int err = zmq_errno();
++        if ((err == EAGAIN || err == ETIMEDOUT) && q->socket_type == ZMQ_REQ) {
++          // Recover from a stalled cycle instead of retrying recv() forever on a
++          // connection the peer may have already recreated (see rf_zmq_rx_reconnect()'s
++          // own header comment).
++          rf_zmq_rx_reconnect(q);
++          break;
++        }
++
+         if (rf_zmq_handle_error(q->id, "asynchronous rx baseband receive")) {
+           return NULL;
+         }
+@@ -110,6 +168,11 @@ int rf_zmq_rx_open(rf_zmq_rx_t* q, rf_zmq_opts_t opts, void* zmq_ctx, char* sock
+     strncpy(q->id, opts.id, ZMQ_ID_STRLEN - 1);
+     q->id[ZMQ_ID_STRLEN - 1] = '\0';
+ 
++    // Store context and peer address for later reconnection.
++    q->zmq_ctx = zmq_ctx;
++    strncpy(q->sock_args, sock_args, ZMQ_SOCK_ARGS_STRLEN - 1);
++    q->sock_args[ZMQ_SOCK_ARGS_STRLEN - 1] = '\0';
++
+     // Create socket
+     q->sock = zmq_socket(zmq_ctx, opts.socket_type);
+     if (!q->sock) {
+diff --git a/lib/src/phy/rf/rf_zmq_imp_trx.h b/lib/src/phy/rf/rf_zmq_imp_trx.h
+index 71b2a39e4..0e8060ffc 100644
+--- a/lib/src/phy/rf/rf_zmq_imp_trx.h
++++ b/lib/src/phy/rf/rf_zmq_imp_trx.h
+@@ -37,6 +37,7 @@
+ #define ZMQ_ID_STRLEN 16
+ #define ZMQ_MAX_GAIN_DB (30.0f)
+ #define ZMQ_MIN_GAIN_DB (0.0f)
++#define ZMQ_SOCK_ARGS_STRLEN 256
+ 
+ typedef enum { ZMQ_TYPE_FC32 = 0, ZMQ_TYPE_SC16 } rf_zmq_format_t;
+ 
+@@ -75,6 +76,10 @@ typedef struct {
+   uint32_t            trx_timeout_ms;
+   bool                log_trx_timeout;
+   int32_t             sample_offset;
++  /// ZMQ context. Stored so the socket can be recreated on a stalled request/response cycle.
++  void* zmq_ctx;
++  /// Peer address. Stored so the socket can be reconnected on a stalled request/response cycle.
++  char sock_args[ZMQ_SOCK_ARGS_STRLEN];
+ } rf_zmq_rx_t;
+ 
+ typedef struct {

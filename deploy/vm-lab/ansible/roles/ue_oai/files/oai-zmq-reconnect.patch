@@ -1,0 +1,178 @@
+diff --git a/radio/zmq/zmq_imported.cpp b/radio/zmq/zmq_imported.cpp
+index 51dd842609..14b4ad7cd7 100644
+--- a/radio/zmq/zmq_imported.cpp
++++ b/radio/zmq/zmq_imported.cpp
+@@ -6,7 +6,7 @@
+ 
+ #include "zmq_imported.h"
+ #include "log.h"
+-
++#include <cstring>
+ #include "zmq_simd.h"
+ 
+ static constexpr std::chrono::milliseconds TRANSMIT_TS_ALIGN_TIMEOUT = std::chrono::milliseconds(0);
+@@ -95,11 +95,26 @@ bool zmq_tx_channel::align(uint64_t timestamp, std::chrono::milliseconds timeout
+ void zmq_rx_channel::receive(c16_t *samples, size_t nsamps)
+ {
+   size_t samples_popped = 0;
++  auto start_time = std::chrono::steady_clock::now();
++  static constexpr std::chrono::milliseconds RX_STALL_TIMEOUT = std::chrono::milliseconds(5000);
+   while (samples_popped < (size_t)nsamps && !stopped_) {
+     size_t popped_now = buffer_.pop_samples(samples + samples_popped, nsamps - samples_popped);
+     samples_popped += popped_now;
+     if (popped_now == 0) {
++      // Give up and fill the rest with silence instead of blocking this call forever.
++      // zmq_rx_stream::receive() (this file, below) calls tx_stream_->align() right
++      // before this -- confirmed on a real run: that ties this UE's own TX sample-clock
++      // advancement to this RX call returning, so blocking here indefinitely also
++      // freezes this UE's own uplink production, which then starves the gNB's own RX
++      // too -- a mutual stall neither side's transport-level reconnect logic can break
++      // on its own.
++      if (std::chrono::steady_clock::now() - start_time > RX_STALL_TIMEOUT) {
++        memset(samples + samples_popped, 0, (nsamps - samples_popped) * sizeof(c16_t));
++        return;
++      }
+       usleep(100); // wait for more samples to arrive
++    } else {
++      start_time = std::chrono::steady_clock::now();
+     }
+   }
+ }
+diff --git a/radio/zmq/zmq_imported.h b/radio/zmq/zmq_imported.h
+index a33ba59016..3fe209f66d 100644
+--- a/radio/zmq/zmq_imported.h
++++ b/radio/zmq/zmq_imported.h
+@@ -12,6 +12,7 @@
+ #include <condition_variable>
+ #include <atomic>
+ #include <mutex>
++#include <string>
+ #include <vector>
+ #include <queue>
+ 
+@@ -49,10 +50,20 @@ class zmq_tx_channel {
+ class zmq_rx_channel {
+  public:
+    void *socket_;
++   // zmq_context_/address_: stored so rx_poll_thread can recreate and
++   // reconnect this (ZMQ_REQ) socket when a send/recv in its request/reply
++   // cycle fails. Confirmed on a real run: the colocated gNB+OAI-UE ZMQ
++   // loopback can permanently wedge this cycle after the gNB's own paired
++   // REP socket (OCUDU's radio_zmq_tx_channel) gets recreated during a
++   // stall on its own side (see that class's own reconnect() comment) --
++   // this REQ socket has no way to notice and resume on the old connection.
++   void *zmq_context_;
++   std::string address_;
+    overflow_buffer<c16_t> buffer_;
+    bool request_sent_;
+    std::atomic<bool> stopped_;
+-   zmq_rx_channel(void *s, uint64_t buffer_size) : socket_(s), buffer_(buffer_size), stopped_(false)
++   zmq_rx_channel(void *s, void *zmq_context, std::string address, uint64_t buffer_size) :
++     socket_(s), zmq_context_(zmq_context), address_(address), buffer_(buffer_size), stopped_(false)
+   {
+   }
+   void receive(c16_t *samples, size_t nsamps);
+diff --git a/radio/zmq/zmq_radio.cpp b/radio/zmq/zmq_radio.cpp
+index 4e54233857..61fa423afe 100644
+--- a/radio/zmq/zmq_radio.cpp
++++ b/radio/zmq/zmq_radio.cpp
+@@ -110,11 +110,53 @@ static void tx_poll_thread(zmq_tx_channel *chan, size_t i, std::atomic<bool> *po
+   }
+ }
+ 
++// Recreates and reconnects a stalled RX (ZMQ_REQ) channel, then sends a fresh priming
++// request so rx_poll_thread's cycle can resume. See zmq_rx_channel's own header comment
++// (zmq_imported.h) for why this is needed: a ZMQ_REQ socket cannot simply retry send()
++// after a failure once its paired REP peer (the gNB) has recreated its own socket, since
++// the two ends no longer agree on whose turn it is to speak.
++static bool reconnect_rx_channel(zmq_rx_channel *chan, size_t i)
++{
++  LOG_W(HW, "[ZMQ] Request/response cycle stalled. Reconnecting RX antenna %d (%s).\n", (int)i, chan->address_.c_str());
++
++  if (chan->socket_) {
++    zmq_close(chan->socket_);
++    chan->socket_ = nullptr;
++  }
++
++  void *socket = zmq_socket(chan->zmq_context_, ZMQ_REQ);
++  if (!socket) {
++    LOG_E(HW, "[ZMQ] Failed to recreate RX socket for antenna %d: %s\n", (int)i, zmq_strerror(errno));
++    return false;
++  }
++  int linger = 0;
++  zmq_setsockopt(socket, ZMQ_LINGER, &linger, sizeof(linger));
++  if (zmq_connect(socket, chan->address_.c_str()) != 0) {
++    LOG_E(HW, "[ZMQ] Failed to reconnect RX socket for antenna %d: %s\n", (int)i, zmq_strerror(errno));
++    zmq_close(socket);
++    return false;
++  }
++  chan->socket_ = socket;
++
++  char dummy = 0;
++  if (zmq_send(chan->socket_, &dummy, 1, 0) != 1) {
++    LOG_E(HW, "[ZMQ] Failed to send priming request after reconnect for antenna %d: %s\n", (int)i, zmq_strerror(errno));
++    return false;
++  }
++
++  LOG_I(HW, "[ZMQ] RX antenna %d reconnected (%s).\n", (int)i, chan->address_.c_str());
++  return true;
++}
++
+ static void rx_poll_thread(zmq_rx_channel *chan, size_t i, std::atomic<bool> *poll_thread_running)
+ {
+   unsigned char *rx_buffer = static_cast<unsigned char *>(malloc(rx_buffer_size));
+   c16_t *rx_buffer_c16 = static_cast<c16_t *>(malloc(rx_buffer_size / sizeof(cf_t) * sizeof(c16_t)));
+   zmq_pollitem_t item = {chan->socket_, 0, ZMQ_POLLIN, 0};
++  // Tracks how long we have been waiting for a reply since the last request was sent --
++  // mirrors OCUDU's own radio_zmq_rx_channel_fsm 1-second stall threshold.
++  auto last_progress = std::chrono::steady_clock::now();
++  const auto stall_timeout = std::chrono::milliseconds(1000);
+ 
+   while (*poll_thread_running) {
+     int rc = zmq_poll(&item, 1, 10); // 10ms timeout
+@@ -125,6 +167,13 @@ static void rx_poll_thread(zmq_rx_channel *chan, size_t i, std::atomic<bool> *po
+       break;
+     }
+     if (rc == 0) {
++      // No reply yet -- check whether we have been waiting too long for this request.
++      if (std::chrono::steady_clock::now() - last_progress > stall_timeout) {
++        if (reconnect_rx_channel(chan, i)) {
++          item.socket = chan->socket_;
++        }
++        last_progress = std::chrono::steady_clock::now();
++      }
+       continue; // timeout
+     }
+ 
+@@ -132,6 +181,10 @@ static void rx_poll_thread(zmq_rx_channel *chan, size_t i, std::atomic<bool> *po
+       rc = zmq_recv(chan->socket_, rx_buffer, rx_buffer_size, 0);
+       if (rc < 0) {
+         LOG_E(HW, "[ZMQ] rx_poll_thread zmq_recv for RX antenna %d failed: %s\n", (int)i, zmq_strerror(errno));
++        if (reconnect_rx_channel(chan, i)) {
++          item.socket = chan->socket_;
++        }
++        last_progress = std::chrono::steady_clock::now();
+       } else {
+         size_t received_bytes = rc;
+         if (rx_buffer_size < received_bytes) {
+@@ -157,7 +210,11 @@ static void rx_poll_thread(zmq_rx_channel *chan, size_t i, std::atomic<bool> *po
+         char dummy = 0;
+         if (zmq_send(chan->socket_, &dummy, 1, 0) != 1) {
+           LOG_E(HW, "[ZMQ] rx_poll_thread zmq_send for RX antenna %d failed: %s\n", (int)i, zmq_strerror(errno));
++          if (reconnect_rx_channel(chan, i)) {
++            item.socket = chan->socket_;
++          }
+         }
++        last_progress = std::chrono::steady_clock::now();
+       }
+     }
+   }
+@@ -332,7 +389,7 @@ extern "C" __attribute__((__visibility__("default"))) int device_init(openair0_d
+       int linger = 0;
+       zmq_setsockopt(socket, ZMQ_LINGER, &linger, sizeof(linger));
+       AssertFatal(zmq_connect(socket, rx_channels[i]) == 0, "zmq_connect for RX antenna %d failed on %s", i, rx_channels[i]);
+-      auto channel = new zmq_rx_channel(socket, openair0_cfg->sample_rate);
++      auto channel = new zmq_rx_channel(socket, zmq_state->context, std::string(rx_channels[i]), openair0_cfg->sample_rate);
+       LOG_I(HW, "[ZMQ] RX socket for antenna %d connected to %s\n", i, rx_channels[i]);
+       zmq_state->rx_stream.channels_[i] = channel;
+     }

@@ -1,0 +1,15 @@
+---
+- name: netplan apply
+  ansible.builtin.command: netplan apply
+
+- name: restart bng-macvlans
+  ansible.builtin.systemd:
+    name: bng-macvlans.service
+    daemon_reload: true
+    state: restarted
+
+- name: restart bng-subscriber-agent
+  ansible.builtin.systemd:
+    name: bng-subscriber-agent.service
+    daemon_reload: true
+    state: restarted

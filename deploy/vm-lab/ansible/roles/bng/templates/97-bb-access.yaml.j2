@@ -1,0 +1,16 @@
+# Managed by Ansible (roles/bng). Explicit netplan for the BB_ACCESS
+# interface -- NOT redundant with render_cloud_init's own generated
+# 99-lab.yaml: confirmed on a real run that this VM's cloud-init was
+# injected back when bng_access_iface was still (incorrectly) assumed
+# to be "ens161" (see render_topology.py's own history) -- cloud-init
+# only runs on first boot, so that stale netplan entry (for a name that
+# never existed on this real host, the true name is ens192) silently
+# never applied, leaving the real ens192 with no IPv4 address at all.
+# accel-ppp's [radius] nas-ip-address directive binds its outgoing
+# RADIUS socket to this exact address -- without it, every RADIUS
+# request failed with EADDRNOTAVAIL ("Cannot assign requested address").
+network:
+  version: 2
+  ethernets:
+    {{ bng_access_iface }}:
+      addresses: [{{ bng_access_addr }}/24]

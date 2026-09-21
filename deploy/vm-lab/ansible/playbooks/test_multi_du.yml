@@ -1,0 +1,215 @@
+---
+# test_multi_du.yml -- scale-out test: 4 more dedicated DU<->UE pairs
+# (du2-du5, each its own srsue *process* on the existing `ue` VM)
+# alongside the original du/UE1 pair from test_split_cu_du.yml.
+# Deliberately NOT the GNU-Radio broker path (multi_ue_scenario.grc,
+# test_three_ue_broker.yml) -- docs/ran-testing.md SS6.2 found the
+# broker's own RF combiner doesn't model per-UE timing/CFO offset,
+# causing a real, unresolved Msg3 CRC failure for every UE past the
+# first. Each du{N} here gets its own real, independent ZMQ RF channel
+# to its own dedicated UE process -- there is NO combining at all, so
+# that bug class doesn't apply. All 4 DUs pair with the SAME CU (`ran`'s
+# srscu) over F1 -- confirmed via cu_split.yaml.j2 that CU-CP has no
+# single-DU limit (F1AP is natively N:1 DU:CU), so nothing on the CU
+# side needs to change to add more DUs.
+#
+# Prerequisites:
+#   - topology.yaml has du2-du5 (8 vCPU/8GB/20GB each, same hard
+#     requirement as `du` itself -- see docs/ran-testing.md SS8.4, the
+#     srsRAN Project worker-pool formula gives exactly 1 real-time
+#     thread at 4 vCPUs regardless of which du instance it is).
+#   - site.yml already run for du_srsran on du2-du5 (builds srsdu) and
+#     ue_srsue (deploys ue_direct_zmq_du{2..5}.conf, reusing the
+#     pre-provisioned ue02-ue05 subscriber identities from
+#     core5g_open5gs's subscriber_db.csv -- no new subscribers needed).
+#   - This playbook does NOT touch `du`/UE1 -- run test_split_cu_du.yml
+#     separately (or first) for that pair. Together: 5 concurrent UEs.
+#
+# Usage:
+#   ansible-playbook playbooks/test_multi_du.yml
+#   ansible-playbook playbooks/test_multi_du.yml --skip-tags victim
+
+- name: Kill any stale CU and launch a fresh one (same CU serves du2-du5 too)
+  hosts: ran_srsran
+  gather_facts: false
+  tasks:
+    - name: Find any running srscu
+      ansible.builtin.shell: pgrep -f '^srscu -c' || true
+      register: stale_cu
+      changed_when: false
+
+    - name: Kill it
+      ansible.builtin.shell: "kill -9 {{ stale_cu.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_cu.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch CU (srscu -- CU-CP + CU-UP combined)
+      ansible.builtin.shell: >-
+        rm -f /tmp/cu.log /tmp/cu_stdout.log &&
+        setsid nohup srscu -c /etc/srsran/cu_split.yaml
+        > /tmp/cu_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for the CU's F1-C/E2/N2 sockets to bind
+      ansible.builtin.wait_for:
+        timeout: 4
+      delegate_to: localhost
+
+    - name: Confirm it's still up
+      ansible.builtin.shell: pgrep -f '^srscu -c'
+      register: cu_pid
+      changed_when: false
+      failed_when: cu_pid.stdout == ""
+
+- name: Kill any stale DU and launch a fresh one on each of du2-du5
+  hosts: du2,du3,du4,du5
+  gather_facts: false
+  # serial: 1 -- confirmed on a real run: launching all 4 DUs in
+  # parallel (Ansible's default) makes their E2 agents all send their
+  # E2 Setup Request to the same nearRT-RIC within the same second,
+  # which reliably segfaults ONE of them (rotates which one across
+  # runs) inside srsran::e2_setup_procedure::send_e2_setup_request() --
+  # same crash signature as the single-DU E2-down segfault, but this
+  # one happens even with the RIC up, seemingly a race between
+  # concurrent E2 Setup Request/Response exchanges. Staggering the
+  # launches one host at a time avoids the race; the underlying bug
+  # itself (a real, unresolved concurrency bug in upstream srsRAN
+  # Project's E2 setup procedure) is not fixed here.
+  serial: 1
+  tasks:
+    - name: Find any running srsdu
+      ansible.builtin.shell: pgrep -f '^srsdu -c' || true
+      register: stale_du
+      changed_when: false
+
+    - name: Kill it
+      ansible.builtin.shell: "kill -9 {{ stale_du.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_du.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch DU (srsdu -- pairs with the shared CU over real F1)
+      ansible.builtin.shell: >-
+        rm -f /tmp/du.log /tmp/du_stdout.log &&
+        setsid nohup srsdu -c /etc/srsran/du_split.yaml
+        > /tmp/du_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for F1 setup with the CU to complete
+      ansible.builtin.wait_for:
+        timeout: 8
+      delegate_to: localhost
+
+    - name: Confirm it's still up (didn't stall at cell activation)
+      ansible.builtin.shell: pgrep -f '^srsdu -c'
+      register: du_pid
+      changed_when: false
+      failed_when: du_pid.stdout == ""
+
+    - name: Confirm the F1 SCTP association to the CU is actually up --
+            /proc/net/sctp/assocs uses whitespace-delimited LPORT/RPORT
+            columns, not addr-colon-port notation
+      ansible.builtin.shell: grep -cE '\s38472\s' /proc/net/sctp/assocs || true
+      register: f1_assoc
+      changed_when: false
+      failed_when: f1_assoc.stdout | trim | int == 0
+
+- name: Launch 4 UEs (one per du2-du5) and confirm PDU Session Establishment
+  hosts: ue_srsue
+  gather_facts: false
+  tasks:
+    - name: Find any running srsue instances for items 2-5
+      ansible.builtin.shell: "pgrep -f 'srsue /etc/srsran/ue_direct_zmq_du{{ item }}.conf' || true"
+      register: stale_ue
+      changed_when: false
+      loop: [2, 3, 4, 5]
+      loop_control:
+        label: "ue{{ item }}"
+
+    - name: Kill stale ones
+      ansible.builtin.shell: "kill -9 {{ item.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: item.stdout_lines | length > 0
+      changed_when: true
+      loop: "{{ stale_ue.results }}"
+      loop_control:
+        label: "ue{{ item.item }}"
+
+    - name: Launch srsue for items 2-5 (each direct to its own dedicated DU)
+      ansible.builtin.shell: >-
+        rm -f /tmp/ue{{ item }}_direct.log &&
+        setsid nohup srsue /etc/srsran/ue_direct_zmq_du{{ item }}.conf
+        > /tmp/ue{{ item }}_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+      loop: [2, 3, 4, 5]
+      loop_control:
+        label: "ue{{ item }}"
+
+    - name: Poll each UE's stdout for PDU Session Establishment
+      ansible.builtin.shell: "grep -c 'PDU Session Establishment successful' /tmp/ue{{ item }}_stdout.log || true"
+      register: pdu_check
+      until: pdu_check.stdout | trim | int > 0
+      retries: 12
+      delay: 2
+      changed_when: false
+      failed_when: false
+      loop: [2, 3, 4, 5]
+      loop_control:
+        label: "ue{{ item }}"
+
+    - name: Report attach results per UE
+      ansible.builtin.debug:
+        msg: >-
+          UE{{ item.item }} (du{{ item.item }}): {{ 'PDU Session established.'
+          if (item.stdout | trim | int > 0) else
+          'RACH/attach did not complete -- known non-determinism, re-run.' }}
+      loop: "{{ pdu_check.results }}"
+      loop_control:
+        label: "ue{{ item.item }}"
+
+    - name: Build a plain list of which items (2-5) actually attached
+      ansible.builtin.set_fact:
+        attached_items: "{{ pdu_check.results | selectattr('stdout', 'defined') | rejectattr('stdout', 'equalto', '0') | map(attribute='item') | list }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "{{ attached_items | length }} of 4 new UEs (du2-du5) attached successfully: {{ attached_items }}"
+
+    - name: Bring up loopback and default route inside each attached UE's netns
+      ansible.builtin.shell: |
+        ip netns exec ue{{ item }} ip link set lo up
+        ue_ip=$(ip netns exec ue{{ item }} ip -4 -o addr show tun_srsue | awk '{print $4}' | cut -d/ -f1)
+        gw="${ue_ip%.*}.1"
+        ip netns exec ue{{ item }} ip route replace default via "$gw" dev tun_srsue
+        echo "$ue_ip"
+      loop: "{{ attached_items }}"
+      loop_control:
+        label: "ue{{ item }}"
+      tags: [always]
+
+    - name: "[victim] Confirm real data-plane connectivity from each attached UE"
+      ansible.builtin.shell: "ip netns exec ue{{ item }} ping -c 3 -W 3 {{ victim_addr | default(bng_target_ip) | default('10.10.0.100') }}"
+      register: ping_victim
+      changed_when: false
+      loop: "{{ attached_items }}"
+      loop_control:
+        label: "ue{{ item }}"
+      tags: [victim]
+
+    - name: "[victim] Report"
+      ansible.builtin.debug:
+        msg: "ue{{ item.item }}: {{ item.stdout_lines | default('no output') }}"
+      loop: "{{ ping_victim.results }}"
+      loop_control:
+        label: "ue{{ item.item }}"
+      tags: [victim]
+
+    - name: Fail loudly if NONE of the 4 new UEs attached (all-fail is a
+            real problem worth stopping on; partial success is reported
+            above but not treated as fatal, matching the same
+            non-determinism test_split_cu_du.yml already documents)
+      ansible.builtin.fail:
+        msg: >-
+          None of du2-du5's UEs attached -- re-run the playbook. If this
+          repeats consistently (not just once), check each du{N}'s own
+          F1 association (previous play) and /tmp/du.log /
+          /tmp/ue{N}_direct.log for a real error, not just flakiness.
+      when: attached_items | length == 0

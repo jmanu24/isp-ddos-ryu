@@ -1,0 +1,136 @@
+---
+# suscriptor role -- Ubuntu, drives real per-subscriber IPoE sessions
+# (macvlan sub-interfaces, one per simulated subscriber, each running
+# its own real dhclient process) against accel-ppp on `bng`, plus real
+# attack traffic sourced from each subscriber's own DHCP-assigned IP --
+# TCP_SYN/UDP via simulation/bng_flood.py's own kernel sockets, ICMP via
+# the system `ping` binary; NOT hping3 (confirmed on a real run that
+# hping3 cannot reliably deliver traffic here at all, over a PPP
+# interface OR a plain Ethernet-type one -- see bng_flood.py's own
+# module docstring).
+#
+# REPLACES the BNGBlaster-based design (simulation/
+# bng_subscriber_agent.py stands in for the old bng_agent.py -- see
+# bngblaster_broadband_pipeline_status memory for why BNGBlaster itself
+# was dropped: an unresolved packet-transmission bug on this lab).
+#
+# This project also briefly went through a PPPoE/pppd phase: an
+# earlier IPoE test showed accel-ppp's ipoeN session interfaces never
+# counting real attack traffic, which looked like a kernel driver bug,
+# so the whole stack was rebuilt around PPPoE instead. It wasn't the
+# kernel driver -- confirmed on a later real run that THIS VM being
+# dual-homed (a management NIC besides the access-side one each
+# macvlanN rides on) meant attack traffic sourced from a subscriber's
+# IP was routing out the WRONG NIC entirely with no explicit override,
+# never reaching `bng` at all. bng_subscriber_agent.py's own
+# _add_source_route() below is that override (a per-subscriber `ip
+# rule`/`ip route`, forcing traffic sourced from each subscriber's own
+# IP out its own macvlanN interface via `bng`'s real gateway) -- once
+# in place, real accounting worked correctly under IPoE, and PPPoE's
+# extra complexity (pppd, PAP, Van Jacobson compression workarounds)
+# turned out to be unnecessary.
+#
+# Real BNG-side telemetry now comes from FreeRADIUS's own accounting
+# records on `bng` (telemetry/broadband_adapter.py tails those
+# directly) -- this VM's own job is just making real sessions + real
+# attack traffic exist, nothing here produces telemetry itself.
+#
+# Only 2 NICs now (MGMT + BB_ACCESS, both baked into cloud-init at
+# clone time) -- no more hot-added 3rd NIC / address-stripping dance;
+# macvlan has no objection to the kernel owning addresses on BB_ACCESS
+# the way BNGBlaster did (see topology.yaml's own comment on this VM's
+# interfaces for the full reasoning).
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [git, python3, isc-dhcp-client, iproute2, iputils-ping]
+    state: present
+    update_cache: true
+
+- name: Authorize orchestrator's SSH public key
+  # Needed for telemetry/broadband_adapter.py's SSH calls to
+  # `suscriptor` (reading active_scenario.json) and webtool/bng_ops.py's
+  # FIFO writes -- same gap as roles/bng's own task, see its comment.
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"
+  when: "'orchestrator_ssh_pubkey' in hostvars['orchestrator']"
+
+- name: Clone Tesis_Controller (for simulation/bng_subscriber_agent.py,
+        the distributed-mode session+attack-traffic control daemon)
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
+    force: false
+
+- name: Strip BB_ACCESS's auto-DHCP (render_cloud_init defaults an
+        address-less interface to dhcp4=true -- we don't want the
+        PHYSICAL interface itself leasing an address, only its macvlan
+        children, one per simulated subscriber, should)
+  ansible.builtin.replace:
+    path: /etc/netplan/99-lab.yaml
+    regexp: '^(\s*)dhcp4: true$'
+    replace: '\1dhcp4: false'
+  notify: netplan apply
+
+- name: Flush handlers now -- BB_ACCESS must be address-less and up
+        before the macvlan setup script runs
+  ansible.builtin.meta: flush_handlers
+
+- name: Create /opt/bng-subscribers
+  ansible.builtin.file:
+    path: /opt/bng-subscribers
+    state: directory
+    mode: "0755"
+
+- name: Deploy the macvlan setup script
+  ansible.builtin.template:
+    src: setup_macvlans.sh.j2
+    dest: /opt/bng-subscribers/setup_macvlans.sh
+    mode: "0755"
+  notify: restart bng-macvlans
+
+- name: Deploy bng-macvlans systemd unit
+  ansible.builtin.template:
+    src: bng-macvlans.service.j2
+    dest: /etc/systemd/system/bng-macvlans.service
+    mode: "0644"
+  notify: restart bng-macvlans
+
+- name: Create the subscriber-agent's DHCP run directory
+  ansible.builtin.file:
+    path: /run/bng-subscribers
+    state: directory
+    mode: "1777"
+
+- name: Create the bng-agent FIFO directory
+  ansible.builtin.file:
+    path: /run/bng-agent
+    state: directory
+    mode: "1777"
+
+- name: Deploy bng-subscriber-agent systemd unit
+  ansible.builtin.template:
+    src: bng-subscriber-agent.service.j2
+    dest: /etc/systemd/system/bng-subscriber-agent.service
+    mode: "0644"
+  notify: restart bng-subscriber-agent
+
+- name: Flush handlers now -- macvlans must exist before the
+        subscriber agent starts leasing DHCP on them
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start bng-macvlans
+  ansible.builtin.systemd:
+    name: bng-macvlans.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Enable and start bng-subscriber-agent
+  ansible.builtin.systemd:
+    name: bng-subscriber-agent.service
+    daemon_reload: true
+    enabled: true
+    state: started

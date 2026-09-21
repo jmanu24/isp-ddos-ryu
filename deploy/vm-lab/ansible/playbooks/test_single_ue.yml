@@ -1,0 +1,139 @@
+---
+# test_single_ue.yml -- direct (non-colocated), single-UE, cross-VM RAN
+# test: gNB on `ran`, one srsue instance on the separate `ue` VM, real
+# ZMQ RF over the RAN network (not loopback). Confirmed working
+# end-to-end on a real run (2026-09-20): RACH -> RRC Connected -> PDU
+# Session Establishment -> real internet connectivity through the UPF
+# (5/5 ICMP to 8.8.8.8, captured on core5g's own ogstun interface) and
+# real connectivity to `victim` (5/5 ICMP to victim's MGMT address).
+#
+# Known non-determinism, NOT fixed by this playbook (see this repo's own
+# ran_srsran commit history for the debugging trail): RACH occasionally
+# fails outright on the first attempt (7/7 preambles transmitted, never
+# answered) with no application-level fix found. If this run's PDU
+# Session check fails, just re-run this playbook -- it kills stale
+# processes and starts fully fresh each time, and a second/third attempt
+# has reliably succeeded in every session so far.
+#
+# Prerequisites: site.yml already run for core5g_open5gs, ric_flexric,
+# ran_srsran and ue_srsue (this playbook only launches/tests the already
+# -built binaries, it doesn't build anything).
+#
+# Usage:
+#   ansible-playbook playbooks/test_single_ue.yml
+#   ansible-playbook playbooks/test_single_ue.yml --skip-tags internet,victim
+#   ansible-playbook playbooks/test_single_ue.yml -e victim_addr=10.10.0.100
+
+- name: Kill any stale gNB/UE processes and launch a fresh gNB
+  hosts: ran_srsran
+  gather_facts: false
+  tasks:
+    - name: Find any running gnb
+      ansible.builtin.shell: pgrep -f '^gnb -c' || true
+      register: stale_gnb
+      changed_when: false
+
+    - name: Kill it
+      ansible.builtin.shell: "kill -9 {{ stale_gnb.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_gnb.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch gNB (gnb_zmq.yaml -- non-colocated, RAN-network addressed)
+      ansible.builtin.shell: >-
+        rm -f /tmp/gnb.log &&
+        nohup gnb -c /etc/srsran/gnb_zmq.yaml
+        > /tmp/gnb_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for the gNB's ZMQ cycle to stabilize
+      ansible.builtin.wait_for:
+        timeout: 8
+      delegate_to: localhost
+
+    - name: Confirm it's still up (didn't crash on startup)
+      ansible.builtin.shell: pgrep -f '^gnb -c'
+      register: gnb_pid
+      changed_when: false
+      failed_when: gnb_pid.stdout == ""
+
+- name: Launch the UE and confirm PDU Session Establishment
+  hosts: ue_srsue
+  gather_facts: false
+  tasks:
+    - name: Find any running srsue
+      ansible.builtin.shell: pgrep -f '^srsue ' || true
+      register: stale_ue
+      changed_when: false
+
+    - name: Kill it
+      ansible.builtin.shell: "kill -9 {{ stale_ue.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_ue.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch srsue (ue_direct_zmq.conf -- direct to the gNB, no broker)
+      ansible.builtin.shell: >-
+        rm -f /tmp/ue_direct.log &&
+        nohup srsue /etc/srsran/ue_direct_zmq.conf
+        > /tmp/srsue_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Poll srsue's own stdout for PDU Session Establishment
+      ansible.builtin.shell: grep -c 'PDU Session Establishment successful' /tmp/srsue_stdout.log || true
+      register: pdu_check
+      until: pdu_check.stdout | trim | int > 0
+      retries: 12
+      delay: 2
+      changed_when: false
+      failed_when: false
+
+    - name: Report attach result
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'PDU Session established.' if (pdu_check.stdout | trim | int > 0)
+             else 'RACH/attach did not complete within ~24s -- this is the
+             known non-determinism (see this file'"'"'s own header). Re-run
+             this playbook.' }}
+
+    - name: Fail loudly if attach didn't complete (stops the play here,
+            skips the connectivity checks below)
+      ansible.builtin.fail:
+        msg: Attach failed -- see the report above. Re-run the playbook.
+      when: pdu_check.stdout | trim | int == 0
+
+    - name: Bring up loopback and add the default route inside the UE's netns
+      # Confirmed necessary on a real run -- srsue's [gw] section never
+      # adds one itself (see ue_srsue role's own debug task for the full
+      # explanation). netns/interface name and gateway are ue1's
+      # (ue_direct_zmq.conf reuses ue1's namespace) -- ogstun's gateway
+      # address for this UE's /24 is always its own IP with the host
+      # octet forced to .1 (see core5g_open5gs role: UE_IP_BASE.N.1 per
+      # subnet), so this derives it from the UE's own assigned address
+      # rather than hardcoding 10.45.1.1.
+      ansible.builtin.shell: |
+        ip netns exec ue1 ip link set lo up
+        ue_ip=$(ip netns exec ue1 ip -4 -o addr show tun_srsue | awk '{print $4}' | cut -d/ -f1)
+        gw="${ue_ip%.*}.1"
+        ip netns exec ue1 ip route replace default via "$gw" dev tun_srsue
+      changed_when: true
+
+    - name: "[internet] Ping the real internet through the UPF (tag: internet)"
+      ansible.builtin.shell: ip netns exec ue1 ping -c 5 -W 3 8.8.8.8
+      register: ping_internet
+      changed_when: false
+      tags: [internet]
+
+    - name: "[internet] Report"
+      ansible.builtin.debug:
+        var: ping_internet.stdout_lines
+      tags: [internet]
+
+    - name: "[victim] Ping victim's MGMT address (tag: victim)"
+      ansible.builtin.shell: "ip netns exec ue1 ping -c 5 -W 3 {{ victim_addr | default(bng_target_ip) | default('10.10.0.100') }}"
+      register: ping_victim
+      changed_when: false
+      tags: [victim]
+
+    - name: "[victim] Report"
+      ansible.builtin.debug:
+        var: ping_victim.stdout_lines
+      tags: [victim]

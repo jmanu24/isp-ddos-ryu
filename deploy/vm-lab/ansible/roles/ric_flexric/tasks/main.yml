@@ -1,0 +1,248 @@
+---
+# ric_flexric role -- FlexRIC, now on the `dev` branch (see below for why,
+# not the previous `br-flexric`). Deliberately NOT the `oie-ric-taap-xapps`
+# branch used by this repo's earlier, abandoned deploy/setup_ns_oran_flexric.sh
+# attempt (ns-3 simulation + Orange's ns-O-RAN-flexric fork) -- that path
+# had real, confirmed bugs (a heap buffer overflow in the ns-3 fork's own
+# ASN.1 measurement-name encoding, a bad_any_cast on Test Condition
+# Value, PRB-threshold gating) entirely inside Orange's ns-3 integration
+# layer, none of them in FlexRIC itself. This role never touches ns-3,
+# e2sim-kpmv3, or mmwave-LENA-oran at all.
+#
+# BRANCH HISTORY: originally on `br-flexric` @ 1a3903a7 (srsRAN Project's
+# own official application note's recommended branch) -- confirmed on a
+# real run to hit a genuine, long-standing, NEVER-FIXED upstream bug:
+# xApp KPM subscriptions crash with "Timeout waiting for Report.
+# Connection lost with the RIC?" and the gNB never even logs receiving
+# the subscription, matching github.com/srsran/srsRAN_Project#525
+# exactly (opened 2024, repo archived 2026-06-01, no fix ever posted) --
+# an ASN.1 wire-format mismatch between br-flexric's KPM encoder and
+# srsRAN/OCUDU's decoder, not a metric-name typo (checked: the one
+# metric xapp_kpm_rc.c requests, DRB.RlcSduDelayDl, IS correctly defined
+# in OCUDU's own e2sm_kpm_metric_defs.h). Switched to `dev` -- FlexRIC's
+# actively-maintained default branch (commits as recent as the day
+# before this switch, vs br-flexric's multi-year-old pin) -- as an
+# experiment to see if its KPM encoder has since become compatible with
+# OCUDU's current E2SM-KPM decoder. NOT independently confirmed
+# compatible by any tutorial as of this writing -- revert to
+# `br-flexric`/1a3903a7 (see git history) if this doesn't help either.
+#
+# BUILD RECIPE SOURCE: /opt/flexric/docker/Dockerfile.flexric.ubuntu on the
+# `dev` branch itself -- FlexRIC's own maintained, authoritative build
+# recipe (found after 3 rounds of guess-a-flag/hit-an-error: KPM_VERSION
+# format, XAPP_DB option, then a missing ASN.1 compiler entirely). This
+# replaces the guesswork with what the Dockerfile actually does.
+#
+# CRITICAL: `dev` builds with gcc-12/g++-12 (per the Dockerfile), NOT
+# gcc-10 (which was br-flexric's requirement) -- the compiler-alternative
+# switch below is not optional.
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - libsctp-dev
+      - git
+      - wget
+      - tar
+      - m4
+      - automake
+      - libtool
+      - python3
+      - python3-dev
+      - python3-pip
+      - cmake
+      - cmake-curses-gui
+      - pkg-config
+      - bison
+      - flex
+      - gdb
+      - libpcre2-dev
+      - libconfig-dev
+      - libconfig++-dev
+      - libsqlite3-dev
+      - ninja-build
+      - mold
+      - gcc-12
+      - g++-12
+    state: present
+    update_cache: true
+
+- name: Register gcc-12/g++-12 as update-alternatives choices
+  # link: is required here -- confirmed on a real run: without it the
+  # module fails with "missing the link" because no gcc/g++ alternatives
+  # group exists yet on a fresh install (build-essential alone doesn't
+  # set one up either).
+  community.general.alternatives:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    link: "{{ item.link }}"
+    priority: 100
+  loop:
+    - {name: gcc, path: /usr/bin/gcc-12, link: /usr/bin/gcc}
+    - {name: g++, path: /usr/bin/g++-12, link: /usr/bin/g++}
+
+- name: Clone swig (release-4.1, built from source per the Dockerfile --
+        NOT the apt package, which is older)
+  ansible.builtin.git:
+    repo: https://github.com/swig/swig.git
+    dest: /opt/swig-src
+    version: release-4.1
+    force: false
+
+- name: Build and install swig 4.1
+  # Single shell chain (autogen -> configure -> make -> install), guarded
+  # by a marker file this task creates itself -- there's no reliable
+  # existing-file check for "is the RIGHT version of swig installed"
+  # since an apt-installed older swig could already occupy /usr/bin/swig.
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      ./autogen.sh
+      ./configure --prefix=/usr/
+      make -j{{ ansible_processor_vcpus | default(2) }}
+      make install
+      ldconfig
+      touch .build_complete
+    chdir: /opt/swig-src
+    creates: /opt/swig-src/.build_complete
+  become: true
+
+- name: Clone asn1c (mouse07410 fork, pinned commit -- per the Dockerfile,
+        NOT the generic/apt asn1c, which lacks the ASN.1 features this
+        branch's newer NR RRC/F1AP modules need)
+  ansible.builtin.git:
+    repo: https://github.com/mouse07410/asn1c
+    dest: /opt/asn1c-src
+    version: 940dd5fa9f3917913fd487b13dfddfacd0ded06e
+    force: false
+
+- name: Build and install asn1c
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      autoreconf -iv
+      ./configure --prefix /opt/asn1c/
+      make -j{{ ansible_processor_vcpus | default(2) }}
+      make install
+      touch .build_complete
+    chdir: /opt/asn1c-src
+    creates: /opt/asn1c-src/.build_complete
+  become: true
+
+- name: Clone FlexRIC
+  ansible.builtin.git:
+    repo: https://gitlab.eurecom.fr/mosaic5g/flexric.git
+    dest: /opt/flexric
+    version: dev
+    force: false
+    # Once cloned, never touch this checkout again -- the workaround
+    # patch below intentionally leaves local modifications in it, same
+    # reasoning as ran_srsran's OCUDU checkout.
+    update: false
+
+# Confirmed on a real run: FlexRIC dev's own E2SM-RC ASN.1 decoder
+# crashes on an OCUDU RAN Function Definition field it doesn't
+# implement (see ran_srsran's gnb_zmq_colocated.yaml.j2 comment on
+# e2sm_rc_enabled -- disabled there to avoid this entirely). With RC
+# disabled gNB-side, an E2SM-KPM subscription actually reaches this
+# xApp example, but it then segfaults twice on real (not
+# hypothetical) data from OCUDU: (1) main()'s report-style loop calls
+# through a NULL entry in get_kpm_act_def[] (OCUDU advertises 5 KPM
+# report styles, this example only implements styles 1 and 4), and
+# (2) match_meas_name_type() calls through a NULL entry in
+# get_meas_value[] for a real, legitimate "NO_VALUE" measurement
+# OCUDU reports. Both are missing NULL checks in the EXAMPLE xApp
+# code, not the core FlexRIC library -- this patch adds them. This is
+# what got a real, stable, multi-minute E2SM-KPM subscribe+indicate
+# cycle working end-to-end for the first time in this project.
+#
+# 3rd fix bundled in here (log_gnb_ue_id()): confirmed on a real run
+# that once ran_srsran's own srsran-cu-f1ap-ue-id-kpm-correlation.patch
+# started filling BOTH amf_ue_ngap_id and gnb_cu_ue_f1ap_lst in the same
+# KPM record, this xApp's own if/else printed ONLY the F1AP-ID line and
+# silently dropped amf_ue_ngap_id from its output -- the underlying
+# E2SM-KPM message carried both correctly the whole time, this was a
+# display bug in the example xApp, not a protocol-level regression. See
+# docs/ran-testing.md SS9 for the full story.
+- name: Apply the xapp_kpm_moni NULL-check + UE-ID display workaround
+        (real OCUDU data segfaults this example twice otherwise, and its
+        own log_gnb_ue_id() hid amf_ue_ngap_id whenever gnb_cu_ue_f1ap
+        was also present)
+  ansible.builtin.patch:
+    src: flexric-kpm-moni-workaround.patch
+    basedir: /opt/flexric
+    strip: 1
+
+- name: Remove any stale build directory from a previous branch's build
+  # Confirmed necessary: switching branches on an existing checkout
+  # doesn't invalidate the old CMakeCache.txt, and the cmake configure
+  # task below is guarded by `creates: .../CMakeCache.txt` -- without
+  # this, a branch switch would silently keep building the OLD branch's
+  # already-configured tree.
+  ansible.builtin.file:
+    path: /opt/flexric/build
+    state: absent
+
+- name: Create build directory
+  ansible.builtin.file:
+    path: /opt/flexric/build
+    state: directory
+
+- name: Configure FlexRIC (cmake)
+  # All 4 flags/paths here come from the Dockerfile's own cmake
+  # invocation, not guesswork:
+  # - KPM_VERSION=KPM_V3_00: the fully-qualified string `dev`'s
+  #   src/lib/3gpp/dec/CMakeLists.txt requires (br-flexric's bare KPM_V3
+  #   fails here with "Unknown KPM version"). Matches OCUDU's own metric
+  #   table's ALL_LEVELS (node/cell/UE) support, an
+  #   O-RAN.WG3.E2SM-KPM-R003-v3.00 feature.
+  # - E2AP_VERSION=E2AP_V3: the Dockerfile's own build arg default --
+  #   without this we silently got E2AP_V2 (cmake's own default),
+  #   untested against OCUDU.
+  # - XAPP_DB=SQLITE3_XAPP: `dev` dropped the NONE_XAPP option
+  #   entirely (only SQLITE3_XAPP or a fatal error), needs
+  #   libsqlite3-dev (installed above).
+  # - ASN1C_EXEC_PATH: explicit path to the just-built pinned asn1c
+  #   fork, sidestepping any PATH-detection ambiguity for
+  #   find_program() (confirmed this exact cache variable name via
+  #   grep on CMakeCache.txt after the first failed build).
+  ansible.builtin.command:
+    cmd: >-
+      cmake -DKPM_VERSION=KPM_V3_00 -DE2AP_VERSION=E2AP_V3
+      -DXAPP_DB=SQLITE3_XAPP -DASN1C_EXEC_PATH=/opt/asn1c/bin/asn1c
+      -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 ..
+    chdir: /opt/flexric/build
+    creates: /opt/flexric/build/CMakeCache.txt
+
+- name: Build FlexRIC
+  # NOTE: no `creates:` idempotency marker here -- the exact output binary
+  # path/name for this branch isn't independently confirmed. `make` itself
+  # is already incremental, so re-running this task on a second play is
+  # safe (just not a no-op at the Ansible-task level).
+  ansible.builtin.command:
+    cmd: make -j{{ ansible_processor_vcpus | default(2) }}
+    chdir: /opt/flexric/build
+
+- name: Install FlexRIC
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /opt/flexric/build
+  become: true
+
+- name: Deploy near-RT RIC config (real MGMT address, not the sample's 127.0.0.1)
+  # Must run AFTER "Install FlexRIC" every time -- confirmed on a real run
+  # -- `make install` re-copies its own sample conf on every build,
+  # which would silently undo this otherwise.
+  ansible.builtin.template:
+    src: ric.conf.j2
+    dest: /usr/local/etc/flexric/ric.conf
+    mode: "0644"
+
+- name: Note about starting the near-RT RIC (no systemd service here either)
+  ansible.builtin.debug:
+    msg: >-
+      Same as ran_srsran, this role has no systemd service -- start
+      manually: cd /opt/flexric/build/examples/ric && sudo
+      ./nearRT-RIC -c /usr/local/etc/flexric/ric.conf. The E2 Agent
+      (the gNB) connects OUT to the RIC as an SCTP client, so start
+      this BEFORE ran_srsran's gnb, not after.

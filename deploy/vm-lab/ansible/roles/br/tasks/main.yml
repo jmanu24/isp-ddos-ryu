@@ -1,0 +1,234 @@
+---
+# br role -- flow (FlowSpec sink) + softflowd/nfcapd/nfdump 1.7.4 (all via
+# this repo's own deploy/install_bgp_peering.sh, exact versions already
+# validated this project) + FRR bgpd for the REAL eBGP session with
+# peer-router (distinct from flow<->exabgp's internal FlowSpec channel --
+# see topology.yaml's `bgp:` block and its own comment for why the AS
+# numbers are deliberately different).
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [git, curl]
+    state: present
+    update_cache: true
+
+- name: Clone Tesis_Controller (for its deploy/install_bgp_peering.sh)
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
+    force: false
+
+- name: Install flow 0.2.0 + softflowd + nfdump 1.7.4 (nfcapd/nfdump built from source)
+  ansible.builtin.command:
+    cmd: ./deploy/install_bgp_peering.sh --flow-version 0.2.0 --nfdump-version 1.7.4
+    chdir: /opt/Tesis_Controller
+    creates: /usr/local/bin/flow
+  become: true
+
+- name: Install FRR
+  ansible.builtin.apt:
+    name: frr
+    state: present
+
+- name: Enable bgpd in FRR
+  ansible.builtin.lineinfile:
+    path: /etc/frr/daemons
+    regexp: '^bgpd='
+    line: 'bgpd=yes'
+  notify: restart frr
+
+- name: Deploy FRR bgpd config (real eBGP with peer-router)
+  # dest: frr.conf, not bgpd.conf -- confirmed on a real run: Ubuntu's frr
+  # package ships /etc/frr/vtysh.conf with "service integrated-vtysh-
+  # config" already active, so FRR only ever reads /etc/frr/frr.conf
+  # (the stock 2021-dated default) and silently ignores any per-daemon
+  # bgpd.conf -- "% BGP instance not found" despite bgpd running and this
+  # task reporting success. The template is already in the integrated
+  # format (frr version/hostname/router bgp all in one file), so no
+  # content change needed, just the destination.
+  ansible.builtin.template:
+    src: bgpd.conf.j2
+    dest: /etc/frr/frr.conf
+    owner: frr
+    group: frr
+    mode: "0640"
+  notify: restart frr
+
+- name: Enable and start FRR
+  ansible.builtin.service:
+    name: frr
+    enabled: true
+    state: started
+
+# --- Distributed-mode FlowSpec pipeline (config/settings.py's
+# PEERING_DISTRIBUTED_MODE) -- flow/softflowd/nfcapd as persistent
+# systemd services, since webtool/peering_ops.py's distributed path no
+# longer spawns them per-topology-start the way Mininet mode does. See
+# that module's own docstring for the full picture.
+
+- name: Add dummy central_server address to br's own loopback
+  # Distributed-mode stand-in for Mininet's central_server (a dummy
+  # interface local to r1, topologies/star_topology.py's
+  # add_central_server()) -- must match config/settings.py's
+  # PEERING_CENTRAL_SERVER_IP exactly, so telemetry/bgp_adapter.py's
+  # existing filtering and flow's --hooked `input`-chain blocking (which
+  # only evaluates LOCALLY DELIVERED traffic, not forwarded traffic)
+  # both keep working unchanged. A oneshot unit, not a one-off `ip addr
+  # add` command -- confirmed needed this whole session: manual `ip`
+  # state on these VMs does not survive a reboot.
+  ansible.builtin.template:
+    src: central-server-addr.service.j2
+    dest: /etc/systemd/system/central-server-addr.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start central-server-addr
+  ansible.builtin.service:
+    name: central-server-addr
+    enabled: true
+    state: started
+
+- name: Deploy flow systemd unit
+  ansible.builtin.template:
+    src: flow.service.j2
+    dest: /etc/systemd/system/flow.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Deploy nfcapd systemd unit
+  ansible.builtin.template:
+    src: nfcapd.service.j2
+    dest: /etc/systemd/system/nfcapd.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Deploy softflowd-peering systemd unit
+  ansible.builtin.template:
+    src: softflowd-peering.service.j2
+    dest: /etc/systemd/system/softflowd-peering.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Mask the distro's own softflowd.service, if the apt package created one
+  # Confirmed necessary in principle, not yet on a real run -- Ubuntu's
+  # softflowd apt package (installed by install_bgp_peering.sh) ships an
+  # init/systemd unit of its own, config'd via /etc/default/softflowd,
+  # which would otherwise also try to capture -- a second instance on
+  # the same interface with different flags/export target than
+  # softflowd-peering.service. `masked` no-ops harmlessly if that unit
+  # was never installed at all.
+  ansible.builtin.systemd:
+    name: softflowd.service
+    masked: true
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Enable and start flow/nfcapd/softflowd-peering
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop:
+    - flow.service
+    - nfcapd.service
+    - softflowd-peering.service
+
+# --- nfcapd archival: keeps nfcapd_live_dir from growing unbounded ---
+# Confirmed on a real run: nfcapd rotating every 2s with nothing ever
+# draining it grew to 74,821 files over ~41.5 hours, and once a
+# collector finally started polling it took ~6.5 hours to work through
+# that backlog one nfdump-over-SSH call at a time, starving every OTHER
+# domain's telemetry in the same controller process behind it. This
+# runs independent of whether collectors/peering_flow_collector.py
+# happens to be running at all.
+
+- name: Deploy the nfcapd archival script
+  ansible.builtin.template:
+    src: archive_nfcapd.sh.j2
+    dest: /usr/local/bin/archive_nfcapd.sh
+    mode: "0755"
+  vars:
+    nfcapd_live_dir: /var/cache/nfcapd/r1
+    nfcapd_archive_dir: /var/cache/nfcapd/archive
+    nfcapd_archive_min_age_minutes: 50
+
+- name: Deploy nfcapd-archive systemd service + timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - nfcapd-archive.service
+    - nfcapd-archive.timer
+  notify: reload systemd
+
+- name: Enable and start the nfcapd-archive timer
+  ansible.builtin.systemd:
+    name: nfcapd-archive.timer
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Authorize orchestrator's SSH public key
+  # Needed for collectors/peering_flow_collector.py + webtool/
+  # peering_ops.py's SSH-based remote calls to br -- see config/
+  # settings.py's PEERING_DIST_BR_SSH_USER comment.
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"
+  when: "'orchestrator_ssh_pubkey' in hostvars['orchestrator']"
+
+- name: Enable IPv4 forwarding (needed now that br also forwards
+        peer-router's traffic toward victim over VLAN_BACKBONE --
+        br never forwarded anything before this)
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Deploy netplan for the VLAN_BACKBONE interface (hot-added, cloud-init
+        never saw it -- see the template's own header)
+  ansible.builtin.template:
+    src: 98-backbone.yaml.j2
+    dest: /etc/netplan/98-backbone.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- the backbone iface must actually be up before
+        the route below, not just at end-of-play
+  ansible.builtin.meta: flush_handlers
+
+- name: Deploy a systemd oneshot to add the gateway-less route to victim's
+        subnet on every boot (same pattern as core5g_open5gs's own
+        backbone-route.service). This route also feeds bgpd.conf.j2's own
+        `network {{ ent_dc_cidr }}` statement -- FRR only advertises a
+        network if a matching route already exists in the RIB, same rule
+        its own loopback entry already relies on.
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/backbone-route.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'ip route add {{ ent_dc_cidr }} dev {{ br_backbone_iface }} 2>/dev/null || true'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: backbone_route_unit
+
+- name: Enable and start the backbone route oneshot
+  ansible.builtin.systemd:
+    name: backbone-route.service
+    daemon_reload: "{{ backbone_route_unit.changed }}"
+    enabled: true
+    state: started

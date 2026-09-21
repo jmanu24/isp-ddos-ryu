@@ -1,0 +1,73 @@
+---
+# victim role -- the shared protected asset every domain's test scenario
+# targets. A plain HTTP echo service is enough: what matters for
+# detection/mitigation testing is that it's a REAL listening service (so
+# a SYN flood gets real SYN-ACKs, a closed port gets real RST/ICMP-
+# unreachable backscatter -- see the whole backscatter-misattribution
+# investigation this session had for the bgp domain, which relied on
+# exactly this kind of real kernel behavior).
+- name: Install packages
+  community.general.apk:
+    name: [python3, openssh]
+    state: present
+    update_cache: true
+
+- name: Configure the ENT_DC interface (eth1 -- hot-added via govc
+        vm.network.add after this VM was already provisioned; this is the
+        actual attack-target address now, see topology.yaml's victim
+        entry and ENT_DC comment for why it moved off MGMT-only). Also
+        doubles as the VLAN_BACKBONE-facing interface -- no new NIC
+        needed for that, this same eth1/pe bridge is now the pe<->victim
+        leg of the backbone too, so the gateway-less routes below (one
+        per domain that NATs its traffic -- mobile/core5g,
+        fixed/bng -- plus the /30 pe<->br link itself) sit right
+        alongside the pre-existing ent_lan_cidr one, exact same pattern.
+        peering_cidr is the ONE exception -- see its own route below for
+        why that one needs a real `via`, not this gateway-less style.
+  ansible.builtin.blockinfile:
+    path: /etc/network/interfaces
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- ent_dc iface"
+    block: |
+      auto {{ victim_ent_dc_iface }}
+      iface {{ victim_ent_dc_iface }} inet static
+          address {{ victim_ent_dc_addr }}
+          netmask 255.255.255.0
+          post-up ip route add {{ ent_lan_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ backbone_mobile_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ backbone_fixed_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ backbone_peering_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route add {{ peering_cidr }} via {{ hostvars['br'].own_backbone_addr }} dev {{ victim_ent_dc_iface }} || true
+  notify: restart networking
+
+- name: Flush handlers now -- eth1 must be up before victim-http (bound to
+        0.0.0.0, so it doesn't strictly need this, but pe's bridge/ARP
+        needs the interface actually configured for the test to work)
+  ansible.builtin.meta: flush_handlers
+
+- name: Deploy a minimal OpenRC service running Python's http.server
+  ansible.builtin.copy:
+    content: |
+      #!/sbin/openrc-run
+      name="victim-http"
+      command="/usr/bin/python3"
+      command_args="-m http.server 80 --directory /var/www"
+      command_background="yes"
+      pidfile="/run/${RC_SVCNAME}.pid"
+    dest: /etc/init.d/victim-http
+    mode: "0755"
+
+- name: Create the served directory
+  ansible.builtin.file:
+    path: /var/www
+    state: directory
+
+- name: Drop a trivial index page
+  ansible.builtin.copy:
+    content: "victim server -- if you can read this, port 80 is reachable.\n"
+    dest: /var/www/index.html
+
+- name: Enable and start victim-http
+  ansible.builtin.service:
+    name: victim-http
+    enabled: true
+    state: started

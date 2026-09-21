@@ -1,0 +1,71 @@
+# Managed by Ansible (roles/ue_srsue) -- single UE, DIRECT to the gNB,
+# no GNU-Radio broker in the middle. Added to isolate whether the basic
+# cross-VM gNB<->UE ZMQ RF link works at all -- the multi_ue_scenario.grc
+# broker path stalls after the ZMQ handshake (near-zero bytes exchanged
+# even after 30s, confirmed via `ip -s link` on ran, unaffected by the
+# broker's slow_down_ratio), and this exact multi-UE-broker-across-VMs
+# topology has no known working reference anywhere (OCUDU's own official
+# srsUE tutorial explicitly only covers the direct case for distributed
+# setups). This file mirrors that documented direct pattern instead:
+# https://docs.ocudu.org/tutorials/srsue/ -- "gNB config: Replace
+# 127.0.0.1 with 0.0.0.0 for TX (bind) and UE's actual IP for RX
+# (connect); srsUE config: Use 0.0.0.0 for TX and gNB's actual IP for RX."
+# Reuses ue1's namespace/IMSI (ue00 in subscriber_db.csv) since ue1 isn't
+# running while this test is active.
+
+[rf]
+freq_offset = 0
+tx_gain = 50
+rx_gain = 40
+srate = 11.52e6
+nof_antennas = 1
+
+device_name = zmq
+device_args = tx_port=tcp://0.0.0.0:2001,rx_port=tcp://{{ ran_ran_addr | default('10.40.0.2') }}:2000,base_srate=11.52e6
+
+[rat.eutra]
+dl_earfcn = 2850
+nof_carriers = 0
+
+[rat.nr]
+bands = 3
+nof_carriers = 1
+max_nof_prb = 52
+nof_prb = 52
+
+[pcap]
+enable = none
+mac_filename = /tmp/ue_direct_mac.pcap
+mac_nr_filename = /tmp/ue_direct_mac_nr.pcap
+nas_filename = /tmp/ue_direct_nas.pcap
+
+[log]
+all_level = info
+phy_lib_level = none
+all_hex_limit = 32
+filename = /tmp/ue_direct.log
+file_max_size = -1
+
+[usim]
+mode = soft
+algo = milenage
+opc  = 63bfa50ee6523365ff14c1f45f88737d
+k    = 00112233445566778899aabbccddeeff
+imsi = 001010123456780
+imei = 353490069873319
+
+[rrc]
+release = 15
+ue_category = 4
+
+[nas]
+apn = srsapn
+apn_protocol = ipv4
+
+[gw]
+netns = ue1
+ip_devname = tun_srsue
+ip_netmask = 255.255.255.0
+
+[gui]
+enable = false

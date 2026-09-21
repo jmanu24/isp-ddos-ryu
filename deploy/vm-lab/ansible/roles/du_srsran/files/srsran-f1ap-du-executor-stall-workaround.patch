@@ -1,0 +1,62 @@
+diff --git a/lib/f1ap/du/f1ap_du_impl.cpp b/lib/f1ap/du/f1ap_du_impl.cpp
+index 54135c4..c20be4d 100644
+--- a/lib/f1ap/du/f1ap_du_impl.cpp
++++ b/lib/f1ap/du/f1ap_du_impl.cpp
+@@ -367,32 +367,31 @@ void f1ap_du_impl::handle_message(const f1ap_message& msg)
+ {
+   using pdu_types = f1ap_pdu_c::types_opts;
+ 
+-  // Run F1AP protocols in Control executor.
+-  if (not ctrl_exec.execute([this, msg]() {
+-        // Log message.
+-        log_pdu(true, msg);
+-
+-        // Record metric.
+-        metrics.on_rx_pdu(msg);
+-
+-        switch (msg.pdu.type().value) {
+-          case pdu_types::init_msg:
+-            handle_initiating_message(msg.pdu.init_msg());
+-            break;
+-          case pdu_types::successful_outcome:
+-            handle_successful_outcome(msg.pdu.successful_outcome());
+-            break;
+-          case pdu_types::unsuccessful_outcome:
+-            handle_unsuccessful_outcome(msg.pdu.unsuccessful_outcome());
+-            break;
+-          default:
+-            logger.error("Invalid PDU type");
+-            break;
+-        }
+-      })) {
+-    logger.error("Unable to dispatch handling of F1AP PDU. Cause: DU task queue is full");
+-    // TODO: Handle.
+-    return;
++  // WORKAROUND (gitlab.com/ocudu/ocudu#571): ctrl_exec.execute() never
++  // actually gets its queued task run in virtualized environments -- same
++  // executor-stall bug class as MAC/RLC (see mac_cell_processor.cpp and
++  // rlc_tx_tm/am_entity.cpp), just a fourth site not covered by the
++  // upstream issue. Confirmed on a real run: DownlinkNASTransport (e.g.
++  // Registration Accept) reaches the CU-CP/NGAP layer fine, but the
++  // resulting DLRRCMessageTransfer handed to the DU here never gets
++  // processed, so it never reaches the UE and PDU session establishment
++  // never starts. Run inline instead of hopping executors.
++  log_pdu(true, msg);
++  metrics.on_rx_pdu(msg);
++
++  switch (msg.pdu.type().value) {
++    case pdu_types::init_msg:
++      handle_initiating_message(msg.pdu.init_msg());
++      break;
++    case pdu_types::successful_outcome:
++      handle_successful_outcome(msg.pdu.successful_outcome());
++      break;
++    case pdu_types::unsuccessful_outcome:
++      handle_unsuccessful_outcome(msg.pdu.unsuccessful_outcome());
++      break;
++    default:
++      logger.error("Invalid PDU type");
++      break;
+   }
+ }
+ 

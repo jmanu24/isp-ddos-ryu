@@ -1,0 +1,69 @@
+# Managed by Ansible (roles/ue_srsue) -- single UE, DIRECT to the gNB,
+# both running on THIS SAME VM (ran_srsran also gets this role applied
+# when co-located testing is active). Confirmed on a real run: with gNB
+# and UE on separate VMs, the ZMQ link connects but almost no bytes ever
+# flow past the handshake -- identical for both srsUE and OAI's nrUE
+# against the same OCUDU gNB, isolating the cause to OCUDU's own
+# gNB-side ZMQ driver's timing over real network latency. This variant
+# tests same-host loopback instead (the actual documented, working
+# configuration per every OCUDU/srsRAN tutorial), to confirm the gNB
+# itself is otherwise healthy and the fix genuinely needs to be
+# same-host, not something still wrong in our own addressing.
+# Reuses ue1's namespace/IMSI (ue00 in subscriber_db.csv).
+
+[rf]
+freq_offset = 0
+tx_gain = 50
+rx_gain = 40
+srate = 11.52e6
+nof_antennas = 1
+
+device_name = zmq
+device_args = tx_port=tcp://127.0.0.1:2001,rx_port=tcp://127.0.0.1:2000,base_srate=11.52e6
+
+[rat.eutra]
+dl_earfcn = 2850
+nof_carriers = 0
+
+[rat.nr]
+bands = 3
+nof_carriers = 1
+max_nof_prb = 52
+nof_prb = 52
+
+[pcap]
+enable = none
+mac_filename = /tmp/ue_direct_mac.pcap
+mac_nr_filename = /tmp/ue_direct_mac_nr.pcap
+nas_filename = /tmp/ue_direct_nas.pcap
+
+[log]
+all_level = info
+phy_lib_level = none
+all_hex_limit = 32
+filename = /tmp/ue_direct.log
+file_max_size = -1
+
+[usim]
+mode = soft
+algo = milenage
+opc  = 63bfa50ee6523365ff14c1f45f88737d
+k    = 00112233445566778899aabbccddeeff
+imsi = 001010123456780
+imei = 353490069873319
+
+[rrc]
+release = 15
+ue_category = 4
+
+[nas]
+apn = internet
+apn_protocol = ipv4
+
+[gw]
+netns = ue1
+ip_devname = tun_srsue
+ip_netmask = 255.255.255.0
+
+[gui]
+enable = false

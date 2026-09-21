@@ -1,0 +1,170 @@
+---
+# test_vlan_backbone.yml -- confirms attack/user-plane traffic reaches
+# victim via VLAN_BACKBONE (pe's 5-port OVS bridge), from a REAL client
+# of each of the 4 domains, not just from the domain's own gateway VM.
+# Confirmed working end-to-end on a real run (2026-09-21) -- see
+# docs/vlan-backbone.md for the full design and the bugs found building
+# this (old MASQUERADE rules not cleaned up, ESXi portgroup promiscuous
+# mode, a BGP import filter, victim needing a real gateway route for
+# the one domain that isn't NAT'd, ping's -I device-bind vs address-bind
+# giving different routes for the exact same destination).
+#
+# Prerequisites:
+#   - site.yml already run for core5g_open5gs, bng, br, pe_ovs, victim
+#     (VLAN_BACKBONE itself) -- this playbook only tests, it doesn't
+#     provision. If VLAN_BACKBONE doesn't exist yet on this host at all,
+#     run scripts/setup_portgroups.sh first, then site.yml.
+#   - For the [mobile] tag: a UE must already be attached. This
+#     playbook does NOT drive RACH/attach itself (that's
+#     test_split_cu_du.yml's job, already validated separately) -- run
+#     that first if no UE is currently attached.
+#   - For [broadband]: at least one subscriber macvlan must already have
+#     a real DHCP lease (bng-subscriber-agent.service running on
+#     `suscriptor` normally keeps one up continuously).
+#
+# Usage:
+#   ansible-playbook playbooks/test_vlan_backbone.yml
+#   ansible-playbook playbooks/test_vlan_backbone.yml --tags peering,enterprise
+
+- name: "[enterprise] Ping victim from a real enterprise site (tag: enterprise)"
+  hosts: ent-site-1
+  gather_facts: false
+  tags: [enterprise]
+  tasks:
+    - name: Ping victim over VLAN_BACKBONE (via pe's bridge -> ENT_DC leg)
+      ansible.builtin.shell: "ping -c5 -W3 {{ hostvars['victim'].victim_ent_dc_addr }}"
+      register: ping_enterprise
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ ping_enterprise.stdout_lines[-2:] }}"
+
+- name: "[peering] Ping victim from peer-router, over the real eBGP-learned route (tag: peering)"
+  hosts: peer-router
+  gather_facts: false
+  tags: [peering]
+  tasks:
+    - name: Confirm bird actually learned the route first -- if this is
+            empty, the ping below will fail for an uninteresting reason
+            (no route, not a real connectivity problem) -- see br's own
+            bgpd.conf.j2 and this role's bird.conf.j2 import filter
+      ansible.builtin.shell: "birdc show route | grep {{ hostvars['victim'].victim_ent_dc_addr.split('.')[0:3] | join('.') }}"
+      register: bird_route
+      changed_when: false
+      failed_when: false
+
+    - name: Fail loudly with a clear message if the route never arrived
+      ansible.builtin.fail:
+        msg: >-
+          peer-router never learned a route to victim's network via BGP
+          -- check br's bgpd.conf.j2 `network` statement actually has a
+          matching route in br's own RIB (needs br's backbone-route.service
+          oneshot to have run), and this role's bird.conf.j2 import filter
+          actually allows it through.
+      when: bird_route.stdout == ""
+
+    - name: Ping victim over VLAN_BACKBONE (via br -> pe's bridge -> ENT_DC leg)
+      ansible.builtin.shell: "ping -c5 -W3 {{ hostvars['victim'].victim_ent_dc_addr }}"
+      register: ping_peering
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ ping_peering.stdout_lines[-2:] }}"
+
+- name: "[broadband] Ping victim from a real subscriber session, source-address-bound like the real attack traffic generator (tag: broadband)"
+  hosts: suscriptor
+  gather_facts: false
+  tags: [broadband]
+  tasks:
+    - name: Find a macvlan with a real DHCP-leased IPv4 address
+      ansible.builtin.shell: "ip -4 -o addr show | grep macvlan | head -1 | awk '{print $4}' | cut -d/ -f1"
+      register: subscriber_ip
+      changed_when: false
+
+    - name: Fail loudly if no subscriber session is currently up
+      ansible.builtin.fail:
+        msg: >-
+          No macvlan interface has a real DHCP lease right now -- check
+          bng-subscriber-agent.service is running (systemctl status
+          bng-subscriber-agent) and has at least one session established.
+      when: subscriber_ip.stdout == ""
+
+    - name: "Ping victim, bound to the subscriber's own SOURCE ADDRESS
+             (-I <ip>), NOT a device (-I <iface>) -- confirmed on a real
+             run these give genuinely different routes for the identical
+             destination: bng_subscriber_agent.py's own real attack
+             traffic (bng_flood.py, ping -I) binds by address, which is
+             what actually makes the per-subscriber `ip rule`
+             (policy routing by source address) apply at all -- binding
+             by device instead skips that rule entirely and fails with
+             a misleading 'Destination Host Unreachable' that looks like
+             a backbone routing bug and isn't one"
+      ansible.builtin.shell: "ping -I {{ subscriber_ip.stdout }} -c5 -W3 {{ hostvars['victim'].victim_ent_dc_addr }}"
+      register: ping_broadband
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "subscriber {{ subscriber_ip.stdout }}: {{ ping_broadband.stdout_lines[-2:] }}"
+
+- name: "[mobile] Ping victim from an attached UE over the real N3/backbone path (tag: mobile)"
+  hosts: ue_srsue
+  gather_facts: false
+  tags: [mobile]
+  tasks:
+    - name: Find an attached UE's own netns + assigned IP (ue1's config,
+            the one test_split_cu_du.yml's own single-UE play uses)
+      ansible.builtin.shell: "ip netns exec ue1 ip -4 -o addr show tun_srsue | awk '{print $4}' | cut -d/ -f1"
+      register: ue_ip
+      changed_when: false
+      failed_when: false
+
+    - name: Fail loudly if no UE is currently attached
+      ansible.builtin.fail:
+        msg: >-
+          netns ue1 has no tun_srsue address -- no UE is currently
+          attached. Run test_split_cu_du.yml first (this playbook
+          doesn't drive RACH/attach itself, see its own known
+          non-determinism).
+      when: ue_ip.stdout == ""
+
+    - name: Bring up loopback and the default route inside ue1's netns
+            (same as test_split_cu_du.yml's own [always]-tagged task --
+            duplicated here rather than imported, since a UE that's
+            already attached from an earlier playbook run may not still
+            have this from THIS process's own perspective)
+      ansible.builtin.shell: |
+        ip netns exec ue1 ip link set lo up
+        ue_ip="{{ ue_ip.stdout }}"
+        gw="${ue_ip%.*}.1"
+        ip netns exec ue1 ip route replace default via "$gw" dev tun_srsue
+      changed_when: true
+      become: true
+
+    - name: Ping victim over VLAN_BACKBONE (UE -> DU -> CU -> core5g's
+            UPF, masqueraded out the backbone NIC -> pe's bridge ->
+            ENT_DC leg)
+      ansible.builtin.shell: "ip netns exec ue1 ping -c5 -W3 {{ hostvars['victim'].victim_ent_dc_addr }}"
+      register: ping_mobile
+      changed_when: false
+      become: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "UE ({{ ue_ip.stdout }}): {{ ping_mobile.stdout_lines[-2:] }}"
+
+- name: Summary across all 4 domains
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Print a reminder of what tags exist, since Ansible doesn't
+            summarize across plays that ran on different hosts
+      ansible.builtin.debug:
+        msg: >-
+          Check each play's own [victim's backbone address] report above
+          -- 0% packet loss on all 4 (enterprise, peering, broadband,
+          mobile) confirms VLAN_BACKBONE end to end. A failure in one
+          domain does not affect the others -- they're intentionally
+          isolated (see docs/vlan-backbone.md's own point-to-point design).

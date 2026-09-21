@@ -1,0 +1,175 @@
+---
+# orchestrator role -- ryu-manager + exabgp, exactly matching this repo's
+# own requirements.txt pins (do not drift from these without also
+# updating the main repo's requirements.txt -- they must stay identical).
+- name: Install base packages
+  ansible.builtin.apt:
+    # python3-setuptools is load-bearing even though nothing here imports
+    # it directly -- confirmed on a real run: ansible.builtin.pip's module
+    # code itself needs pkg_resources on the SYSTEM python3 (not the venv
+    # it's installing into) to do its idempotency checks, and Debian 13
+    # doesn't install setuptools by default the way older distros did.
+    name: [python3, python3-venv, python3-pip, python3-setuptools, git, curl]
+    state: present
+    update_cache: true
+
+- name: Clone Tesis_Controller
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
+    force: false
+
+- name: Create venv
+  ansible.builtin.command:
+    cmd: python3 -m venv /opt/Tesis_Controller/venv
+    creates: /opt/Tesis_Controller/venv/bin/python
+
+- name: Install ryu (from faucetsdn's fork, not PyPI -- see requirements.txt's own comment)
+  # Deliberately BEFORE the requirements.txt install below and NOT listed
+  # in that file -- confirmed on a real run: ryu's own setup.py hard-pins
+  # a stale eventlet==0.31.1 (that its wsgi.py doesn't actually need
+  # anymore, just never loosened) which pip's resolver refuses to
+  # reconcile against this project's eventlet==0.36.1 pin in a single
+  # `pip install -r requirements.txt` -- "ResolutionImpossible: ryu 4.34
+  # depends on eventlet==0.31.1". Installing it separately, first, lets
+  # its OTHER real dependencies (msgpack, netaddr, oslo.config, ovs,
+  # routes, six, tinyrpc, webob) resolve normally; the requirements.txt
+  # install right after then upgrades eventlet back to 0.36.1 on its own,
+  # with ryu no longer present in that resolution to fight it.
+  ansible.builtin.pip:
+    name: "git+https://github.com/faucetsdn/ryu.git@d6cda4f427ff8de82b94c58aa826824a106014c2#egg=ryu"
+    virtualenv: /opt/Tesis_Controller/venv
+
+- name: Install pinned Python deps (from the repo's own requirements.txt)
+  # Plain install, no setuptools pinning -- confirmed needed only on
+  # Debian 13/Python 3.13 (ryu vs. removed pkgutil.ImpImporter / dropped
+  # easy_install internals, see topology.yaml's comment on why
+  # orchestrator is now templated on ubuntu, not debian). Ubuntu 22.04's
+  # Python 3.10 has neither problem. Also fixes eventlet back to 0.36.1
+  # (see the ryu install task right above for why it needs fixing at all).
+  ansible.builtin.pip:
+    requirements: /opt/Tesis_Controller/requirements.txt
+    virtualenv: /opt/Tesis_Controller/venv
+
+- name: Install exabgp (not in requirements.txt -- not consistently packaged across distros)
+  ansible.builtin.pip:
+    name: exabgp
+    virtualenv: /opt/Tesis_Controller/venv
+
+- name: Create exabgp FIFO directory
+  ansible.builtin.file:
+    path: /run/exabgp
+    state: directory
+    mode: "1777"
+
+- name: Create exabgp FIFO
+  ansible.builtin.command:
+    cmd: mkfifo -m 666 /run/exabgp/exabgp.in
+    creates: /run/exabgp/exabgp.in
+
+# --- SSH key for the br role's distributed-mode FlowSpec pipeline ----
+# webtool/peering_ops.py and collectors/peering_flow_collector.py (in
+# PEERING_DISTRIBUTED_MODE) SSH from here into br to verify flow/
+# softflowd/nfcapd and read nfcapd's capture files -- see config/
+# settings.py's PEERING_DIST_BR_SSH_USER comment. Needs non-interactive
+# key-based auth; this generates the keypair and exposes the public key
+# for the br role (a later play in site.yml) to authorize via hostvars.
+
+- name: Generate an SSH keypair for {{ ansible_user }} (idempotent)
+  ansible.builtin.command:
+    cmd: ssh-keygen -t ed25519 -N "" -f {{ ansible_env.HOME }}/.ssh/id_ed25519
+    creates: "{{ ansible_env.HOME }}/.ssh/id_ed25519"
+
+- name: Read the public key back
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.ssh/id_ed25519.pub"
+  register: _orchestrator_ssh_pubkey_raw
+
+- name: Expose it for other hosts' plays (br's role reads this via hostvars)
+  ansible.builtin.set_fact:
+    orchestrator_ssh_pubkey: "{{ _orchestrator_ssh_pubkey_raw.content | b64decode | trim }}"
+
+- name: Trust br's host key (avoids an interactive prompt on the first SSH)
+  # br's MGMT address, not its PEERING one -- orchestrator has no
+  # interface on the PEERING VLAN at all (only br and peer-router do),
+  # so config/settings.py's PEERING_DIST_BR_SSH_HOST deliberately points
+  # at br's MGMT address, a completely different one from
+  # PEERING_DIST_BR_IP (the FlowSpec bind address flow.service uses).
+  ansible.builtin.known_hosts:
+    name: "{{ br_mgmt_addr }}"
+    key: "{{ lookup('pipe', 'ssh-keyscan -T 5 ' + br_mgmt_addr) }}"
+    path: "{{ ansible_env.HOME }}/.ssh/known_hosts"
+  # br might not be reachable/up yet on an early run -- harmless if this
+  # fails, since webtool/peering_ops.py's _ssh_br() also passes
+  # StrictHostKeyChecking=accept-new as a fallback (a failed keyscan here
+  # just means that first real SSH call is the one that ends up trusting
+  # br's key, instead of this task doing it ahead of time).
+  failed_when: false
+
+# --- Persistent exabgp service (distributed-mode FlowSpec pipeline) --
+# exabgp used to be spawned per-topology-start by webtool/peering_ops.py
+# (PeeringLifecycle._start_distributed, subprocess.Popen); now it's an
+# Ansible-managed systemd service, same as flow/nfcapd/softflowd-peering
+# already are on br -- that module now only verifies it's active
+# (systemctl is-active, no SSH needed since it's local) rather than
+# spawning/killing it.
+
+- name: Create /etc/exabgp
+  ansible.builtin.file:
+    path: /etc/exabgp
+    state: directory
+    mode: "0755"
+
+- name: Deploy exabgp config
+  ansible.builtin.template:
+    src: exabgp.conf.j2
+    dest: /etc/exabgp/exabgp.conf
+    mode: "0644"
+  notify: restart exabgp
+
+- name: Deploy exabgp systemd unit
+  ansible.builtin.template:
+    src: exabgp.service.j2
+    dest: /etc/systemd/system/exabgp.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start exabgp
+  ansible.builtin.systemd:
+    name: exabgp.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+# --- Persistent ryu-manager service (Enterprise/OpenFlow domain) -----
+# ryu-manager used to be a raw hand-launched process (no systemd unit,
+# stdout/stderr landing at /tmp/ryu.log purely because that's what its
+# own shell redirect happened to say -- see ryu-manager.service.j2's own
+# comment). Same treatment as exabgp above: Ansible-managed, restartable,
+# predictable log path.
+
+- name: Kill any pre-existing hand-launched ryu-manager process (it holds
+        the OpenFlow/web-dashboard ports the systemd unit needs to bind)
+  # [r]yu-manager, not ryu-manager -- pkill -f matches against every
+  # process's full command line, including its OWN (the shell wrapper
+  # ansible.builtin.shell runs this through literally contains the same
+  # pattern text) -- confirmed on a real run: without the bracket trick,
+  # pkill matched and killed its own shell, failing the task with rc=-15
+  # even though the actual target process never needed it.
+  ansible.builtin.shell:
+    cmd: pkill -f '[r]yu-manager --observe-links' || true
+
+- name: Deploy ryu-manager systemd unit
+  ansible.builtin.template:
+    src: ryu-manager.service.j2
+    dest: /etc/systemd/system/ryu-manager.service
+    mode: "0644"
+  notify: restart ryu-manager
+
+- name: Enable and start ryu-manager
+  ansible.builtin.systemd:
+    name: ryu-manager.service
+    daemon_reload: true
+    enabled: true
+    state: started

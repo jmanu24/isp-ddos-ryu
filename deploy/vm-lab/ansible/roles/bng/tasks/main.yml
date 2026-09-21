@@ -1,0 +1,303 @@
+---
+# bng role -- Ubuntu, real BRAS/BNG (accel-ppp) + real AAA (FreeRADIUS)
+# for the Broadband domain's distributed-mode pipeline. REPLACES the
+# earlier dnsmasq-only design (see bngblaster_broadband_pipeline_status
+# memory: BNGBlaster itself hit an unresolved packet-transmission bug
+# on this lab -- sendto() succeeded but the frame was invisible to
+# every external observer, incl. local tcpdump). accel-ppp is a real,
+# production-grade open-source BRAS -- its telemetry (byte/packet
+# counters per session) comes from FreeRADIUS's own real accounting
+# records (Acct-Input/Output-Octets/-Packets), genuinely generated
+# BNG-side, not reconstructed from a client-side control socket the
+# way BNGBlaster's session-streams was.
+#
+# IPoE mode -- see accel-ppp.conf.j2's own top-of-file comment for the
+# full IPoE -> PPPoE -> IPoE history: the original IPoE "dead end" (real
+# attack traffic never counted) turned out to be a routing bug on the
+# `suscriptor` VM, not accel-ppp's own kernel driver -- once fixed,
+# accel-ppp's real accounting worked correctly.
+#
+# Auth posture: under IPoE every simulated subscriber presents the SAME
+# User-Name (accel-ppp's own ifname fallback, see accel-ppp.conf.j2's
+# [ipoe] comment) -- there's no real per-subscriber identity to check,
+# so FreeRADIUS below is configured to accept every real Access-Request
+# unconditionally. This project's whole reason for choosing RADIUS here
+# is the real ACCOUNTING telemetry, not subscriber-level access control
+# (same "throwaway local-simulation" posture as BNGBlaster's own
+# world-writable control socket), so there's nothing to gain from
+# trying to model per-subscriber credentials IPoE doesn't actually
+# carry.
+
+- name: Install FreeRADIUS + networking tools
+  ansible.builtin.apt:
+    name: [freeradius, freeradius-utils, iproute2, iptables, git]
+    state: present
+    update_cache: true
+
+- name: Authorize orchestrator's SSH public key
+  # Needed for telemetry/broadband_adapter.py's SSH-based distributed-
+  # mode calls to `bng` (tailing FreeRADIUS's detail log, accel-cmd,
+  # editing the users file) -- same pattern as roles/br's own task for
+  # the peering domain. Confirmed on a real run this was simply missing
+  # (never added when the Broadband domain's distributed mode was
+  # built): orchestrator's ryu-manager could reach `bng` fine for
+  # everything ELSE, but broadband_adapter.py's own collect()/
+  # apply_mitigation() SSH calls failed with "Permission denied
+  # (publickey,password)" on every single attempt, silently -- see that
+  # module's own collect()/_collect_distributed() docstring on why a
+  # connection that NEVER once succeeds produces no log line at all
+  # (SOURCE_CONNECTED/SOURCE_LOST only fire on a state transition).
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    key: "{{ hostvars['orchestrator']['orchestrator_ssh_pubkey'] }}"
+  when: "'orchestrator_ssh_pubkey' in hostvars['orchestrator']"
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Force BB_ACCESS's real IPv4 address via netplan (see the
+        template's own comment -- cloud-init's own generated config can
+        go stale if bng_access_iface's real name was ever discovered
+        wrong after this VM's first boot)
+  ansible.builtin.template:
+    src: 97-bb-access.yaml.j2
+    dest: /etc/netplan/97-bb-access.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- BB_ACCESS must have its real IP before
+        accel-ppp tries to bind its RADIUS socket to it
+  ansible.builtin.meta: flush_handlers
+
+- name: Deploy netplan for the VLAN_BACKBONE interface (hot-added, cloud-init
+        never saw it -- see the template's own header)
+  ansible.builtin.template:
+    src: 98-backbone.yaml.j2
+    dest: /etc/netplan/98-backbone.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- the backbone iface must be up before the
+        MASQUERADE/route tasks below
+  ansible.builtin.meta: flush_handlers
+
+- name: Masquerade subscriber traffic out the VLAN_BACKBONE interface, NOT
+        MGMT (moved on explicit direction -- separate node OOB management
+        from the user-plane/attack-traffic path. Confirmed on a real run
+        this was a genuine mixing case -- subscriber traffic used to
+        forward straight from BB_ACCESS to this VM's own MGMT NIC to
+        reach victim's MGMT address -- now it takes a real, monitored
+        path, bng to pe's OVS bridge (br-ent, OpenFlow-controlled by
+        ryu-manager) to victim. MASQUERADE, not a plain route, because
+        unlike br/peering this domain's own detection doesn't depend
+        on seeing each subscriber's individual real source IP past bng,
+        accel-ppp/FreeRADIUS's own accounting records already identify
+        the subscriber upstream of this point.)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -t nat -C POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE 2>/dev/null ||
+      iptables -t nat -A POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE
+  changed_when: true
+  become: true
+
+- name: Deploy a systemd oneshot to add the gateway-less route to victim's
+        subnet on every boot (same pattern as core5g_open5gs's own
+        backbone-route.service)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/backbone-route.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'ip route add {{ ent_dc_cidr }} dev {{ bng_backbone_iface }} 2>/dev/null || true'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: backbone_route_unit
+
+- name: Enable and start the backbone route oneshot
+  ansible.builtin.systemd:
+    name: backbone-route.service
+    daemon_reload: "{{ backbone_route_unit.changed }}"
+    enabled: true
+    state: started
+
+- name: Clone Tesis_Controller (for deploy/install_accelppp.sh)
+  ansible.builtin.git:
+    repo: "{{ tesis_controller_repo_url }}"
+    dest: /opt/Tesis_Controller
+    version: "{{ tesis_controller_branch }}"
+    force: false
+
+- name: Install accel-ppp
+  ansible.builtin.command:
+    cmd: ./deploy/install_accelppp.sh
+    chdir: /opt/Tesis_Controller
+    creates: /usr/sbin/accel-pppd
+  become: true
+
+# --- FreeRADIUS: AAA backend for accel-ppp's real accounting --------
+
+# NOT ipaddr=127.0.0.1 (an earlier version of this task reused Ubuntu's
+# stock "client localhost" for that IP, since a second client block for
+# the SAME ipaddr fails to load at all -- "Failed to add duplicate
+# client <name>", confirmed on a real run). But confirmed on a LATER
+# real run that ipaddr=127.0.0.1 was itself wrong: accel-ppp.conf.j2's
+# [radius] nas-ip-address directive makes accel-ppp bind() its outgoing
+# RADIUS socket to bng_access_addr (10.20.0.1), not 127.0.0.1 -- the
+# packet FreeRADIUS actually receives has a 10.20.0.1 source address,
+# which the "localhost" client (ipaddr=127.0.0.1 only) never matches,
+# so FreeRADIUS silently drops it (no log, no error -- a RADIUS packet
+# from an unrecognized client is just ignored). accel-ppp itself then
+# reports "server not responding" / "no available servers" with
+# nothing on FreeRADIUS's side to explain why. This IS a genuinely new
+# client (a different ipaddr than the stock one), so no duplicate
+# conflict this time.
+- name: Add a FreeRADIUS client for accel-ppp's real RADIUS source address
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/clients.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK -- accel-ppp client"
+    block: |
+      client accel-ppp {
+          ipaddr = {{ bng_access_addr }}
+          secret = {{ bng_radius_secret }}
+          require_message_authenticator = no
+          nas_type = other
+      }
+  notify: restart freeradius
+
+- name: Force FreeRADIUS to accept every real Access-Request unconditionally
+  # Confirmed on a real run (via freeradius -X) that neither a
+  # `DEFAULT Auth-Type := Accept` entry in `users` (regardless of
+  # ordering/Fall-Through) nor real per-user Cleartext-Password entries
+  # actually got matched here: `files` kept reporting a match against
+  # Ubuntu's own stock "DEFAULT Framed-Protocol == PPP" entry instead,
+  # rejecting every real attempt with "No Auth-Type found: rejecting
+  # the user" -- root cause never fully isolated. This unlang-level
+  # override in authorize{} itself sidesteps the `users`-file matching
+  # question entirely and was confirmed working on a real run. It's
+  # also the only approach that makes sense under IPoE anyway: every
+  # subscriber shares the same User-Name (see accel-ppp.conf.j2's
+  # [ipoe] comment), so there's no real per-subscriber identity for a
+  # `users`-file entry to key off in the first place.
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/sites-available/default
+    marker: "    # {mark} ANSIBLE MANAGED BLOCK -- accept-all for this lab"
+    insertafter: '^authorize \{'
+    block: |
+            update control {
+                    Auth-Type := Accept
+            }
+  notify: restart freeradius
+
+- name: Make FreeRADIUS's files module match by MAC (Calling-Station-Id),
+        not User-Name -- every IPoE subscriber shares the same
+        User-Name (see accel-ppp.conf.j2's [ipoe] comment), so
+        telemetry/broadband_adapter.py's apply_mitigation() (a per-MAC
+        Auth-Type := Reject entry in `users`) could never match anyone
+        without this. blockinfile (not lineinfile+backrefs) on purpose
+        -- the stock `key = ...` directive may be commented out by
+        default, and backrefs mode silently no-ops when its regexp
+        doesn't match an existing line. Inserted right BEFORE the
+        module's own closing brace (last directive wins if the stock
+        file already sets `key` uncommented above it), rather than
+        right after its opening brace, so this override always takes
+        effect regardless of the stock file's exact starting content.
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/mods-available/files
+    marker: "    # {mark} ANSIBLE MANAGED BLOCK -- match by MAC for this lab"
+    insertbefore: '^\}$'
+    block: |2
+                key = "%{Calling-Station-Id}"
+  notify: restart freeradius
+
+- name: Enable FreeRADIUS auth logging (auth/auth_badpass) for debugging
+  # Applied live by hand throughout this domain's original debugging
+  # (the DEFAULT/Cleartext-Password/files-key investigation above) --
+  # not load-bearing for the pipeline itself, but genuinely useful the
+  # next time real PAP/auth behavior here needs tracing, and this role
+  # should reproduce exactly what's actually running, not a stripped-
+  # down version of it. Both directives are real, uncommented lines in
+  # the stock radiusd.conf already (just defaulting to "no"), so
+  # lineinfile+regexp is safe here -- unlike the files module's `key`
+  # above, there's no risk of the line being commented out by default.
+  ansible.builtin.lineinfile:
+    path: /etc/freeradius/3.0/radiusd.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^\s*auth\s*=\s*(no|yes)\s*$', line: '    auth = yes' }
+    - { regexp: '^\s*auth_badpass\s*=\s*(no|yes)\s*$', line: '        auth_badpass = yes' }
+  notify: restart freeradius
+
+- name: Confirm FreeRADIUS accounting (detail file) module is enabled
+  # Ubuntu's freeradius package enables mods-enabled/detail by default
+  # (symlinked from mods-available/detail), writing one flat-text
+  # record per Access-Accept/Accounting-* packet under
+  # /var/log/freeradius/radacct/<client>/detail-<date> -- exactly the
+  # real per-session Acct-Input/Output-Octets/-Packets telemetry/
+  # broadband_adapter.py's distributed-mode collect() tails. This task
+  # just verifies the symlink exists rather than re-creating it, so a
+  # site that already customized it isn't silently overwritten.
+  ansible.builtin.stat:
+    path: /etc/freeradius/3.0/mods-enabled/detail
+  register: _detail_mod
+
+- name: Enable the detail accounting module if it was disabled
+  ansible.builtin.file:
+    src: /etc/freeradius/3.0/mods-available/detail
+    dest: /etc/freeradius/3.0/mods-enabled/detail
+    state: link
+  when: not _detail_mod.stat.exists
+  notify: restart freeradius
+
+- name: Flush handlers now -- FreeRADIUS must be in its final config
+        state before accel-ppp starts sending it RADIUS requests
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start FreeRADIUS
+  ansible.builtin.systemd:
+    name: freeradius
+    daemon_reload: true
+    enabled: true
+    state: started
+
+# --- accel-ppp: the real BRAS/BNG itself ------------------------------
+
+- name: Deploy accel-ppp.conf
+  ansible.builtin.template:
+    src: accel-ppp.conf.j2
+    dest: /etc/accel-ppp.conf
+    mode: "0644"
+  notify: restart accel-ppp
+
+- name: Deploy accel-pppd systemd unit
+  # Built from source (deploy/install_accelppp.sh) -- no upstream unit
+  # file ships with it the way an apt/dpkg package would provide one.
+  ansible.builtin.template:
+    src: accel-pppd.service.j2
+    dest: /etc/systemd/system/accel-pppd.service
+    mode: "0644"
+  notify: restart accel-ppp
+
+- name: Flush handlers now -- config/unit must be in place before
+        accel-ppp starts
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start accel-ppp
+  ansible.builtin.systemd:
+    name: accel-pppd.service
+    daemon_reload: true
+    enabled: true
+    state: started

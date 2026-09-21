@@ -1,0 +1,66 @@
+# Managed by Ansible (roles/peer_router) -- real eBGP with br.
+router id 10.30.0.2;
+
+protocol device {}
+
+protocol kernel {
+    # Confirmed missing on a real run: without this, bird's own routing
+    # table (both the static blackhole default AND the 10.99.0.1/32
+    # learned via BGP from br) never reaches the OS kernel table at all
+    # -- `ip route show` showed neither, only the unrelated manual
+    # default route added for this VM's own provisioning/apt access.
+    #
+    # Deliberately NOT `export all`: the static blackhole default route
+    # exists purely so bird has something valid to originate/export over
+    # BGP (see that protocol's own comment) -- pushing it into the
+    # kernel too would fight this VM's separate manual default route
+    # (`ip route ... via 10.30.0.3`, for its own provisioning/apt
+    # access), and a real network device wouldn't blackhole its own
+    # management traffic anyway. Only the learned-from-br route needs to
+    # actually affect real packet forwarding here.
+    ipv4 {
+        export where source = RTS_BGP;
+    };
+}
+
+protocol static default_route {
+    ipv4;
+    # blackhole, not `via 10.30.0.1` -- confirmed on a real run: that
+    # nexthop is br's OWN address, the exact eBGP neighbor we're
+    # advertising this default route TO, which is circular (peer-router
+    # is meant to model "the rest of the internet" upstream of br, not
+    # point back at it). Symptom was silent: `show route export br`
+    # correctly showed 0.0.0.0/0 in the computed export set, but the
+    # actual UPDATE sent on the wire on every fresh session (protocol
+    # restart AND full `systemctl restart bird`, ruling out a caching
+    # fluke) was a bare withdraw + End-of-RIB, never a real announcement.
+    route 0.0.0.0/0 blackhole;
+}
+
+protocol bgp br {
+    local as {{ bgp_peer_router_as }};
+    neighbor 10.30.0.1 as {{ bgp_br_as }};
+    ipv4 {
+        # Import ONLY 10.99.0.1/32 (config/settings.py's
+        # PEERING_CENTRAL_SERVER_IP dummy address, see br's own FRR
+        # config comment) -- confirmed on a real run: a blanket
+        # `import none` (the original design, since peer-router models
+        # an upstream AS that has no general need to learn a customer's
+        # internal routes) also silently rejected THIS route, the one
+        # peer-router actually needs to know how to reach the FlowSpec
+        # test target dynamically instead of a manually-added static
+        # route. Deliberately still not `import all` -- no reason for
+        # peer-router to learn anything else br might ever announce.
+        #
+        # {{ ent_dc_cidr }} added for VLAN_BACKBONE -- confirmed on a
+        # real run this filter silently dropped it too (same class of
+        # gap as 10.99.0.1/32's own original story): br's own
+        # bgpd.conf.j2 was already advertising it fine
+        # ("show ip bgp neighbors ... advertised-routes" on br listed
+        # it), but peer-router's bird never put it in the kernel table
+        # at all, so `ping victim` failed with 100% loss and no route
+        # in `ip route show`, not a real connectivity problem.
+        import where net = 10.99.0.1/32 || net = {{ ent_dc_cidr }};
+        export where source = RTS_STATIC;  # announce only the default route
+    };
+}

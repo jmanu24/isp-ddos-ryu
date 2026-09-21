@@ -1,0 +1,18 @@
+# Managed by Ansible (roles/br). Adds the dummy "central_server" address
+# to br's own loopback at boot -- see the "Add dummy central_server
+# address" task's own comment in tasks/main.yml for why this needs to
+# exist at all, and why it's a persistent unit rather than a one-off
+# `ip addr add`.
+[Unit]
+Description=Add dummy central_server address (10.99.0.1/32) to lo
+After=network-pre.target
+Before=network-online.target flow.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/sbin/ip addr add 10.99.0.1/32 dev lo
+ExecStop=/sbin/ip addr del 10.99.0.1/32 dev lo
+
+[Install]
+WantedBy=multi-user.target

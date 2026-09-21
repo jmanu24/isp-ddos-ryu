@@ -1,0 +1,8 @@
+# Managed by Ansible (roles/br). Oneshot, triggered by nfcapd-archive.timer
+# -- see archive_nfcapd.sh.j2's own comment for why this exists at all.
+[Unit]
+Description=Archive old nfcapd capture files (Peering domain telemetry)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/archive_nfcapd.sh

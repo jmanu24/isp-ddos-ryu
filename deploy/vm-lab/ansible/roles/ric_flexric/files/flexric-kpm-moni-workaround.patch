@@ -1,0 +1,47 @@
+diff --git a/examples/xApp/c/monitor/xapp_kpm_moni.c b/examples/xApp/c/monitor/xapp_kpm_moni.c
+index 040a0288..c8e86f8d 100644
+--- a/examples/xApp/c/monitor/xapp_kpm_moni.c
++++ b/examples/xApp/c/monitor/xapp_kpm_moni.c
+@@ -86,12 +86,15 @@ char *get_meas_unit(const char *name)
+ static
+ void log_gnb_ue_id(ue_id_e2sm_t ue_id)
+ {
++  // Print BOTH identifiers when both are present, not just one -- upstream's own if/else here hid
++  // amf_ue_ngap_id whenever gnb_cu_ue_f1ap_lst was non-NULL, even though the E2SM-KPM UEID-GNB IE carries
++  // amf_ue_ngap_id unconditionally (it's a required field, not part of the optional F1AP-ID-list choice) and a
++  // real CU-CP provider can legitimately fill both in the same record to let an xApp correlate them.
++  printf("UE ID type = gNB, amf_ue_ngap_id = %lu\n", ue_id.gnb.amf_ue_ngap_id);
+   if (ue_id.gnb.gnb_cu_ue_f1ap_lst != NULL) {
+     for (size_t i = 0; i < ue_id.gnb.gnb_cu_ue_f1ap_lst_len; i++) {
+-      printf("UE ID type = gNB-CU, gnb_cu_ue_f1ap = %u\n", ue_id.gnb.gnb_cu_ue_f1ap_lst[i]);
++      printf("gnb_cu_ue_f1ap = %u\n", ue_id.gnb.gnb_cu_ue_f1ap_lst[i]);
+     }
+-  } else {
+-    printf("UE ID type = gNB, amf_ue_ngap_id = %lu\n", ue_id.gnb.amf_ue_ngap_id);
+   }
+   if (ue_id.gnb.ran_ue_id != NULL) {
+     printf("ran_ue_id = %lx\n", *ue_id.gnb.ran_ue_id); // RAN UE NGAP ID
+@@ -167,7 +170,11 @@ void match_meas_name_type(const meas_type_t meas_type, const label_info_lst_t la
+ {
+   // Get the value of the Measurement
+   char *name_str = cp_ba_to_str(meas_type.name);
+-  get_meas_value[record_item.value](name_str, label_info, record_item);
++  if (get_meas_value[record_item.value] == NULL) {
++    printf("%s = NO_VALUE\n", name_str);
++  } else {
++    get_meas_value[record_item.value](name_str, label_info, record_item);
++  }
+   free(name_str);
+ }
+ 
+@@ -568,6 +575,10 @@ int main(int argc, char* argv[])
+     assert(hndl[i] != NULL);
+     for (size_t j = 0; j < sz_report_styles; j++) {
+       ric_report_style_item_t *report_item = &n->rf[idx].defn.kpm.ric_report_style_list[j];
++      if (get_kpm_act_def[report_item->report_style_type] == NULL) {
++        printf("Skipping unimplemented KPM report style %d\n", report_item->report_style_type);
++        continue;
++      }
+       // Generate KPM SUBSCRIPTION message
+       kpm_sub_data_t kpm_sub = gen_kpm_subs(&n->rf[idx].defn.kpm, report_item);
+ 

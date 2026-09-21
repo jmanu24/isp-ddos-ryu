@@ -1,0 +1,154 @@
+# Managed by Ansible (roles/bng). accel-ppp as an IPoE access
+# concentrator -- subscriber "sessions" are just DHCPv4 clients on
+# {{ bng_access_iface }} (see roles/suscriptor's macvlan-per-subscriber
+# setup), each authenticated+accounted via FreeRADIUS on 127.0.0.1
+# (this role's own tasks configure that side).
+#
+# This project went IPoE -> PPPoE -> back to IPoE. The PPPoE detour
+# happened because an earlier IPoE test showed accel-ppp's own ipoeN
+# session interfaces never counting real attack traffic (RX stuck at
+# 0 under a real flood) -- confirmed via `ip -s link show ipoeN`. That
+# looked like a kernel ipoe.ko classification bug, so the whole stack
+# was rebuilt around PPPoE/pppd instead.
+#
+# It wasn't the kernel driver. Confirmed on a LATER real run: the
+# `suscriptor` VM is dual-homed (a management NIC in addition to the
+# access-side one each macvlanN subscriber interface rides on), and
+# with no explicit routing override, the kernel's normal destination-
+# based route lookup sent subscriber-sourced attack traffic out the
+# OTHER NIC entirely -- it never reached `bng`'s access interface at
+# all, so of course accel-ppp's ipoe.ko never saw it to classify it.
+# Once roles/suscriptor's subscriber agent adds a per-subscriber
+# source-based `ip rule`/`ip route` override (forcing traffic sourced
+# from each subscriber's own IP out its own macvlanN interface via this
+# VM's real gateway), a real flood correctly moved ipoeN's RX counters
+# by hundreds of thousands of packets in a few seconds -- accel-ppp's
+# own accounting was fine all along. See simulation/
+# bng_subscriber_agent.py's own module docstring for the routing fix,
+# and simulation/bng_flood.py's for why the traffic generator ALSO had
+# to change (hping3 cannot reliably deliver traffic here either, over
+# PPP OR plain Ethernet-type interfaces -- kernel-native sockets are
+# what actually worked, on both access modes).
+#
+# IPoE is simpler than PPPoE for this project's actual point (real
+# accounting telemetry) -- no pppd/PAP/Van-Jacobson-compression
+# workarounds needed, since a DHCP-leased macvlan interface is just an
+# ordinary Ethernet-type netdevice.
+
+[modules]
+log_syslog
+log_file
+ipoe
+ippool
+radius
+
+[core]
+thread-count=1
+
+[common]
+# NOT single-session=replace -- confirmed on a real run this was the
+# root cause of every session dying seconds after establishing: accel-
+# ppp's own session.c compares sessions by User-Name (accel-pppd/
+# session.c), and every session here shared the exact same User-Name
+# ("ens192", the interface name -- see [ipoe]'s own username comment
+# below), so each new subscriber's session looked like "the same user
+# reconnecting" and single-session=replace forcibly terminated whichever
+# session already held that name. This directive means something
+# different in a real per-subscriber-identity deployment (the same
+# subscriber genuinely reconnecting), which isn't this project's
+# situation -- every macvlan here is a distinct simulated subscriber,
+# not the same one reconnecting.
+
+[ipoe]
+# No username=calling-sid -- confirmed on a real run: accel-ppp's ipoe
+# module only recognizes username=ifname or username=lua:<func> (any
+# other value logs "ipoe: unknown username value" to emerg.log and
+# falls back to its own default, the subscriber's not-yet-assigned IP
+# as a string). Not load-bearing for this project either way -- the
+# real MAC still reaches FreeRADIUS as the standard Calling-Station-Id
+# attribute regardless of what User-Name ends up being, and that's what
+# telemetry/broadband_adapter.py's distributed-mode collect() keys its
+# src_ip->MAC mapping on, not User-Name. Simply omitted here. Every
+# subscriber therefore presents the SAME User-Name ("ens192") to
+# FreeRADIUS -- this role's own FreeRADIUS authorize{} task accepts
+# unconditionally rather than trying to match per-subscriber identities
+# that don't exist under IPoE.
+#
+# Kernel driver (deploy/install_accelppp.sh builds+loads ipoe.ko) IS
+# required even without ifcfg=1 -- confirmed on a real run: accel-ppp's
+# ipoe module talks to it over netlink for every incoming session
+# regardless of ifcfg, failing immediately ("ipoe: not a IPoE message
+# 2" / "ipoe: failed to create interface") without it loaded.
+#
+# ifcfg=1 -- this project's real point (real per-session BYTE
+# accounting) needs it: RADIUS Acct-Input/Output-Octets come from
+# ap_session_read_stats() reading plain kernel netdev rx/tx counters on
+# the session's own ipoeN interface (accel-pppd/session.c), which only
+# increase if the ipoe.ko rx_handler on the parent actually redirects
+# matching frames there (ipoe_recv()/ipoe_lookup_rt4() in drivers/ipoe/
+# ipoe.c, matched by the session's source IP). Confirmed working
+# correctly on a real run once the sending side's own routing was fixed
+# (see this file's own top comment).
+interface={{ bng_access_iface }},start=dhcpv4,ifcfg=1
+noauth=0
+ip-pool=bng_pool
+# A SEPARATE gw-ip-address directive from [ip-pool]'s own one below --
+# confirmed on a real run: the ipoe module's DHCP-offer/router-address
+# logic (find_gw_addr(), accel-pppd/ctrl/ipoe/ipoe.c) reads its own
+# gw-ip-address option straight out of THIS section, not [ip-pool]'s.
+# Without it here, every session got as far as a real leased IP and
+# then failed with "can't determine router address".
+gw-ip-address={{ bng_access_addr }}/24
+verbose=1
+# Long lease -- accel-ppp's own default (LEASE_TIME, accel-pppd/ctrl/
+# ipoe/ipoe.c) is 600s. Confirmed on a real run: a lease renewal
+# mid-test handed a subscriber's macvlanN interface a DIFFERENT IP
+# (accel-ppp's own pool allocation on renew, not a dhclient quirk) --
+# but nothing in simulation/bng_subscriber_agent.py notices this
+# happening, so its cached Subscriber.ip, the already-running attack
+# process (bng_flood.py/ping, launched with the OLD ip baked into its
+# argv), and the per-subscriber `ip rule` (also keyed on the OLD ip)
+# all silently went stale: bng_flood.py kept bind()-ing to an address
+# that no longer belonged to any local interface, failing every
+# iteration with a caught-and-ignored OSError, so real attack traffic
+# silently stopped being generated at all mid-test with zero visible
+# error anywhere. 86400s (24h) comfortably outlives any single test run
+# so this never triggers -- the underlying gap (nothing re-syncs a
+# subscriber's session state after an IP change) is still real and
+# would need fixing for a genuinely long-lived deployment.
+lease-time=86400
+max-lease-time=86400
+
+[ip-pool]
+gw-ip-address={{ bng_access_addr }}/24
+{{ bng_pool_range }},name=bng_pool
+
+[dns]
+dns1=8.8.8.8
+
+[radius]
+dictionary=/usr/share/accel-ppp/radius/dictionary
+nas-identifier=bng
+nas-ip-address={{ bng_access_addr }}
+gw-ip-address={{ bng_access_addr }}
+verbose=1
+timeout=3
+max-try=3
+acct-timeout=3
+# Short interim interval -- this IS the real telemetry signal telemetry/
+# broadband_adapter.py's distributed-mode collect() tails (FreeRADIUS's
+# detail log gets one Interim-Update record per session every N
+# seconds, each carrying real Acct-Input/Output-Octets/-Packets).
+acct-interim-interval=5
+
+server=127.0.0.1,{{ bng_radius_secret }},auth-port=1812,acct-port=1813,req-limit=0
+
+[cli]
+tcp=127.0.0.1:2000
+verbose=1
+
+[log]
+log-file=/var/log/accel-ppp/accel-ppp.log
+log-emerg=/var/log/accel-ppp/emerg.log
+copy=1
+level=5

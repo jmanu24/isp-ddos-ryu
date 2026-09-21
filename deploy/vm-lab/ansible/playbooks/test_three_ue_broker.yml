@@ -1,0 +1,155 @@
+---
+# test_three_ue_broker.yml -- multi-UE (ue1/ue2/ue3) GNU-Radio broker
+# test: gNB on `ran`, 3 srsue instances + the compiled multi_ue_scenario
+# broker all on the separate `ue` VM. Confirmed on a real run
+# (2026-09-20) that the long-documented "broker stalls after the ZMQ
+# handshake between VMs" finding was about never having actually run it
+# headless/in the right order -- it DOES run now (see ue_srsue role's
+# own grcc-compile task).
+#
+# UPDATE (2026-09-20, same day, later): the ORIGINAL run of this playbook
+# found the broker giving all 3 UEs the IDENTICAL c-rnti/tti -- traced to
+# srsRAN_4G's own proc_ra_nr.cc hardcoding preamble_index=0 for every UE,
+# every attempt (its own ra_resource_selection() was an upstream TODO,
+# never actually implemented). Fixed by
+# srsran4g-random-preamble.patch (ue_srsue role) -- randomizes the
+# preamble per process. Confirmed that alone wasn't enough: `ue`'s
+# original 2 vCPUs showed load average 6.95 (7-9 processes queued,
+# 92-102k context-switches/s) once 3 srsue + the broker ran concurrently,
+# silently corrupting the RF simulation -- same class of problem this
+# project already fixed for `ran` (see topology.yaml's own history).
+# Bumped `ue` to 8 vCPUs too.
+#
+# With both fixes: CONFIRMED on a real run that the gNB can detect 3
+# genuinely distinct PRACH transmissions (7 across retries, in one run)
+# and complete a full attach for at least one of them -- the broker CAN
+# give real RF isolation, it's not fundamentally broken.
+#
+# BUT: still non-deterministic, and worse than the single-UE case's own
+# well-documented ~50% RACH flakiness (this playbook's own runs since the
+# fix: 1 success in 4 tries). Also confirmed a NEW failure mode once
+# PRACH detection itself started working: UE2/UE3's preamble gets
+# detected fine (a real tc-rnti allocated, a real PUSCH occasion
+# scheduled for Msg3), but Msg3 itself arrives with crc=KO and gets
+# discarded after 4 retries -- consistent with the broker's naive
+# sample-level summing not modeling per-UE timing/CFO offsets, which
+# real OFDM needs to keep simultaneous transmitters' subcarriers
+# orthogonal. Not investigated further -- would need the .grc's own
+# combining logic reworked, out of scope for a source patch. Treat "3
+# real UEs" as "possible, not reliable" until that's done -- see
+# docs/ran-testing.md §6 for the full timeline.
+#
+# Usage: ansible-playbook playbooks/test_three_ue_broker.yml
+
+- name: Kill any stale gNB/UE/broker processes and launch a fresh gNB
+  hosts: ran_srsran
+  gather_facts: false
+  tasks:
+    - name: Find any running gnb
+      ansible.builtin.shell: pgrep -f '^gnb -c' || true
+      register: stale_gnb
+      changed_when: false
+
+    - name: Kill it
+      ansible.builtin.shell: "kill -9 {{ stale_gnb.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_gnb.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch gNB
+      ansible.builtin.shell: >-
+        rm -f /tmp/gnb.log &&
+        nohup gnb -c /etc/srsran/gnb_zmq.yaml
+        > /tmp/gnb_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for the gNB's ZMQ cycle to stabilize
+      ansible.builtin.wait_for:
+        timeout: 8
+      delegate_to: localhost
+
+- name: Launch ue1/ue2/ue3, then the broker last
+  hosts: ue_srsue
+  gather_facts: false
+  tasks:
+    - name: Find any running srsue or broker
+      ansible.builtin.shell: pgrep -f '^srsue |multi_ue_scenario.py' || true
+      register: stale_procs
+      changed_when: false
+
+    - name: Kill them
+      ansible.builtin.shell: "kill -9 {{ stale_procs.stdout_lines | join(' ') }} 2>/dev/null; true"
+      when: stale_procs.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Launch ue1, ue2, ue3
+      ansible.builtin.shell: >-
+        rm -f /tmp/ue{{ item }}.log /tmp/ue{{ item }}_stdout.log &&
+        nohup srsue /etc/srsran/ue{{ item }}_zmq.conf
+        > /tmp/ue{{ item }}_stdout.log 2>&1 < /dev/null &
+      loop: [1, 2, 3]
+      changed_when: true
+
+    - name: Give the UEs a moment to reach steady PHY sync before the broker
+            joins (per srsRAN's own documented start order)
+      ansible.builtin.wait_for:
+        timeout: 3
+      delegate_to: localhost
+
+    - name: Launch the broker LAST, headless under Xvfb
+      ansible.builtin.shell: >-
+        rm -f /tmp/broker_stdout.log &&
+        cd /opt/multi_ue_scenario &&
+        nohup xvfb-run -a python3 multi_ue_scenario.py
+        > /tmp/broker_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for RACH attempts to play out
+      # Confirmed on a real run -- 8s wasn't enough (UEs were still at
+      # "Attaching UE..." / PHY init, hadn't transmitted a single preamble
+      # yet); 20s reliably covers PHY init + at least one full RACH
+      # attempt cycle for all 3 UEs.
+      ansible.builtin.wait_for:
+        timeout: 20
+      delegate_to: localhost
+
+    - name: Collect each UE's own attach status
+      ansible.builtin.shell: "tail -n 3 /tmp/ue{{ item }}_stdout.log"
+      loop: [1, 2, 3]
+      register: ue_status
+      changed_when: false
+
+    - name: "UE-side (self-reported) status"
+      ansible.builtin.debug:
+        msg: "ue{{ item.item }}: {{ item.stdout_lines }}"
+      loop: "{{ ue_status.results }}"
+
+- name: Check the gNB's OWN ground truth (how many UEs it actually created)
+  hosts: ran_srsran
+  gather_facts: false
+  tasks:
+    - name: Count distinct PRACH detections
+      ansible.builtin.shell: grep -c 'prach(ra-rnti=' /tmp/gnb.log || true
+      register: prach_count
+      changed_when: false
+
+    - name: Count distinct UE contexts (F1 UE context created)
+      ansible.builtin.shell: grep -oE 'ue=[0-9]+ c-rnti=0x[0-9a-f]+' /tmp/gnb.log | sort -u | wc -l
+      register: ue_ctx_count
+      changed_when: false
+
+    - name: Ground-truth report
+      ansible.builtin.debug:
+        msg: >-
+          gNB-side ground truth: {{ prach_count.stdout | trim }} real PRACH
+          detection(s), {{ ue_ctx_count.stdout | trim }} distinct UE
+          context(s) actually created. Compare against the "UE-side
+          status" messages above: any UE that self-reports RRC Connected
+          but isn't reflected here has no real connection (confirmed on a
+          real run: no tun_srsue interface, "Network is unreachable" for
+          anything it sends). 0 of either number is the well-documented
+          RACH non-determinism this whole lab has (re-run); a real PRACH
+          count with a LOWER UE-context count than that (e.g. 7 PRACH, 1
+          context) means preambles ARE being distinguished but Msg3 is
+          failing CRC for the others -- see docs/ran-testing.md §6, not a
+          config problem, needs the broker's own signal-combining logic
+          reworked.

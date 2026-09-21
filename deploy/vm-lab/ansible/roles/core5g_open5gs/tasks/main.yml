@@ -1,0 +1,232 @@
+---
+# core5g_open5gs role -- Open5GS, dockerized via srsRAN_Project's OWN
+# docker/ directory (not a standalone Open5GS install) -- this is
+# deliberate: it's the exact combination srsRAN's own application notes
+# validate their gNB against, avoiding independent Open5GS<->srsRAN
+# version-compatibility guesswork.
+- name: Stop depending on systemd-resolved's 127.0.0.53 stub (Open5GS's own
+        docker image creates one dedicated loopback-alias interface per
+        internal NF -- normally sandboxed inside the container's own netns,
+        but "network_mode -- host" below puts them directly in THIS VM's real
+        namespace instead. Confirmed on a real run -- once enough NFs are
+        up, one of those aliases collides with the address
+        systemd-resolved's stub listener hardcodes, and resolved dies with
+        "Failed to listen on UDP socket 127.0.0.53 -- Cannot assign
+        requested address", killing ALL DNS on the VM, not just the
+        container's own. core5g doesn't need resolved's per-link routing,
+        so just point resolv.conf at a public resolver directly.
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    enabled: false
+    state: stopped
+
+- name: Replace the systemd-resolved symlink with a static resolv.conf
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      nameserver 8.8.8.8
+      nameserver 1.1.1.1
+    mode: "0644"
+
+- name: Install Docker prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg, git]
+    state: present
+    update_cache: true
+
+- name: Add Docker's official GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+    force: false
+
+- name: Add Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+    filename: docker
+
+- name: Install Docker Engine + Compose plugin
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+    state: present
+    update_cache: true
+
+- name: Clone srsRAN_Project (for its bundled docker/open5gs setup)
+  # force: true -- confirmed on a real run: the tasks below overwrite
+  # subscriber_db.csv/open5gs.env, both files this repo ships tracked
+  # defaults for, so every re-run after the first dirties the checkout
+  # and a plain `force: false` re-run then fails with "Local modifications
+  # exist in the destination". Safe to force here -- nothing in this
+  # checkout is meant to be hand-edited or preserved between runs.
+  ansible.builtin.git:
+    repo: https://github.com/srsran/srsRAN_Project.git
+    dest: /opt/srsRAN_Project
+    version: main
+    force: true
+
+- name: Give the 5gc container real host networking (docker's default bridge
+        can't bind the cross-VM RAN address OPEN5GS_IP points at -- see
+        open5gs.env.j2's own comment, and the compose file's own gnb-service
+        comment naming "network_mode -- host" as the fix for exactly this
+        gNB-on-a-different-host case. Confirmed on a real run -- without
+        this, the AMF fails with "socket bind(2) [10.40.0.1]:38412 failed
+        (99:Cannot assign requested address)" and the container exits. Also
+        pin hostname to the literal string "0.0.0.0" -- confirmed on a real
+        run -- host networking makes the container inherit the VM's own
+        cloud-init-managed /etc/hosts, where "core5g" resolves to 127.0.1.1
+        (Ubuntu's own self-mapping convention), and the webui's own
+        server.listen(port, _hostname) call binds literally to whatever
+        HOSTNAME resolves to -- so it silently became loopback-only and
+        unreachable from outside the VM. A literal "0.0.0.0" needs no
+        resolution at all (Node treats it as an already-parsed address),
+        so this makes it bind every interface regardless of /etc/hosts.
+  ansible.builtin.replace:
+    path: /opt/srsRAN_Project/docker/docker-compose.yml
+    regexp: '    networks:\n      ran:\n        ipv4_address: \$\{OPEN5GS_IP:-10\.53\.1\.2\}\n'
+    replace: "    network_mode: host\n    hostname: \"0.0.0.0\"\n"
+
+- name: Deploy the 5-UE subscriber DB (real srsRAN docs' 3 UEs + 2 more, see file's own header comment)
+  ansible.builtin.copy:
+    src: subscriber_db.csv
+    dest: /opt/srsRAN_Project/docker/open5gs/subscriber_db.csv
+    mode: "0644"
+
+- name: Deploy open5gs.env (cross-VM AMF/UPF address -- see template's own comment for the real risk here)
+  ansible.builtin.template:
+    src: open5gs.env.j2
+    dest: /opt/srsRAN_Project/docker/open5gs/open5gs.env
+    mode: "0644"
+
+- name: Deploy systemd unit for the 5GC docker-compose stack
+  ansible.builtin.template:
+    src: open5gs-5gc.service.j2
+    dest: /etc/systemd/system/open5gs-5gc.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start 5GC
+  # daemon_reload here, not just the handler -- confirmed on a real run --
+  # handlers fire at the END of the play, so this task would otherwise
+  # start the service against systemd's STALE cached unit (missing the
+  # ExecStartPre ogstun cleanup above) whenever the unit file just changed.
+  ansible.builtin.systemd:
+    name: open5gs-5gc
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Note about the subscriber DB -- it's already automatic
+  # Corrected on a real run -- this used to say the WebUI/API had to be
+  # used by hand, but the image's own open5gs_entrypoint.sh runs
+  # `python3 add_users.py --subscriber_data ${SUBSCRIBER_DB}` directly
+  # against MongoDB on EVERY container start, no WebUI/API step needed.
+  # Confirmed via `mongosh open5gs --eval db.subscribers.countDocuments()`
+  # returning exactly the CSV's 6 rows (ue00-ue05) right after a fresh
+  # boot.
+  ansible.builtin.debug:
+    msg: >-
+      subscriber_db.csv's 6 UEs are imported into MongoDB automatically
+      on every open5gs-5gc start (see open5gs_entrypoint.sh's own
+      add_users.py call) -- nothing to do by hand. Only touch
+      http://{{ core5g_addr }}:9999 (admin/1423) if you need to add an
+      IMSI that isn't in this file.
+
+# Confirmed on a real run: a UE with a real PDU session (RACH -> RRC ->
+# PDU Session Establishment all succeeding) still got "Network is
+# unreachable" trying to reach the internet through it. Two gaps, both
+# on this VM, neither ever set up before now:
+# (1) FORWARD's default policy is DROP (Docker's own doing -- it inserts
+#     DOCKER-USER/DOCKER-FORWARD as the first jumps in FORWARD, and ogstun
+#     isn't a docker-managed interface, so traffic through it never
+#     matches any ACCEPT and falls through to the DROP policy).
+# (2) No masquerade existed for the UE pool (10.45.0.0/16, see
+#     open5gs.env.j2's UE_IP_BASE) -- so even once forwarded, a UE's
+#     packet would leave with a UE-pool source address the rest of this
+#     lab's routing (this VM's own default route via ens160, then the
+#     control node's OWN 10.10.0.0/24 masquerade -- see deploy/vm-lab/
+#     README.md's "control_node_ip" notes) has no return path for.
+# DOCKER-USER is the Docker-documented insertion point for custom
+# FORWARD rules -- it's evaluated first and, unlike raw edits to
+# FORWARD itself, survives `docker compose` restarts/reloads.
+- name: Allow forwarding for the UPF's ogstun interface (DOCKER-USER, both
+        directions -- see comment above for why this is needed)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -C DOCKER-USER -i ogstun -j ACCEPT 2>/dev/null ||
+      iptables -I DOCKER-USER -i ogstun -j ACCEPT;
+      iptables -C DOCKER-USER -o ogstun -j ACCEPT 2>/dev/null ||
+      iptables -I DOCKER-USER -o ogstun -j ACCEPT
+  changed_when: true
+  become: true
+
+- name: Masquerade the UE pool out through the VLAN_BACKBONE interface, NOT
+        ens160/MGMT (moved on explicit direction -- separate node OOB
+        management from the user-plane/attack-traffic path. Confirmed on
+        a real run this was a genuine mixing case -- UE traffic used to
+        exit via this VM's own MGMT NIC and land in the control node's
+        MGMT-wide masquerade to reach victim's MGMT address -- now it
+        takes a real, monitored path instead, core5g to pe's OVS bridge
+        (br-ent, OpenFlow-controlled by ryu-manager) to victim)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -t nat -C POSTROUTING -s 10.45.0.0/16 -o {{ core5g_backbone_iface }} -j MASQUERADE 2>/dev/null ||
+      iptables -t nat -A POSTROUTING -s 10.45.0.0/16 -o {{ core5g_backbone_iface }} -j MASQUERADE
+  changed_when: true
+  become: true
+
+- name: Remove the OLD ens160/MGMT masquerade rule -- confirmed on a real
+        run this doesn't happen on its own, adding the new rule above
+        leaves the old one in place too (both active at once, defeating
+        the actual point of this change -- traffic still had a live path
+        out through MGMT, just an unused second one alongside it)
+  ansible.builtin.shell:
+    cmd: >-
+      iptables -t nat -D POSTROUTING -s 10.45.0.0/16 -o ens160 -j MASQUERADE 2>/dev/null || true
+  changed_when: true
+  become: true
+
+- name: Deploy netplan for the VLAN_BACKBONE interface (hot-added, cloud-init
+        never saw it -- see the template's own header)
+  ansible.builtin.template:
+    src: 98-backbone.yaml.j2
+    dest: /etc/netplan/98-backbone.yaml
+    mode: "0600"
+  notify: netplan apply
+
+- name: Flush handlers now -- the backbone iface must actually be up before
+        the route below, not just at end-of-play
+  ansible.builtin.meta: flush_handlers
+
+- name: Deploy a systemd oneshot to add the gateway-less route to victim's
+        subnet on every boot (same pattern as ue_srsue's own
+        srsue-netns.service -- a plain `ip route add` doesn't survive a
+        reboot, and netplan's own routes stanza needs a `via`, which a
+        route across pe's pure-L2 bridge deliberately doesn't have. Same
+        no-gateway-route-crosses-a-bridge mechanism victim/enterprise_site
+        already rely on for ent_lan_cidr, just the reverse direction)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/backbone-route.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'ip route add {{ ent_dc_cidr }} dev {{ core5g_backbone_iface }} 2>/dev/null || true'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: backbone_route_unit
+
+- name: Enable and start the backbone route oneshot
+  ansible.builtin.systemd:
+    name: backbone-route.service
+    daemon_reload: "{{ backbone_route_unit.changed }}"
+    enabled: true
+    state: started

@@ -1,0 +1,24 @@
+# Managed by Ansible (roles/br). Named softflowd-peering, not plain
+# softflowd -- Ubuntu's softflowd apt package ships its own
+# softflowd.service (config via /etc/default/softflowd), which this role
+# masks (see "Mask the distro's own softflowd.service" task) rather than
+# configure, to avoid two competing softflowd instances both trying to
+# capture the same interface with different flags.
+#
+# Same flags as webtool/peering_ops.py's Mininet-mode softflowd.popen()
+# call -- see that module's own extensive comment on why each one is
+# there (NetFlow v5 not v9, general=1/maxlife=2 timeouts).
+[Unit]
+Description=softflowd -- NetFlow export for Peering domain telemetry (custom, not distro default)
+After=network-online.target nfcapd.service
+Wants=network-online.target
+Requires=nfcapd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/softflowd -d -i {{ peering_external_iface }} -n 127.0.0.1:9995 -v 5 -t general=1 -t maxlife=2
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

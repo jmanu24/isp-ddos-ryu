@@ -1,0 +1,25 @@
+# Managed by Ansible (roles/bng). Built from source (deploy/
+# install_accelppp.sh) -- no upstream unit ships with it the way an
+# apt/dpkg-packaged daemon would provide one.
+[Unit]
+Description=accel-ppp -- real BRAS/BNG (Broadband domain, distributed mode)
+After=network-online.target freeradius.service
+Wants=network-online.target
+# NOT Requires=freeradius.service -- confirmed on a real run: this made
+# any `systemctl stop/restart freeradius` (including transiently, e.g.
+# while debugging with `freeradius -X`) cascade into stopping accel-ppp
+# too, killing every live subscriber session outright. accel-ppp already
+# retries RADIUS requests on its own (see accel-ppp.conf.j2's [radius]
+# timeout/max-try) -- it doesn't need to die just because FreeRADIUS is
+# briefly unavailable, and After= above still keeps the normal boot
+# ordering (FreeRADIUS up first) intact.
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/log/accel-ppp
+ExecStart=/usr/sbin/accel-pppd -c /etc/accel-ppp.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

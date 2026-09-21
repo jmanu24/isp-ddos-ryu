@@ -1,0 +1,45 @@
+# Managed by Ansible (roles/ue_oai) -- verbatim from OCUDU's own official
+# tutorial (docs.ocudu.org/tutorials/oaiue/), adapted for this lab's
+# cross-VM addressing the same way ran_srsran/ue_srsue's fixes were:
+# real RAN-network addresses on both ends, not the tutorial's
+# single-PC 127.0.0.1. Reuses ue00's real subscriber_db.csv IMSI/key/opc
+# (core5g_open5gs's files/subscriber_db.csv), same as ue_srsue's ue1.
+uicc0 = {
+  imsi = "001010123456780";
+  key = "00112233445566778899aabbccddeeff";
+  opc= "63bfa50ee6523365ff14c1f45f88737d";
+  pdu_sessions = ({ dnn = "internet";
+                     nssai_sst = 1;
+                     });
+};
+
+device = {
+  name = "oai_zmqdevif";
+};
+
+# Each side uses its OWN real address for the channel IT owns (not a
+# wildcard bind) -- matching the confirmed-working community pattern
+# for srsRAN's own cross-host ZMQ example (10.53.1.1/10.53.1.2, not
+# 0.0.0.0), since OAI's own docs don't specify bind/connect semantics
+# explicitly for this radio driver.
+zmq = (
+  {
+    tx_channels = ( "tcp://{{ ue_ran_addr | default('10.40.0.3') }}:4557" );
+    rx_channels = ( "tcp://{{ ran_ran_addr | default('10.40.0.2') }}:4556" );
+  }
+);
+
+r               = 51;
+numerology      = 1;
+band            = 78;
+# Confirmed on a real run -- a bare "3489420000" (exceeds INT32_MAX)
+# gets parsed by libconfig as a 32-bit int and overflows: exactly
+# 3489420000 - 2^32 = -805547296, matching the crash
+# ("Undefined Frequency Range for frequency -805547296 Hz") to the
+# integer. Needs the "L" suffix to force 64-bit parsing -- this is a
+# real libconfig gotcha, not specific to OAI. ue-scan-carrier was NOT
+# the cause (ruled out: identical crash at 0 and 1).
+C               = 3489420000L;
+ue-scan-carrier = 1;
+E               = 1;
+uecap_file      = "../../../targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports1.xml";

@@ -1,0 +1,242 @@
+---
+# ran_srsran role -- srsRAN Project gNB (CU+DU+RU fused, no F1 split),
+# ZMQ RF driver (no SDR hardware), built with the E2 interface enabled --
+# this is what the ric_flexric role's FlexRIC actually talks to.
+#
+# Replaces OCUDU (srsRAN Project's own successor fork, used earlier in
+# this lab's build -- see this file's own git history for the RACH-
+# failure debugging session that led to trying the original project
+# instead). Not a claim that OCUDU was at fault -- srsRAN Project's own
+# README (commit 4bf1543, its own maintainer) now points users at OCUDU
+# as ITS successor, so this is a step back toward the more widely-used,
+# longer-battle-tested original, not a step forward. Same CU/CP/CU-UP/
+# DU/gNB app layout, same
+# ENABLE_EXPORT/ENABLE_ZEROMQ cmake options, same gnb binary name and
+# YAML config schema (cu_cp/ru_sdr/cell_cfg) -- this role's own
+# gnb_zmq.yaml.j2 template already targeted srsRAN Project's schema
+# before the OCUDU detour, confirmed compatible with release_25_10
+# unchanged. No UE component exists in either project -- ue_srsue stays
+# on srsRAN_4G unchanged.
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - cmake
+      - make
+      - gcc
+      - g++
+      - pkg-config
+      - libfftw3-dev
+      - libmbedtls-dev
+      - libsctp-dev
+      - libyaml-cpp-dev
+      - libgtest-dev
+      - libzmq3-dev
+      - git
+    state: present
+    update_cache: true
+
+- name: Clone srsRAN Project
+  ansible.builtin.git:
+    repo: https://github.com/srsRAN/srsRAN_Project.git
+    dest: /opt/srsRAN_Project
+    # Pinned, not floating on main -- same reasoning as srsRAN_4G/OCUDU's
+    # own pinned checkouts. release_25_10 is the latest tagged release as
+    # of this lab's build (confirmed via `git ls-remote --tags`).
+    version: release_25_10
+    force: false
+    # Once cloned, never touch this checkout again -- the patch tasks
+    # below intentionally leave local modifications in it, which this
+    # module (with update defaulting to true) refuses to run over
+    # ("Local modifications exist ... force=no"), same reasoning as
+    # OCUDU's own clone task used to have.
+    update: false
+
+# Ported from OCUDU's own ocudu-571-rlc-am-workaround.patch -- confirmed
+# on a real run that the SAME executor-stall anti-pattern this patch
+# works around (execute_and_continue_on_blocking()/defer_and_continue_on_
+# blocking() suspending forever under virtualization) is present
+# verbatim in srsRAN Project's own lib/rlc/rlc_tx_am_entity.cpp (same
+# function names, same call sites -- only line numbers/comments differ).
+# Needed for PDU session establishment (a working tun_srsue interface).
+- name: Apply the RLC AM executor-stall workaround (needed for PDU session
+        establishment)
+  ansible.builtin.patch:
+    src: srsran-rlc-am-executor-stall-workaround.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+# Ported from OCUDU's own ocudu-571-f1ap-du-workaround.patch -- same
+# reasoning as the RLC AM patch above, confirmed present verbatim in
+# lib/f1ap/du/f1ap_du_impl.cpp (DL NAS/RRC forwarding, the in-process
+# CU-to-DU handoff in this fused CU+DU+RU binary).
+- name: Apply the F1AP-DU executor-stall workaround (DL NAS/RRC forwarding)
+  ansible.builtin.patch:
+    src: srsran-f1ap-du-executor-stall-workaround.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+# Still NOT ported here (deliberately): the MAC/RLC-TM executor-stall
+# workaround. It WAS eventually ported and then REVERTED in du_srsran's
+# own build (srsran-mac-rlc-tm-executor-stall-workaround.patch, kept
+# there as a historical reference, not applied) -- the fused `gnb` this
+# VM builds has never needed it: the real root cause turned out to be
+# the real-time worker pool having only 1 thread on `du`'s original
+# 4-vCPU sizing (srsRAN Project's own get_default_nof_workers() reserves
+# 3 vCPUs as "spare" unconditionally), not a virtualization-inherent
+# bug -- this VM's own 8 vCPUs give the fused gnb's worker pool 5
+# threads, same as `du` does now after being resized. See
+# docs/ran-testing.md SS8.3-8.4 for the full story.
+
+# srsRAN Project's own ZMQ radio driver (lib/radio/zmq/) has NO recovery
+# path for a desynced ZMQ REQ/REP pair (confirmed via grep: no
+# reconnect()/rebind() method exists in either channel) -- same gap
+# OCUDU had before its own zmq-reconnect patch, and the same "lazy
+# pirate" fix applies almost unchanged (channel_description's members,
+# state_fsm's has_wait_expired()/data_received() API, etc. are all
+# identical to OCUDU's -- only the constructor's parameter naming and a
+# couple of namespaces differ). Bundled together with the EAGAIN
+# busy-loop throttle from the same debugging session (see that patch's
+# own history for the full story) since both target the same two files.
+- name: Apply the ZMQ REQ/REP reconnect fix + EAGAIN busy-loop throttle
+        (radio_zmq_rx_channel + radio_zmq_tx_channel)
+  ansible.builtin.patch:
+    src: srsran-zmq-reconnect.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+# Confirmed on a real run: e2sm_kpm_cu_cp_meas_provider_impl registered
+# ZERO metrics and get_ues_matching_test_conditions() was a bare `return
+# true` (no ues populated) -- the ONLY way to get a UE's real
+# amf_ue_ngap_id via KPM (instead of just the DU's own gnb_cu_ue_f1ap
+# index), but nothing wired it to NGAP/CU-CP at all. Adds get_amf_ue_id_
+# and_guami()/get_ue_indexes() to cu_configurator (backed by a new
+# ngap_ue_id_translator::get_guami(), mirroring the existing
+# get_amf_ue_id()), injects that cu_configurator into
+# e2sm_kpm_cu_cp_meas_provider_impl (same DI pattern the E2SM-RC executor
+# already used), and registers a UE-level RRC.ConnMean metric whose real
+# purpose is forcing a genuine ue_id_gnb_s (amf_ue_ngap_id + guami) into
+# each KPM indication. Confirmed via xapp_kpm_moni: "UE ID type = gNB,
+# amf_ue_ngap_id = 27". See docs/ran-testing.md SS7 for the full story.
+- name: Apply the amf_ue_ngap_id E2SM-KPM patch (CU-CP measurement
+        provider had zero UE-identity visibility before this)
+  ansible.builtin.patch:
+    src: srsran-cu-amf-ue-ngap-id-kpm.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+# Confirmed on a real run: the CU-CP's own amf_ue_ngap_id-carrying KPM
+# indications (previous patch, above) and the DU's own gnb_cu_ue_f1ap-
+# carrying ones arrive as SEPARATE indications from SEPARATE E2 agents --
+# an xApp had no way to tell they're the same physical UE without a
+# manual cross-reference. The CU-CP already tracks its own
+# gnb_cu_ue_f1ap_id internally (F1AP-CU, needed to route F1AP messages to
+# the right DU) -- this patch exposes it via a new f1ap_ue_id_translator
+# interface (mirrors ngap_ue_id_translator's own shape/naming) and adds
+# it to the SAME ue_id_gnb_s the amf_ue_ngap_id patch already builds, so
+# a single CU-CP indication now carries both IDs together. Deliberately
+# does NOT touch CU-UP -- that needs a real E1AP-based bridge across two
+# separate UE-index spaces (srs_cu_up::ue_index_t has no relation to
+# srs_cu_cp::ue_index_t), a substantially bigger change; see
+# docs/ran-testing.md SS9 for why that was scoped out.
+#
+# Renamed to get_f1ap_ue_id_for_kpm (not get_gnb_cu_ue_f1ap_id, the
+# obvious name) -- confirmed on a real run: that name already exists as
+# a free function in f1ap_cu_impl.cpp (extracts an F1AP ID from a raw
+# ASN.1 PDU, unrelated purpose), and adding a MEMBER function with the
+# same name hid it from unqualified calls elsewhere in that same file
+# (C++ name hiding), breaking the build with "cannot convert
+# asn1::f1ap::successful_outcome_s to ue_index_t" at 3 unrelated call
+# sites.
+- name: Apply the F1AP UE ID correlation patch (lets amf_ue_ngap_id and
+        gnb_cu_ue_f1ap travel together in the same CU-CP KPM indication)
+  ansible.builtin.patch:
+    src: srsran-cu-f1ap-ue-id-kpm-correlation.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
+- name: Create build directory
+  ansible.builtin.file:
+    path: /opt/srsRAN_Project/build
+    state: directory
+
+- name: Configure (cmake, ZMQ + export/E2 enabled)
+  ansible.builtin.command:
+    cmd: cmake ../ -DENABLE_EXPORT=ON -DENABLE_ZEROMQ=ON
+    chdir: /opt/srsRAN_Project/build
+    creates: /opt/srsRAN_Project/build/CMakeCache.txt
+
+- name: Build (this takes a while -- ~15-20 min on 8 vCPUs for gnb alone,
+        srscu adds a bit more since it shares most of the same object
+        files -- not the full project, that also builds every unit test
+        and every split_6/7_2/8/low variant nothing here uses)
+  # srsdu, NOT built here anymore -- moved to its own VM/role (du_srsran)
+  # on explicit direction, a more realistic split-RAN deployment (real
+  # network between CU and DU instead of loopback on this same VM).
+  # gnb stays -- this VM still runs the fused binary for the non-split
+  # test scenarios (gnb_zmq*.yaml.j2, below).
+  ansible.builtin.command:
+    cmd: make -j{{ ansible_processor_vcpus | default(4) }} gnb srscu
+    chdir: /opt/srsRAN_Project/build
+
+- name: Install
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /opt/srsRAN_Project/build
+  become: true
+  # This step alone can run past ansible's default synchronous timeout
+  # expectations on a slow disk -- confirmed on a real run needing to be
+  # relaunched detached (nohup) when a 180s async window cut it off
+  # mid-install. async/poll here gives it real headroom instead.
+  async: 600
+  poll: 10
+
+- name: Create /etc/srsran
+  # ansible.builtin.template doesn't create parent dirs -- confirmed on a
+  # real run: "Destination directory /etc/srsran does not exist" (the
+  # srsRAN Project build/install step doesn't create it either).
+  ansible.builtin.file:
+    path: /etc/srsran
+    state: directory
+    mode: "0755"
+
+- name: Deploy gNB ZMQ config (multi-UE, matches ric_flexric's E2 subscription expectations)
+  ansible.builtin.template:
+    src: gnb_zmq.yaml.j2
+    dest: /etc/srsran/gnb_zmq.yaml
+    mode: "0644"
+
+- name: Deploy gNB ZMQ config for pairing with the OAI UE instead (see
+        ue_oai role and this template's own header comment for why)
+  ansible.builtin.template:
+    src: gnb_zmq_oai.yaml.j2
+    dest: /etc/srsran/gnb_zmq_oai.yaml
+    mode: "0644"
+
+- name: Deploy gNB ZMQ config for when the UE runs on this same VM too
+        (see this template's own header comment for why)
+  ansible.builtin.template:
+    src: gnb_zmq_colocated.yaml.j2
+    dest: /etc/srsran/gnb_zmq_colocated.yaml
+    mode: "0644"
+
+- name: Deploy gNB ZMQ config for pairing with the OAI UE when it ALSO runs
+        on this same VM (see this template's own header comment for why)
+  ansible.builtin.template:
+    src: gnb_zmq_oai_colocated.yaml.j2
+    dest: /etc/srsran/gnb_zmq_oai_colocated.yaml
+    mode: "0644"
+
+# Split CU deployment (srscu, CU-CP + CU-UP combined) -- alongside the
+# fused gnb_zmq.yaml, not a replacement for it. Only reason this exists:
+# gnb_zmq.yaml.j2's own e2: block can only ever expose a UE's
+# gnb_cu_ue_f1ap (DU-internal index) via KPM, never its real
+# amf_ue_ngap_id -- see cu_split.yaml.j2's own header for why.
+#
+# Pairs with du_srsran's own srsdu, on the SEPARATE `du` VM (real F1 over
+# the RAN network) -- srsdu itself is no longer built or deployed from
+# this role/VM at all (moved out on explicit direction).
+- name: Deploy the split CU config (srscu -- CU-CP + CU-UP combined)
+  ansible.builtin.template:
+    src: cu_split.yaml.j2
+    dest: /etc/srsran/cu_split.yaml
+    mode: "0644"

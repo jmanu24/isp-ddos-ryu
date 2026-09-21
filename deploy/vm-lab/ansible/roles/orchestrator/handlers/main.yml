@@ -1,0 +1,14 @@
+---
+- name: restart exabgp
+  ansible.builtin.systemd:
+    name: exabgp.service
+    state: restarted
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart ryu-manager
+  ansible.builtin.systemd:
+    name: ryu-manager.service
+    state: restarted

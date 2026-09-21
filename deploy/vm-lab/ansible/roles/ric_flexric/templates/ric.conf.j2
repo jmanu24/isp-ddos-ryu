@@ -1,0 +1,36 @@
+# Managed by Ansible (roles/ric_flexric) -- `make install`'s own sample
+# config ships an IP of "127.0.0.1" (confirmed on a real run: found
+# at /usr/local/etc/flexric/ric.conf right after install), which is
+# loopback-only and unreachable from ran_srsran's gNB, which connects
+# to this IP (ric_addr, matching gnb_zmq.yaml.j2's e2.addr) over the
+# network for its E2 SCTP association. This template replaces it with
+# this VM's own real address every run, since `make install` re-copies
+# its sample on every build regardless of what's already there.
+#
+# The RIC IP field name changed vs br-flexric (dropped "RT", changed
+# casing) -- confirmed on a real run against `dev`'s own
+# src/util/conf_file.c: get_near_ric_ip() does a literal, comment-blind
+# strstr() line scan for its expected field name, "IP address string
+# invalid" otherwise (the old field name is simply never found, and the
+# uninitialized/empty buffer fails inet_pton's validation). CAUTION:
+# because the scan is comment-blind, do not spell that exact field
+# name (with its trailing space-equals) anywhere above the real config
+# line in this file, including in comments -- confirmed on a real run
+# that doing so makes strstr() match the comment instead of the actual
+# line below, feeding garbage into the IP buffer. SM_DIR, Name,
+# E2_Port, E42_Port kept as-is -- not yet confirmed whether `dev` reads
+# these from this file at all or only via CLI flags/hardcoded
+# defaults; no error surfaced for them yet, revisit if one does.
+#
+# No quotes around the IP value -- confirmed on a real run: the
+# extraction logic trims whitespace only, not quote characters, so a
+# quoted value literally including the quote marks gets fed straight
+# to inet_pton() and fails validation the same way an empty/garbage
+# value would.
+SM_DIR = "/usr/local/lib/flexric/"
+
+# supported name = NearRT_RIC, E2_Agent, E2_Proxy_Agent, xApp
+Name = "NearRT_RIC"
+NEAR_RIC_IP = {{ ric_addr | default('10.10.0.4') }}
+E2_Port = 36421
+E42_Port = 36422

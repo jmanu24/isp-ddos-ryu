@@ -1,0 +1,192 @@
+# Managed by Ansible (roles/du_srsran) -- srsRAN Project's DU-only
+# binary (`srsdu`), on its OWN VM (`du`), paired over F1 with
+# ran_srsran's `srscu` on the `ran` VM (real network, RAN segment --
+# NOT loopback anymore). This role/VM split was done on explicit
+# direction, as a more realistic split-RAN deployment in its own right
+# -- NOT because a CPU-contention hypothesis for this lab's RACH
+# instability was confirmed. It wasn't: a real A/B test (8 UE attach
+# trials each, same methodology, CU-UP's E2 agent enabled vs disabled)
+# showed 0/8 vs 1/8 -- statistically indistinguishable, so cu_up_e2 was
+# ruled OUT as the cause. The actual observed pattern (first UE attach
+# after a fresh CU+DU restart tends to work, every later reattach
+# against the SAME CU+DU process almost always fails) points at stale
+# UE/RA context left behind by the UE's own ungraceful `kill -9`
+# shutdown in this lab's test playbooks, not CPU/infrastructure sizing
+# -- a separate root cause this VM split does not, by itself, fix.
+#
+# ru_sdr/cell_cfg are IDENTICAL to gnb_zmq.yaml.j2's/the original
+# (same-VM) du_split.yaml.j2's own -- the DU still owns the actual
+# radio/MAC/scheduler, same as in the fused binary or the same-VM split;
+# only f1ap/f1u/e2's addressing changes with the VM split (loopback
+# 127.0.10.x -> this VM's own real RAN/MGMT addresses).
+#
+# To run (AFTER the CU is already up on the `ran` VM):
+# sudo ./srsdu -c du_split.yaml
+
+# own_ran_addr: per-HOST var (render_topology.py's render_ansible_host_vars(),
+# generated/ansible/host_vars/<this VM's name>.yml) -- NOT du_ran_addr
+# (a single group_var hardcoded to the VM literally named `du`).
+# Confirmed on a real run: with 4 more DUs added (du2-du5), all 5 used
+# to bind to the SAME address (du_ran_addr always resolved to du's own
+# 10.40.0.4) -- "Failed to bind UDP socket to 10.40.0.4:2152. Cannot
+# assign requested address" on every du2-du5. own_ran_addr is generated
+# fresh per VM from its own RAN interface, so each DU gets its own.
+{% set du_num = (inventory_hostname | regex_replace('^[^0-9]+', '')) %}
+{# `du` (no suffix) pairs with UE1's port 2001, a pre-existing fixed
+   value from before du2-du5 existed -- NOT 2000+1*100+1=2101, don't
+   "unify" this without also re-templating ue_direct_zmq_split_du.conf.j2
+   and re-validating the already-working du/UE1 pair. #}
+{% set ue_rx_port = 2001 if du_num == '' else (2000 + (du_num | int) * 100 + 1) %}
+# gnb_du_id MUST be unique per DU -- confirmed on a real run: this was
+# the REAL cause of a crash that a per-DU `pci` alone did NOT fix.
+# du_high_config.h's own default (gnb_du_id = gnb_du_id_t::min, i.e. the
+# same fixed value for every instance) is what nearRT-RIC's E2 node
+# registry actually keys on (PLMN + gnb_id + gnb_du_id form the Global
+# E2 Node ID for a DU-level E2 agent, per O-RAN E2AP) -- every DU
+# registering with the SAME gnb_du_id crashes nearRT-RIC itself outright
+# ("reg_e2_nodes.c:157: add_reg_e2_node: Assertion `it_node == end_node
+# && "Trying to add an already existing E2 Node"' failed", not a
+# graceful per-agent rejection -- the whole RIC process dies, taking
+# every OTHER DU's and the CU's own E2 agent down with it). gnb_id
+# itself (the gNodeB-level identity) stays srsRAN's own default,
+# correctly SHARED across every DU here -- they really are DUs of the
+# same logical gNB, only gnb_du_id needs to differ.
+gnb_du_id: {{ 1 if du_num == '' else (du_num | int) }}
+f1ap:
+  cu_cp_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+  bind_addr: {{ own_ran_addr }}
+
+# peer_port: 2153, NOT the default (GTPU_PORT/2152) -- confirmed on a
+# real run: the CU's own F1-U socket (ran_srsran's cu_split.yaml.j2) had
+# to move off the default port because it collides with N3/NG-U's own
+# GTP-U socket (both default to GTPU_PORT, and both end up on
+# ran_ran_addr in this deployment -- see cu_split.yaml.j2's own comment
+# for the full story). This VM's own bind_port stays default (2152) --
+# no such collision here, `du` doesn't run an N3/NG-U socket at all.
+f1u:
+  peer_port: 2153
+  socket:
+    - bind_addr: {{ own_ran_addr }}
+
+ru_sdr:
+  device_driver: zmq
+  # rx_port targets THIS du's own dedicated UE process on the `ue` VM,
+  # not a fixed port -- du (no suffix) pairs with UE1's port 2001
+  # (ue_direct_zmq_split_du.conf.j2's own tx_port), du{N} pairs with
+  # UE{N}'s port 2000+N*100+1 (ue_direct_zmq_multi_du.conf.j2's own
+  # arithmetic) -- both sides must agree on the same formula or the
+  # ZMQ REQ/REP handshake never completes (silently -- no error, no
+  # RACH attempt, see docs/ran-testing.md).
+  device_args: tx_port=tcp://0.0.0.0:2000,rx_port=tcp://{{ ue_ran_addr | default('10.40.0.3') }}:{{ ue_rx_port }},base_srate=11.52e6
+  srate: 11.52
+  tx_gain: 0
+  rx_gain: 0
+
+cell_cfg:
+  # pci MUST be unique per DU -- confirmed on a real run: with no pci
+  # set here at all, every DU (du, du2-du5) silently used srsdu's same
+  # default (1), and FlexRIC's nearRT-RIC identifies an E2 node by (among
+  # other things) this cell identity -- multiple DUs registering with the
+  # SAME identity crashes the RIC itself outright:
+  # "nearRT-RIC: .../reg_e2_nodes.c:157: add_reg_e2_node: Assertion
+  # `it_node == end_node && "Trying to add an already existing E2 Node"'
+  # failed." (not a graceful rejection -- the whole RIC process dies,
+  # taking down every OTHER DU's/the CU's own E2 agent with it). `du` (no
+  # suffix) keeps pci 1 (its pre-existing, already-validated value, see
+  # du_num's own comment above for why it isn't unified with du{N}'s
+  # arithmetic); du2-du5 get pci 2-5.
+  pci: {{ 1 if du_num == '' else (du_num | int) }}
+  # sector_id MUST also be unique per DU -- confirmed on a real run to
+  # be the ACTUAL root cause of every du2-du5 attach failure this
+  # session, not RACH flakiness at all: pci alone was NOT enough (a
+  # real A/B test with du2 forced to pci=1, duplicating du's own value,
+  # still failed identically). srsRAN Project's own CLI11 help text for
+  # --sector_id says "a unique value for the DU is automatically
+  # derived" if unset -- true only WITHIN one DU process's own cell
+  # list (apps/.../du_high_config_cli11_schema.cpp's own
+  # `next_sector_id` counter starts at 0 in every separate `srsdu`
+  # process). sector_id is concatenated with gnb_id to form the NR Cell
+  # Identity (NCI) that cu_configuration_manager::validate_du_config()
+  # uses to detect a colliding cell -- with every DU defaulting to
+  # sector_id=0, CU-CP's own F1 Setup handler rejected every DU past
+  # the first: "F1 Setup Failure ... message-not-compatible-with-
+  # receiver-state" (a real F1AP cause code, not a crash or timeout --
+  # confirmed in du.log, easy to miss since it looks identical to plain
+  # RACH non-response from the UE side unless you check the DU's own
+  # log for this exact line). `du` (no suffix) keeps sector_id 0 (its
+  # pre-existing default); du2-du5 get 1-4.
+  sector_id: {{ 0 if du_num == '' else (du_num | int) - 1 }}
+  dl_arfcn: 368500
+  band: 3
+  channel_bandwidth_MHz: 10
+  common_scs: 15
+  plmn: "00101"
+  tac: 7
+  pdcch:
+    common:
+      ss0_index: 0
+      coreset0_index: 6
+    dedicated:
+      ss2_type: common
+      dci_format_0_1_and_1_1: false
+  prach:
+    prach_config_index: 1
+    total_nof_ra_preambles: 64
+    # See gnb_zmq.yaml.j2's own comment -- deliberately not set.
+    nof_cb_preambles_per_ssb: 64
+  pdsch:
+    mcs_table: qam64
+  pusch:
+    mcs_table: qam64
+
+# DU's own, separate E2 agent -- confirmed present in apps/du/du.cpp.
+# Keeps the F1AP-ID-based per-UE KPM (gnb_cu_ue_f1ap, already confirmed
+# working against the fused gnb) available from the split DU too, so
+# switching to split doesn't regress what already worked -- the CU's own
+# E2 agent (cu_split.yaml.j2, on `ran`) is additive, for amf_ue_ngap_id
+# specifically, not a replacement.
+#
+# bind_addr is THIS VM's own MGMT address (own_mgmt_addr, a per-host
+# var -- NOT du_mgmt_addr, a group_var hardcoded to the VM literally
+# named `du`), NOT ran_mgmt_addr either -- confirmed necessary vs. the
+# original same-VM du_split.yaml.j2, which reused ran_mgmt_addr because
+# DU and CU were both processes on the `ran` VM; that address doesn't
+# exist locally on `du`/du2-du5 at all now. Confirmed on a real run:
+# before own_mgmt_addr existed, du2-du5's E2 agents all silently bound
+# to du's own MGMT address (10.10.0.10) instead of their own -- no
+# error, just wrong (same class of bug as own_ran_addr's own header
+# comment above, for the F1/RF addresses).
+e2:
+  enable_du_e2: true
+  e2sm_kpm_enabled: true
+  e2sm_rc_enabled: false
+  addr: {{ ric_addr | default('10.10.0.4') }}
+  port: 36421
+  bind_addr: {{ own_mgmt_addr }}
+
+log:
+  filename: /tmp/du.log
+  # warning, not info -- confirmed on a real run: a malformed-JSON logger
+  # hang (a doubled opening brace, "pucch-ConfigCommon": { {, from
+  # setup_release_c<T>::to_json() in lib/asn1/asn1_utils.h double-
+  # wrapping a CHOICE's setup case) reproduces here -- it's shared DU
+  # code, not something fused-vs-split (or same-VM-vs-separate-VM)
+  # changes.
+  all_level: warning
+  e2ap_level: info
+  du_level: warning
+  hex_max_size: 0
+
+metrics:
+  periodicity:
+    du_report_period: 1000
+  layers:
+    enable_rlc: true
+
+pcap:
+  mac_enable: false
+  mac_filename: /tmp/du_mac.pcap
+  f1ap_enable: false
+  f1ap_filename: /tmp/du_f1ap.pcap
+  f1u_enable: false
+  f1u_filename: /tmp/du_f1u.pcap

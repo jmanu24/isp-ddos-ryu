@@ -1,0 +1,41 @@
+# Managed by Ansible (roles/br). Distributed-VM equivalent of the flags
+# webtool/peering_ops.py's Mininet path passes to `flow run` -- must stay
+# in sync with that module's own FLOW_LOCAL_AS/EXABGP_LOCAL_AS constants
+# (65001/65002) if either ever changes.
+#
+# -b/-i use br's MGMT address, NOT its PEERING one (br_peering_addr) --
+# orchestrator (where exabgp runs) has no interface on the PEERING VLAN
+# at all, only br and peer-router do, so br_peering_addr would simply be
+# unreachable from there. See config/settings.py's PEERING_DIST_BR_IP
+# comment for the full reasoning.
+#
+# Port 1790, not the standard BGP 179 -- br also runs FRR's bgpd for the
+# real eBGP session with peer-router, which binds :179 on ALL of br's
+# addresses by default (confirmed: FRR has no simple per-address scoping
+# for its main listener), so flow trying to ALSO bind :179 -- even on a
+# different specific address -- fails with "Address already in use".
+# Must match config/settings.py's PEERING_DIST_FLOW_PORT and
+# webtool/peering_ops.py's exabgp config (`connect 1790;`).
+#
+# --hooked is load-bearing, not decoration: without it, flow's nftables
+# rule is created as a REGULAR (non-base) chain that nothing ever jumps
+# to, so it's created but never evaluated by the kernel -- confirmed via
+# this exact failure mode during the Mininet-mode spike (see webtool/
+# peering_ops.py's own long comment on this flag). --hooked attaches
+# directly to nftables' `input` hook, which is why 10.99.0.1/32 is added
+# to br's own loopback (this role's "Add dummy central_server address"
+# task) -- traffic to it is locally delivered, not forwarded, matching
+# what --hooked actually hooks.
+[Unit]
+Description=flow -- BGP FlowSpec to nftables (Peering domain)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/flow run -b {{ br_mgmt_addr }}:1790 -l 65001 -r 65002 -i {{ br_mgmt_addr }} -a {{ orchestrator_addr }} --hooked
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
