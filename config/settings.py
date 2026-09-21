@@ -331,12 +331,19 @@ BNG_DIST_BNG_IP = "10.10.0.2"
 BNG_DIST_BNG_SSH_USER = "labadmin"
 BNG_DIST_BNG_SSH_HOST = BNG_DIST_BNG_IP
 
-# victim's real MGMT address (shared target VM every domain's test
-# scenario uses) -- simulation/bng_subscriber_agent.py's own target-ip;
-# attack traffic reaches it by real L3 forwarding through bng itself
-# (BB_ACCESS and MGMT are different subnets, bng sits on both, ip_
-# forward is enabled there -- deploy/vm-lab/ansible/roles/bng).
-BNG_DIST_TARGET_IP = "10.10.0.100"
+# victim's real VLAN_BACKBONE-facing address (shared target VM every
+# domain's test scenario uses) -- simulation/bng_subscriber_agent.py's
+# own target-ip. NOT victim's MGMT address anymore -- moved on explicit
+# direction (docs/vlan-backbone.md): subscriber attack traffic now
+# reaches victim by MASQUERADE out bng's own dedicated backbone NIC,
+# through pe's OVS bridge (br-ent, OpenFlow-monitored by ryu-manager),
+# landing on victim's ENT_DC interface -- not by plain L3 forwarding
+# through bng straight onto victim's OOB management interface the way
+# it used to. Confirmed on a real run: this is victim_ent_dc_addr in
+# deploy/vm-lab's own group_vars, generated from topology.yaml's ENT_DC
+# network, same address every other domain's attack traffic now
+# converges on too (see docs/vlan-backbone.md's own diagram).
+BNG_DIST_TARGET_IP = "10.55.0.100"
 
 # suscriptor's control FIFO (simulation/bng_subscriber_agent.py) --
 # same path/protocol simulation/bng_agent.py used.
