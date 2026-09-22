@@ -193,27 +193,40 @@ class PeeringFlowCollector:
         """fname is just the basename (see poll()) -- joined against
         self.capture_dir here.
 
-        tpool.execute(), NOT a direct call -- `nfdump` is a real
-        fork/exec/waitpid subprocess, same reasoning as every other
-        blocking-subprocess call in this project's telemetry adapters
-        (see telemetry/broadband_adapter.py's own _ssh()): eventlet's
-        monkey-patching makes plain sockets cooperative but not
-        subprocess.run(), so a slow/backlogged decode here (observed
-        once taking ~6.5 hours through an unprocessed backlog) would
-        otherwise freeze ryu-manager's entire reactor -- every domain's
-        collect()/detect()/mitigate(), not just this one's -- until it
-        returns."""
+        tpool.execute() wraps _run_and_parse() -- the WHOLE thing,
+        subprocess.run() AND _parse_csv(), not just the subprocess call.
+        Confirmed on a real run (py-spy dump against a live ryu-manager,
+        caught mid-stall): with only the subprocess call wrapped, csv.
+        DictReader's own row-by-row iteration inside _parse_csv() still
+        ran directly in the MAIN greenthread's call stack after
+        tpool.execute() returned -- pure CPU-bound Python bytecode that
+        doesn't yield back to eventlet's hub at all while it runs, found
+        active in the main thread in ~25% of one-second py-spy samples
+        taken during a live test. That's long enough for Ryu's own
+        OpenFlow echo-reply handling (a separate greenthread, but one
+        that still needs the hub to actually run it) to miss `pe`'s
+        inactivity-probe deadline and disconnect -- confirmed the
+        dominant cause of this domain's Td/Tr variance (some runs ~2s,
+        others 80-90s+, entirely explained by whether a poll cycle
+        happened to catch a backlog of several unprocessed capture
+        files at once, per this method's own timeout comment below).
+        Passing self._parse_csv as part of the SAME tpool call keeps
+        both the process wait AND the parsing off the main thread --
+        only the final list of dicts crosses back."""
         path = f"{self.capture_dir.rstrip('/')}/{fname}"
         try:
-            result = tpool.execute(
-                subprocess.run,
-                [self.nfdump_bin, "-r", path, "-o", "csv"],
-                capture_output=True, text=True, timeout=30, check=True,
-            )
+            return tpool.execute(self._run_and_parse, path)
         except (OSError, subprocess.SubprocessError) as exc:
             self.logger.warning("nfdump failed on %s: %s", path, exc)
             return []
 
+    def _run_and_parse(self, path: str) -> List[Dict]:
+        """Runs entirely inside a tpool worker thread -- see
+        _decode_file()'s own comment for why both halves need to."""
+        result = subprocess.run(
+            [self.nfdump_bin, "-r", path, "-o", "csv"],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
         return self._parse_csv(result.stdout)
 
     @staticmethod
