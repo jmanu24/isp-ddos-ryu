@@ -87,11 +87,28 @@ def tcp_syn_flood(src_ip: str, dst_ip: str, dst_port: int, pps: float) -> None:
 def udp_flood(src_ip: str, dst_ip: str, dst_port: int, pps: float) -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((src_ip, 0))
+    # Unlike tcp_syn_flood's own except OSError (EINPROGRESS/EWOULDBLOCK
+    # on every non-blocking connect(), genuinely expected there), a
+    # sendto() failure here is NOT expected in the normal case -- print
+    # it, once, rather than swallow it silently forever. Confirmed on a
+    # real run: dst_port=0 makes EVERY sendto() call here fail with
+    # `OSError: [Errno 22] Invalid argument` (a UDP sendto() DESTINATION
+    # port of 0 is invalid on Linux, unlike bind()'s own port 0 meaning
+    # "pick one"), and a bare `except OSError: pass` here previously made
+    # that indistinguishable from a working flood in every signal this
+    # project had -- process alive, high CPU (an all-out retry loop with
+    # nothing ever slowing it down), no exception anywhere. Only prints
+    # once (not per-packet) to stay usable at flood rate; the caller
+    # (bng_subscriber_agent.py) no longer discards this process's
+    # stderr, see its own comment.
+    _warned = False
     while True:
         try:
             sock.sendto(_UDP_PAYLOAD, (dst_ip, dst_port))
-        except OSError:
-            pass
+        except OSError as exc:
+            if not _warned:
+                print(f"[bng_flood] sendto({dst_ip}:{dst_port}) failing: {exc}", file=sys.stderr, flush=True)
+                _warned = True
         _sleep_for_rate(pps)
 
 

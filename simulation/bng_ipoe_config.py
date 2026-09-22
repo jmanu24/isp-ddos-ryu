@@ -53,8 +53,20 @@ SCENARIO_PARAMS = {
         subscriber_count=1, protocol="TCP_SYN", dst_port=443,
         pps=None, autostart=False,
     ),
+    # dst_port=53, NOT 0 -- confirmed on a real run: unlike bind()
+    # (where port 0 means "kernel picks one"), a UDP sendto() DESTINATION
+    # port of 0 is invalid on Linux (`OSError: [Errno 22] Invalid
+    # argument`, raised on every single call). bng_flood.py's own
+    # udp_flood() swallows that in a bare `except OSError: pass` -- see
+    # its own module docstring for the fix making that visible instead
+    # of silent -- so this scenario ran at ~100% CPU (an all-out retry
+    # loop, no packets ever slowing it down) while transmitting exactly
+    # zero real packets, indistinguishable from a working flood in every
+    # signal this project had (process alive, high CPU, no exception in
+    # the log) until traced with tcpdump directly on the subscriber's
+    # own macvlan interface.
     "udp_flood": dict(
-        subscriber_count=1, protocol="UDP", dst_port=0,
+        subscriber_count=1, protocol="UDP", dst_port=53,
         pps=None, autostart=False,
     ),
     "icmp_flood": dict(
@@ -68,9 +80,10 @@ SCENARIO_PARAMS = {
         subscriber_count=8, protocol="TCP_SYN", dst_port=443,
         pps=5.0, autostart=False,
     ),
-    # 8 x 60 pps = 480 aggregate (> UDP_THRESHOLD=200).
+    # 8 x 60 pps = 480 aggregate (> UDP_THRESHOLD=200). dst_port=53, not
+    # 0 -- see udp_flood's own comment above, same real-send bug.
     "distributed_udp_flood": dict(
-        subscriber_count=8, protocol="UDP", dst_port=0,
+        subscriber_count=8, protocol="UDP", dst_port=53,
         pps=60.0, autostart=False,
     ),
     # 8 x 50 pps = 400 aggregate (> ICMP_THRESHOLD=150).

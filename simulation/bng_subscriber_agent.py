@@ -134,6 +134,11 @@ _STATE_PATH = f"{_DHCP_RUN_DIR}/active_scenario.json"
 _HTTP_PORT = 8765
 
 _FLOOD_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bng_flood.py")
+# Shared by every attack subprocess (Subscriber.start_attack(), below)
+# -- was DEVNULL before, see that method's own comment for why that hid
+# a real bug (bng_flood.py's udp_flood() failing every single call,
+# silently) for a long time.
+_FLOOD_LOG_PATH = "/var/log/bng-flood.log"
 
 
 def _iface(n: int) -> str:
@@ -379,7 +384,14 @@ class Subscriber:
             ]
             if pps is not None:
                 argv += ["--pps", str(pps)]
-        self._attack_proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # stderr appended to a real file, NOT DEVNULL -- confirmed on a
+        # real run: bng_flood.py's own udp_flood() silently sending zero
+        # real packets (dst_port=0 makes every sendto() fail) was
+        # invisible for exactly this reason. It now prints once on a
+        # real failure (see its own comment) -- discarding that here
+        # would have made the fix pointless.
+        with open(_FLOOD_LOG_PATH, "a") as flood_log:
+            self._attack_proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=flood_log)
 
     def stop_attack(self) -> None:
         self._attack_params = None
