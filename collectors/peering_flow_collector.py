@@ -49,10 +49,24 @@ def _ssh_br(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
     one's -- eventlet's monkey-patching doesn't make subprocess.run()
     (a real blocking fork/exec/waitpid) cooperative the way it does
     plain sockets. See telemetry/broadband_adapter.py's own _ssh() for
-    the same fix applied there."""
+    the same fix applied there.
+
+    ControlMaster/ControlPersist -- same real-run finding as
+    telemetry/broadband_adapter.py's own _ssh(): a fresh SSH handshake
+    here (called at least once per collect() cycle, i.e. every
+    COLLECT_INTERVAL) costs ~0.5s on its own, which is the dominant
+    contributor to this domain's real cycle time running ~6x its
+    nominal interval -- directly inflating how long
+    UNBLOCK_CONFIRM_CYCLES (orchestration/controller.py) takes in wall-
+    clock time before a FlowSpec route gets withdrawn. Reusing one
+    multiplexed connection turns every later call into a single
+    round-trip over an already-open session instead of a fresh
+    handshake."""
     return tpool.execute(
         subprocess.run,
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+         "-o", "ControlMaster=auto", "-o", "ControlPersist=600",
+         "-o", "ControlPath=/run/ssh-mux-%C",
          f"{settings.PEERING_DIST_BR_SSH_USER}@{settings.PEERING_DIST_BR_SSH_HOST}",
          *args],
         capture_output=True, text=True, timeout=timeout,
