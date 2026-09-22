@@ -170,6 +170,25 @@ PER_SOURCE_MITIGATION_DOMAINS = ("mobile", "broadband", "bgp")
 PRESENCE_BLIND_DOMAINS = ("broadband", "bgp")
 
 # --- BGP Peering domain (see docs/peering-plan.md) --------------------
+# Overrides MitigationAction's own 60s dataclass default (core/models.py)
+# for bgp specifically -- see orchestration/controller.py's `elif
+# src_domain == "bgp":` branch. Left at the 60s default for broadband/
+# mobile (the other two PRESENCE_BLIND_DOMAINS/PER_SOURCE_MITIGATION_
+# DOMAINS members): broadband's own real-lab Tr was already ~40s and
+# didn't need tuning, and mobile's RC-throttle duration (telemetry/
+# mobile_adapter.py's apply_mitigation) is a different, untested
+# real-lab mechanism this change has no reason to touch. Halved from
+# 60 to 30 -- confirmed on a real run this domain's recovery (Tr) was
+# dominated by this fixed hold, not by pipeline cycle speed (unlike
+# enterprise's UNBLOCK_CONFIRM_CYCLES-based recovery, which SSH
+# connection reuse already cut ~4x -- see telemetry/broadband_adapter.
+# py's and collectors/peering_flow_collector.py's _ssh()/_ssh_br()).
+# Tradeoff: a spoofed/bursty attacker that pauses for >30s and resumes
+# gets a fresh FlowSpec announce instead of staying continuously
+# blocked, same bounce risk UNBLOCK_CONFIRM_CYCLES trades off for
+# enterprise, just via wall-clock instead of cycle count.
+PEERING_UNBLOCK_HOLD_S = 30
+
 # Directory nfcapd rotates its binary NetFlow/IPFIX capture files into,
 # fed by softflowd sniffing r1's external interface. Read via `nfdump`,
 # never parsed as raw wire format (collectors/peering_flow_collector.py).

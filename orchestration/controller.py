@@ -545,6 +545,11 @@ class OrchestrationController:
                             attack_type=effective_attack_type,
                             pps=d.pps,
                             bps=d.bps,
+                            # Overrides the dataclass's 60s default -- see
+                            # settings.PEERING_UNBLOCK_HOLD_S's own comment
+                            # for why this domain specifically gets a
+                            # shorter fixed hold than broadband/mobile.
+                            duration=settings.PEERING_UNBLOCK_HOLD_S,
                         ))
 
                     elif src_domain in settings.PER_SOURCE_MITIGATION_DOMAINS:
