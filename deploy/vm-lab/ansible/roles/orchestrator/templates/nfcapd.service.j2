@@ -1,0 +1,21 @@
+# Managed by Ansible (roles/orchestrator). Moved here from roles/br --
+# softflowd-peering (on br) now exports its NetFlow stream directly to
+# this host instead of to a local nfcapd on br that collectors/
+# peering_flow_collector.py then had to SSH+nfdump into. -w path must
+# match config/settings.py's PEERING_NFCAPD_DIR exactly -- that
+# collector (running on this same host) lists this directory locally to
+# find new capture files.
+[Unit]
+Description=nfcapd -- NetFlow capture daemon (Peering domain telemetry)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/cache/nfcapd/r1
+ExecStart=/usr/local/bin/nfcapd -w /var/cache/nfcapd/r1 -p 9995 -t 2
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -64,6 +64,14 @@ over SSH by webtool/bng_ops.py's BngLifecycle in distributed mode
 apply_mitigation() right after a real unblock -- see
 Subscriber.force_refresh()'s own docstring for why.
 
+Also serves a tiny read-only HTTP endpoint (_StateHTTPHandler below,
+GET /active_scenario on _HTTP_PORT) -- telemetry/broadband_adapter.py's
+distributed-mode collect() polls this every cycle instead of SSHing in
+a `cat` of _STATE_PATH, since that file changes only on attack start/
+stop and a fresh SSH connection per poll (confirmed ~0.5s of handshake
+alone) was pure overhead for reading the same unchanged bytes almost
+every time.
+
 A background thread (see run()/_resync_loop) periodically re-checks
 every subscriber's real interface IP against what this daemon has
 cached and re-syncs routing/the running attack process/the state file
@@ -90,6 +98,7 @@ import subprocess
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_DIR)
@@ -112,11 +121,17 @@ _RESYNC_INTERVAL_S = 5
 # session-streams had (see simulation/bng_config.py's old module
 # docstring: "the synthetic producer already knows what it's
 # simulating"). This state file is that same convention's new home --
-# broadband_adapter.py's distributed-mode collect() ALSO SSHes here to
-# read which protocol/dst_port each currently-attacking subscriber's IP
-# is meant to represent, merging it with FreeRADIUS's real rate data by
-# IP.
+# broadband_adapter.py's distributed-mode collect() ALSO reads this
+# (over plain HTTP now, not SSH -- see _StateHTTPHandler below) to learn
+# which protocol/dst_port each currently-attacking subscriber's IP is
+# meant to represent, merging it with FreeRADIUS's real rate data by IP.
 _STATE_PATH = f"{_DHCP_RUN_DIR}/active_scenario.json"
+
+# Must match settings.BNG_DIST_SUSCRIPTOR_HTTP_PORT. A fixed local
+# constant, not a CLI flag -- this is an internal detail of the
+# protocol between this daemon and broadband_adapter.py, not a
+# deployment-specific choice the way --target-ip/--gateway-ip are.
+_HTTP_PORT = 8765
 
 _FLOOD_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bng_flood.py")
 
@@ -530,6 +545,52 @@ def _resync_loop(pool: SubscriberPool) -> None:
             print(f"[SUBSCRIBER] resync failed: {exc}", file=sys.stderr)
 
 
+class _StateHTTPHandler(BaseHTTPRequestHandler):
+    """Serves GET /active_scenario -- the same JSON _write_state() (see
+    SubscriberPool above) already writes to _STATE_PATH, just over a
+    plain local socket instead of a remote `cat` over SSH.
+
+    Replaces telemetry/broadband_adapter.py's old _ssh_suscriptor(["cat",
+    ...]) call: that spawned a fresh SSH connection (a real fork/exec on
+    both ends, ~0.5s just for the handshake, confirmed on a real run) on
+    EVERY collect() cycle to read a file that changes only when an
+    attack starts/stops -- most polls saw the exact same bytes. A plain
+    HTTP GET over a socket eventlet's own monkey-patching already makes
+    cooperative (unlike subprocess.run(), see this project's many
+    tpool.execute() call sites) costs a single local round-trip with no
+    process spawn on either side.
+
+    BaseHTTPRequestHandler/ThreadingHTTPServer, not a new Flask/wsgi
+    dependency -- this endpoint is one read-only route returning a small
+    file's contents, not worth a new package for."""
+
+    def log_message(self, format, *args):  # noqa: A002 -- stdlib's own name
+        pass  # BaseHTTPRequestHandler logs every request to stderr by
+        # default, which would otherwise spam this daemon's own log file
+        # with one line per COLLECT_INTERVAL poll, forever.
+
+    def do_GET(self):
+        if self.path != "/active_scenario":
+            self.send_response(404)
+            self.end_headers()
+            return
+        try:
+            with open(_STATE_PATH, "rb") as f:
+                body = f.read()
+        except OSError:
+            body = b"{}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _http_loop(port: int) -> None:
+    server = ThreadingHTTPServer(("0.0.0.0", port), _StateHTTPHandler)
+    server.serve_forever()
+
+
 def run(fifo_path: str, target_ip: str, gateway_ip: str, start_baseline: bool) -> None:
     os.makedirs(os.path.dirname(fifo_path), exist_ok=True)
     if not os.path.exists(fifo_path):
@@ -554,6 +615,7 @@ def run(fifo_path: str, target_ip: str, gateway_ip: str, start_baseline: bool) -
         pool.launch(BASELINE_SCENARIO)
 
     threading.Thread(target=_resync_loop, args=(pool,), daemon=True).start()
+    threading.Thread(target=_http_loop, args=(_HTTP_PORT,), daemon=True).start()
 
     while True:
         with open(fifo_path, "r") as f:

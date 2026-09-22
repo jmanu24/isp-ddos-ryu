@@ -2,26 +2,36 @@
 collectors/peering_flow_collector.py — ingress flow telemetry for the BGP
 Peering domain.
 
-softflowd on r1's external interface exports NetFlow v9/IPFIX to nfcapd,
-which writes rotated binary capture files to PEERING_NFCAPD_DIR (see
-config/settings.py). This collector never speaks the wire protocol
-itself -- it shells out to `nfdump` (same suite as nfcapd) to decode each
-new capture file into per-flow CSV records, the same "read via the
-vendor's own tool" pattern the rest of this project uses (e.g. BNGBlaster
-telemetry) instead of reimplementing IPFIX/NetFlow decoding here.
+softflowd (on `br`, sniffing the real external-facing interface) exports
+NetFlow v9/IPFIX directly to nfcapd, which writes rotated binary capture
+files to PEERING_NFCAPD_DIR (see config/settings.py). This collector
+never speaks the wire protocol itself -- it shells out to `nfdump`
+(same suite as nfcapd) to decode each new capture file into per-flow CSV
+records, the same "read via the vendor's own tool" pattern the rest of
+this project uses (e.g. BNGBlaster telemetry) instead of reimplementing
+IPFIX/NetFlow decoding here.
 
 See docs/peering-plan.md for the FlowSpec-dataplane-support spike --
 this telemetry path does NOT depend on it and works independently of
 whether mitigation/peering_backend.py's announcements actually get
 installed by r1's FRR.
 
-DISTRIBUTED-VM MODE (settings.PEERING_DISTRIBUTED_MODE, see webtool/
-peering_ops.py's own docstring for the full picture): nfcapd runs on a
-separate `br` VM, writing capture files to ITS OWN disk -- this
-collector (running wherever the controller does, e.g. the `orchestrator`
-VM) has no local filesystem access to them. Same "list, then nfdump
-each new file" logic, just over SSH instead of os.listdir/a local
-subprocess call.
+nfcapd ALWAYS runs on the same host as this collector (wherever the
+controller runs -- `orchestrator` in the distributed-VM lab, r1's own
+namespace in Mininet mode) -- softflowd is configured to export its
+NetFlow stream THERE directly (settings.orchestrator_addr in
+deploy/vm-lab/ansible/roles/br's softflowd-peering.service.j2, instead
+of the 127.0.0.1 it used to point at when nfcapd ran alongside it on
+`br`). That earlier remote-nfcapd-plus-SSH design was a Mininet-era
+artifact kept past its usefulness: NetFlow export is UDP fire-and-
+forget and already meant to be pointed at wherever the collector lives,
+so redirecting the export is strictly simpler than polling a remote
+host's disk over SSH for files this collector never needed to be
+remote from in the first place. Confirmed on a real run: the SSH round
+trip this replaced was the dominant cost of this domain's real pipeline
+cycle time (~0.5s per call, at least once per COLLECT_INTERVAL), which
+directly inflated how long UNBLOCK_CONFIRM_CYCLES took in wall-clock
+time before a FlowSpec route got withdrawn.
 """
 import csv
 import io
@@ -33,44 +43,6 @@ from typing import Dict, List, Optional
 from eventlet import tpool
 
 import config.settings as settings
-
-
-def _ssh_br(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
-    """Same BatchMode=yes non-interactive SSH pattern as webtool/
-    peering_ops.py's _ssh_br() -- duplicated rather than imported since
-    that module pulls in Mininet-only code paths this collector has no
-    other reason to depend on.
-
-    tpool.execute(), NOT a direct call -- confirmed on a real run: a
-    slow/backlogged nfdump-over-SSH call here (observed once taking
-    ~6.5 hours to work through an unprocessed nfcapd backlog) blocks
-    ryu-manager's entire eventlet reactor, freezing EVERY domain's
-    collect()/detect()/mitigate() until it returns, not just this
-    one's -- eventlet's monkey-patching doesn't make subprocess.run()
-    (a real blocking fork/exec/waitpid) cooperative the way it does
-    plain sockets. See telemetry/broadband_adapter.py's own _ssh() for
-    the same fix applied there.
-
-    ControlMaster/ControlPersist -- same real-run finding as
-    telemetry/broadband_adapter.py's own _ssh(): a fresh SSH handshake
-    here (called at least once per collect() cycle, i.e. every
-    COLLECT_INTERVAL) costs ~0.5s on its own, which is the dominant
-    contributor to this domain's real cycle time running ~6x its
-    nominal interval -- directly inflating how long
-    UNBLOCK_CONFIRM_CYCLES (orchestration/controller.py) takes in wall-
-    clock time before a FlowSpec route gets withdrawn. Reusing one
-    multiplexed connection turns every later call into a single
-    round-trip over an already-open session instead of a fresh
-    handshake."""
-    return tpool.execute(
-        subprocess.run,
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-         "-o", "ControlMaster=auto", "-o", "ControlPersist=600",
-         "-o", "ControlPath=/run/ssh-mux-%C",
-         f"{settings.PEERING_DIST_BR_SSH_USER}@{settings.PEERING_DIST_BR_SSH_HOST}",
-         *args],
-        capture_output=True, text=True, timeout=timeout,
-    )
 
 _PROTO_NAMES = {"TCP": "TCP", "UDP": "UDP", "ICMP": "ICMP"}
 
@@ -135,7 +107,6 @@ class PeeringFlowCollector:
         self.capture_dir = capture_dir or settings.PEERING_NFCAPD_DIR
         self.nfdump_bin = nfdump_bin or settings.PEERING_NFDUMP_BIN
         self.logger = logger or logging.getLogger(__name__)
-        self._distributed = settings.PEERING_DISTRIBUTED_MODE
         # Seed with whatever's already on disk -- "tail -f" semantics, not
         # "read everything ever captured". Without this, a fresh controller
         # start replays hours-old capture files from an unrelated earlier
@@ -146,17 +117,17 @@ class PeeringFlowCollector:
         # exabgp) even existed to receive it.
         #
         # None (not an empty set) when this initial listing fails --
-        # confirmed on a real run: distributed mode's SSH call can
-        # genuinely fail this early (network/SSH not fully up yet right
-        # at controller startup), and treating that failure as "br's
+        # confirmed on a real run: the capture dir can genuinely not
+        # exist yet this early (nfcapd hasn't created it right at
+        # controller startup), and treating that failure as "the
         # directory is empty" silently adopted an EMPTY baseline, so the
         # very next successful poll() saw every real (days-old, fully
-        # legitimate) capture file on br as "new" and replayed the
-        # entire backlog through nfdump -- observed taking ~6.5 hours,
-        # during which every domain's own telemetry was starved behind
-        # it (see poll()'s own comment for the rest of that story).
-        # poll() checks for this sentinel and defers establishing the
-        # real baseline to its own first successful listing instead.
+        # legitimate) capture file as "new" and replayed the entire
+        # backlog through nfdump -- observed taking ~6.5 hours, during
+        # which every domain's own telemetry was starved behind it (see
+        # poll()'s own comment for the rest of that story). poll()
+        # checks for this sentinel and defers establishing the real
+        # baseline to its own first successful listing instead.
         existing = self._existing_files()
         self._processed_files = set(existing) if existing is not None else None
 
@@ -166,20 +137,10 @@ class PeeringFlowCollector:
 
     def _list_capture_dir(self) -> Optional[List[str]]:
         """Filenames only, complete or not -- caller filters with
-        _is_complete(). Distributed mode lists br's remote directory over
-        SSH instead of os.listdir(). Returns None (NOT []) on failure --
-        callers must not treat "couldn't reach br" the same as "br's
-        directory is genuinely empty", see __init__'s own comment on why
-        that distinction matters."""
-        if self._distributed:
-            result = _ssh_br(["ls", "-1", self.capture_dir])
-            if result.returncode != 0:
-                self.logger.warning(
-                    "Cannot list nfcapd capture dir %s on br: %s",
-                    self.capture_dir, result.stderr.strip(),
-                )
-                return None
-            return [line for line in result.stdout.splitlines() if line]
+        _is_complete(). Returns None (NOT []) on failure -- callers must
+        not treat "directory doesn't exist yet" the same as "directory
+        is genuinely empty", see __init__'s own comment on why that
+        distinction matters."""
         try:
             return os.listdir(self.capture_dir)
         except OSError:
@@ -193,14 +154,12 @@ class PeeringFlowCollector:
 
     def poll(self) -> List[Dict]:
         """Return flow records from every unread, fully-written capture file."""
-        if not self.capture_dir:
-            return []
-        if not self._distributed and not os.path.isdir(self.capture_dir):
+        if not self.capture_dir or not os.path.isdir(self.capture_dir):
             return []
 
         entries = self._list_capture_dir()
         if entries is None:
-            return []  # br unreachable this tick -- try again next time
+            return []  # capture dir not readable this tick -- try again next time
         files = sorted(f for f in entries if self._is_complete(f))
 
         if self._processed_files is None:
@@ -232,19 +191,22 @@ class PeeringFlowCollector:
 
     def _decode_file(self, fname: str) -> List[Dict]:
         """fname is just the basename (see poll()) -- joined against
-        self.capture_dir here, either as a local path or (distributed
-        mode) the path nfdump is run against remotely on br over SSH."""
-        remote_path = f"{self.capture_dir.rstrip('/')}/{fname}"
-        if self._distributed:
-            result = _ssh_br([self.nfdump_bin, "-r", remote_path, "-o", "csv"], timeout=30)
-            if result.returncode != 0:
-                self.logger.warning("nfdump failed on br:%s: %s", remote_path, result.stderr.strip())
-                return []
-            return self._parse_csv(result.stdout)
+        self.capture_dir here.
 
-        path = remote_path
+        tpool.execute(), NOT a direct call -- `nfdump` is a real
+        fork/exec/waitpid subprocess, same reasoning as every other
+        blocking-subprocess call in this project's telemetry adapters
+        (see telemetry/broadband_adapter.py's own _ssh()): eventlet's
+        monkey-patching makes plain sockets cooperative but not
+        subprocess.run(), so a slow/backlogged decode here (observed
+        once taking ~6.5 hours through an unprocessed backlog) would
+        otherwise freeze ryu-manager's entire reactor -- every domain's
+        collect()/detect()/mitigate(), not just this one's -- until it
+        returns."""
+        path = f"{self.capture_dir.rstrip('/')}/{fname}"
         try:
-            result = subprocess.run(
+            result = tpool.execute(
+                subprocess.run,
                 [self.nfdump_bin, "-r", path, "-o", "csv"],
                 capture_output=True, text=True, timeout=30, check=True,
             )

@@ -5,6 +5,8 @@ import re
 import shlex
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from typing import Dict, List, Optional
 
 from eventlet import tpool
@@ -199,7 +201,6 @@ class BroadbandAdapter(DomainAdapter):
         freeradius_detail_dir: str = None,
         accel_cmd_port: int = None,
         freeradius_users_path: str = None,
-        active_scenario_path: str = None,
         logger: Optional[logging.Logger] = None,
     ):
         self._distributed = settings.BNG_DISTRIBUTED_MODE
@@ -217,7 +218,6 @@ class BroadbandAdapter(DomainAdapter):
         self.freeradius_detail_dir = freeradius_detail_dir or settings.BNG_DIST_FREERADIUS_DETAIL_DIR
         self.accel_cmd_port = accel_cmd_port or settings.BNG_DIST_ACCEL_CMD_PORT
         self.freeradius_users_path = freeradius_users_path or settings.BNG_DIST_FREERADIUS_USERS_PATH
-        self.active_scenario_path = active_scenario_path or settings.BNG_DIST_ACTIVE_SCENARIO_PATH
         self.target_ip = settings.BNG_DIST_TARGET_IP
 
         # Passed down from the Ryu app (its own self.logger), same
@@ -355,15 +355,28 @@ class BroadbandAdapter(DomainAdapter):
 
     def _read_active_scenario(self) -> dict:
         """src_ip -> {protocol, dst_port}, from suscriptor's own state
-        file (simulation/bng_subscriber_agent.py) -- see this class's
-        own docstring for why RADIUS accounting alone can't supply
-        protocol/dst_port."""
+        (simulation/bng_subscriber_agent.py) -- see this class's own
+        docstring for why RADIUS accounting alone can't supply
+        protocol/dst_port.
+
+        Plain HTTP GET, not SSH+cat -- this state changes only on
+        attack start/stop, so paying a fresh SSH handshake (~0.5s,
+        confirmed on a real run) on every collect() cycle to read the
+        same unchanged bytes was pure overhead. Not wrapped in
+        tpool.execute() the way this class's SSH calls are -- eventlet's
+        monkey-patching (applied by ryu-manager's own startup, before
+        this module ever imports) already makes plain socket I/O
+        cooperative; the tpool workaround exists specifically because
+        subprocess.run()'s fork/exec/waitpid ISN'T covered by that
+        patching, which doesn't apply here at all."""
+        url = f"http://{settings.BNG_DIST_SUSCRIPTOR_IP}:{settings.BNG_DIST_SUSCRIPTOR_HTTP_PORT}/active_scenario"
         try:
-            result = self._ssh_suscriptor(["cat", self.active_scenario_path])
-            if result.returncode != 0 or not result.stdout.strip():
+            with urllib.request.urlopen(url, timeout=_SSH_TIMEOUT_S) as resp:
+                body = resp.read()
+            if not body.strip():
                 return {}
-            return json.loads(result.stdout)
-        except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+            return json.loads(body)
+        except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
             return {}
 
     def _collect_distributed(self) -> List[TelemetryEvent]:

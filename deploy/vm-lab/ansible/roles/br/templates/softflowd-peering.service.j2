@@ -8,15 +8,25 @@
 # Same flags as webtool/peering_ops.py's Mininet-mode softflowd.popen()
 # call -- see that module's own extensive comment on why each one is
 # there (NetFlow v5 not v9, general=1/maxlife=2 timeouts).
+#
+# Exports to {{ orchestrator_addr }}:9995, NOT 127.0.0.1 -- nfcapd runs
+# on orchestrator now, not here (see roles/orchestrator's own nfcapd
+# unit, and collectors/peering_flow_collector.py's module docstring for
+# the full reasoning: NetFlow export is UDP fire-and-forget, already
+# meant to be pointed at wherever the collector lives, so this is a
+# strict simplification over the old local-nfcapd-plus-SSH design). No
+# Requires=nfcapd.service anymore either -- that unit isn't local to
+# this host, and export is fire-and-forget UDP regardless (a few lost
+# packets while orchestrator's nfcapd is briefly down is an acceptable
+# telemetry gap, not a reason to block softflowd from starting).
 [Unit]
 Description=softflowd -- NetFlow export for Peering domain telemetry (custom, not distro default)
-After=network-online.target nfcapd.service
+After=network-online.target
 Wants=network-online.target
-Requires=nfcapd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/softflowd -d -i {{ peering_external_iface }} -n 127.0.0.1:9995 -v 5 -t general=1 -t maxlife=2
+ExecStart=/usr/sbin/softflowd -d -i {{ peering_external_iface }} -n {{ orchestrator_addr }}:9995 -v 5 -t general=1 -t maxlife=2
 Restart=on-failure
 RestartSec=2
 

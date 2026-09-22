@@ -20,6 +20,66 @@
     version: "{{ tesis_controller_branch }}"
     force: false
 
+# --- nfcapd (Peering domain telemetry -- moved here from roles/br) ---
+# softflowd-peering (on br) exports its NetFlow stream straight to this
+# host now instead of to a local nfcapd on br that collectors/
+# peering_flow_collector.py then had to SSH+nfdump into -- see that
+# module's own docstring for the full reasoning. Reuses the exact same
+# installer roles/br uses (it also installs flow/exabgp, unused here --
+# harmless, and simpler/safer than hand-rolling a nfdump-only subset of
+# an already-idempotent, already-validated script).
+- name: Install flow 0.2.0 + softflowd + nfdump 1.7.4 (nfcapd/nfdump built from source)
+  ansible.builtin.command:
+    cmd: ./deploy/install_bgp_peering.sh --flow-version 0.2.0 --nfdump-version 1.7.4
+    chdir: /opt/Tesis_Controller
+    creates: /usr/local/bin/nfcapd
+  become: true
+
+- name: Deploy nfcapd systemd unit
+  ansible.builtin.template:
+    src: nfcapd.service.j2
+    dest: /etc/systemd/system/nfcapd.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start nfcapd
+  ansible.builtin.systemd:
+    name: nfcapd.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+# --- nfcapd archival: keeps its live capture dir from growing unbounded
+# -- see archive_nfcapd.sh.j2's own comment (moved here along with
+# nfcapd itself) for the full real-run story.
+
+- name: Deploy the nfcapd archival script
+  ansible.builtin.template:
+    src: archive_nfcapd.sh.j2
+    dest: /usr/local/bin/archive_nfcapd.sh
+    mode: "0755"
+  vars:
+    nfcapd_live_dir: /var/cache/nfcapd/r1
+    nfcapd_archive_dir: /var/cache/nfcapd/archive
+    nfcapd_archive_min_age_minutes: 50
+
+- name: Deploy nfcapd-archive systemd service + timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - nfcapd-archive.service
+    - nfcapd-archive.timer
+  notify: reload systemd
+
+- name: Enable and start the nfcapd-archive timer
+  ansible.builtin.systemd:
+    name: nfcapd-archive.timer
+    daemon_reload: true
+    enabled: true
+    state: started
+
 - name: Create venv
   ansible.builtin.command:
     cmd: python3 -m venv /opt/Tesis_Controller/venv

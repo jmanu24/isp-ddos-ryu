@@ -1,0 +1,42 @@
+#!/bin/sh
+# Managed by Ansible (roles/orchestrator). Moved here from roles/br
+# along with nfcapd itself. Run hourly by nfcapd-archive.timer.
+#
+# nfcapd rotates every 2s (nfcapd.service.j2's own -t 2) -- confirmed on
+# a real run (back when nfcapd still ran on br): with nothing ever
+# draining {{ nfcapd_live_dir }}, it grew to 74,821 files over ~41.5
+# hours with no collector running, and once collectors/
+# peering_flow_collector.py finally started polling, it had to work
+# through that entire backlog one nfdump call at a time (~6.5 hours),
+# starving every OTHER domain's own telemetry in the same controller
+# process behind it. This script keeps that directory from ever growing
+# unbounded again, independent of whether a collector happens to be
+# running: anything older than {{ nfcapd_archive_min_age_minutes }}
+# minutes (comfortably past this timer's own hourly interval, so a
+# healthy collector has long since consumed it) gets compressed into
+# one archive per run and removed from the live directory.
+#
+# find+xargs, NOT a shell glob (`nfcapd.2*`) -- confirmed on a real run:
+# a glob matching tens of thousands of files overflows the shell's own
+# argument list ("Argument list too long") for both tar and rm.
+set -eu
+
+LIVE_DIR="{{ nfcapd_live_dir }}"
+ARCHIVE_DIR="{{ nfcapd_archive_dir }}"
+MIN_AGE_MINUTES={{ nfcapd_archive_min_age_minutes }}
+
+mkdir -p "$ARCHIVE_DIR"
+cd "$LIVE_DIR"
+
+tmplist=$(mktemp)
+trap 'rm -f "$tmplist"' EXIT INT TERM
+
+find . -maxdepth 1 -name 'nfcapd.2*' -mmin "+${MIN_AGE_MINUTES}" -print0 > "$tmplist"
+
+if [ ! -s "$tmplist" ]; then
+    exit 0
+fi
+
+ts=$(date +%Y%m%d%H%M%S)
+tar czf "$ARCHIVE_DIR/nfcapd_${ts}.tar.gz" --null -T "$tmplist"
+xargs -0 rm -f < "$tmplist"

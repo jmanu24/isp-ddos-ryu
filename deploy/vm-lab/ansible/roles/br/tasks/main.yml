@@ -61,10 +61,13 @@
     state: started
 
 # --- Distributed-mode FlowSpec pipeline (config/settings.py's
-# PEERING_DISTRIBUTED_MODE) -- flow/softflowd/nfcapd as persistent
-# systemd services, since webtool/peering_ops.py's distributed path no
-# longer spawns them per-topology-start the way Mininet mode does. See
-# that module's own docstring for the full picture.
+# PEERING_DISTRIBUTED_MODE) -- flow/softflowd as persistent systemd
+# services, since webtool/peering_ops.py's distributed path no longer
+# spawns them per-topology-start the way Mininet mode does. See that
+# module's own docstring for the full picture. nfcapd itself now runs
+# on `orchestrator`, not here -- softflowd-peering exports its NetFlow
+# stream straight there (see its own template's comment) instead of to
+# a local nfcapd this process then had to SSH+nfdump into.
 
 - name: Add dummy central_server address to br's own loopback
   # Distributed-mode stand-in for Mininet's central_server (a dummy
@@ -95,11 +98,21 @@
     mode: "0644"
   notify: reload systemd
 
-- name: Deploy nfcapd systemd unit
-  ansible.builtin.template:
-    src: nfcapd.service.j2
-    dest: /etc/systemd/system/nfcapd.service
-    mode: "0644"
+- name: Stop and remove the old local nfcapd unit (moved to orchestrator)
+  # Cleanup for VMs already provisioned before nfcapd moved off br --
+  # ignore_errors covers both "already removed" (a fresh VM that never
+  # had it) and "unit doesn't exist" systemd error text, either way
+  # nothing left to do.
+  ansible.builtin.systemd:
+    name: nfcapd.service
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Remove the old local nfcapd unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/nfcapd.service
+    state: absent
   notify: reload systemd
 
 - name: Deploy softflowd-peering systemd unit
@@ -124,7 +137,7 @@
     state: stopped
   failed_when: false
 
-- name: Enable and start flow/nfcapd/softflowd-peering
+- name: Enable and start flow/softflowd-peering
   ansible.builtin.systemd:
     name: "{{ item }}"
     daemon_reload: true
@@ -132,44 +145,32 @@
     state: started
   loop:
     - flow.service
-    - nfcapd.service
     - softflowd-peering.service
 
-# --- nfcapd archival: keeps nfcapd_live_dir from growing unbounded ---
-# Confirmed on a real run: nfcapd rotating every 2s with nothing ever
-# draining it grew to 74,821 files over ~41.5 hours, and once a
-# collector finally started polling it took ~6.5 hours to work through
-# that backlog one nfdump-over-SSH call at a time, starving every OTHER
-# domain's telemetry in the same controller process behind it. This
-# runs independent of whether collectors/peering_flow_collector.py
-# happens to be running at all.
+# --- nfcapd archival now lives on orchestrator's own role (nfcapd
+# itself moved there -- see this file's own top comment) -- stop/remove
+# whatever's left here from before that move, same cleanup pattern as
+# the nfcapd.service removal above.
 
-- name: Deploy the nfcapd archival script
-  ansible.builtin.template:
-    src: archive_nfcapd.sh.j2
-    dest: /usr/local/bin/archive_nfcapd.sh
-    mode: "0755"
-  vars:
-    nfcapd_live_dir: /var/cache/nfcapd/r1
-    nfcapd_archive_dir: /var/cache/nfcapd/archive
-    nfcapd_archive_min_age_minutes: 50
-
-- name: Deploy nfcapd-archive systemd service + timer
-  ansible.builtin.template:
-    src: "{{ item }}.j2"
-    dest: "/etc/systemd/system/{{ item }}"
-    mode: "0644"
-  loop:
-    - nfcapd-archive.service
-    - nfcapd-archive.timer
-  notify: reload systemd
-
-- name: Enable and start the nfcapd-archive timer
+- name: Stop and remove the old local nfcapd-archive timer/service
   ansible.builtin.systemd:
-    name: nfcapd-archive.timer
-    daemon_reload: true
-    enabled: true
-    state: started
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - nfcapd-archive.timer
+    - nfcapd-archive.service
+  ignore_errors: true
+
+- name: Remove the old local nfcapd-archive unit files + script
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/nfcapd-archive.timer
+    - /etc/systemd/system/nfcapd-archive.service
+    - /usr/local/bin/archive_nfcapd.sh
+  notify: reload systemd
 
 - name: Authorize orchestrator's SSH public key
   # Needed for collectors/peering_flow_collector.py + webtool/

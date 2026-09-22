@@ -34,16 +34,21 @@ above as-is across separate VMs: attach_peering_uplink_to_r1() moves a
 veth into r1's own PID namespace via `ip link set ... netns <pid>`,
 which has no cross-machine equivalent. Instead:
 
-  - `flow` + `softflowd` + `nfcapd` run as persistent systemd services
-    on the separate `br` VM (deploy/vm-lab/ansible/roles/br), installed
-    and started by Ansible -- not spawned per-topology-start. start()
-    only verifies they're active (via SSH); stop() leaves them running.
-  - `exabgp` still runs locally via subprocess.Popen exactly as in
-    Mininet mode, just peering with br's real address
-    (settings.PEERING_DIST_BR_IP) instead of the veth one.
+  - `flow` + `softflowd` run as persistent systemd services on the
+    separate `br` VM (deploy/vm-lab/ansible/roles/br), installed and
+    started by Ansible -- not spawned per-topology-start. start() only
+    verifies they're active (via SSH); stop() leaves them running.
+  - `exabgp` and `nfcapd` run as persistent systemd services on THIS
+    host (deploy/vm-lab/ansible/roles/orchestrator) -- exabgp peers with
+    br's real address (settings.PEERING_DIST_BR_IP) instead of a veth
+    one; nfcapd listens for the NetFlow stream softflowd-peering (on br)
+    exports directly to it, over the real network, instead of to a
+    local nfcapd on br. start() only verifies both are active (locally,
+    no SSH needed for either).
   - collectors/peering_flow_collector.py lists/decodes nfcapd's capture
-    files via SSH to br instead of local os.listdir/subprocess (they're
-    on br's own disk, not this host's).
+    files with plain local os.listdir/subprocess now -- they land on
+    THIS host's own disk, not br's (see that module's own docstring for
+    why this moved off br entirely rather than staying an SSH read).
 
 Mirrors webtool/bng_ops.py's BngLifecycle shape (explicit start()/stop()
 driven by webtool/orchestrator.py, not a menu loop), adapted for four
@@ -264,7 +269,7 @@ class PeeringLifecycle:
     # ------------------------------------------------------------------
 
     def _start_distributed(self) -> None:
-        # flow/softflowd/nfcapd (br) and exabgp (this host) are ALL
+        # flow/softflowd (br) and exabgp/nfcapd (this host) are ALL
         # Ansible-managed systemd services now (deploy/vm-lab/ansible/
         # roles/br and .../orchestrator) -- this only verifies they're
         # active, it never starts/spawns anything. Fail loud here rather
@@ -277,16 +282,24 @@ class PeeringLifecycle:
         # changes between runs, unlike Mininet's veth addresses which
         # only exist once attach_peering_uplink_to_r1() creates them.
         #
+        # nfcapd moved from br to here (orchestrator) -- softflowd-peering
+        # exports its NetFlow stream directly to wherever the collector
+        # runs now, instead of to a local nfcapd on br this process then
+        # had to SSH+nfdump into. See collectors/peering_flow_collector.
+        # py's own module docstring for the full reasoning; this is the
+        # same "point the exporter at the collector" simplification.
+        #
         # softflowd-peering, not plain softflowd -- deploy/vm-lab/ansible/
         # roles/br names it that deliberately, to avoid colliding with
         # Ubuntu's own softflowd apt package's default unit (which it
         # masks rather than configures).
-        for unit in ("flow", "softflowd-peering", "nfcapd"):
+        for unit in ("flow", "softflowd-peering"):
             _ensure_active_on_br(unit)
         _ensure_active_local("exabgp")
+        _ensure_active_local("nfcapd")
 
     def _stop_distributed(self) -> None:
-        # Nothing to do -- flow/softflowd/nfcapd on br and exabgp here
+        # Nothing to do -- flow/softflowd (br) and exabgp/nfcapd (here)
         # are all persistent Ansible-managed systemd services, shared
         # across topology start/stop cycles, not per-session processes
         # this class owns in distributed mode.

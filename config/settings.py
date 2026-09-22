@@ -368,17 +368,24 @@ BNG_DIST_TARGET_IP = "10.55.0.100"
 # same path/protocol simulation/bng_agent.py used.
 BNG_DIST_FIFO_PATH = "/run/bng-agent/cmd"
 
-# suscriptor's active-scenario state file (simulation/
-# bng_subscriber_agent.py's _write_state) -- src_ip -> {protocol,
-# dst_port} for whichever subscribers are currently attacking. Real
-# RADIUS accounting has no L4 visibility at all (a volumetric total,
-# not a flow breakdown), so telemetry/broadband_adapter.py's
-# distributed-mode collect() merges THIS (simulator-known metadata)
-# with FreeRADIUS's real per-session byte/packet counters by IP -- same
-# "the synthetic producer already knows what it's simulating"
-# convention simulation/ul_traffic_simulator.py and the old BNGBlaster-
-# era CSV already used.
-BNG_DIST_ACTIVE_SCENARIO_PATH = "/run/bng-subscribers/active_scenario.json"
+# suscriptor's active-scenario state (simulation/bng_subscriber_agent.
+# py's _write_state, written to /run/bng-subscribers/active_scenario.
+# json server-side) -- src_ip -> {protocol, dst_port} for whichever
+# subscribers are currently attacking. Real RADIUS accounting has no L4
+# visibility at all (a volumetric total, not a flow breakdown), so
+# telemetry/broadband_adapter.py's distributed-mode collect() merges
+# THIS (simulator-known metadata) with FreeRADIUS's real per-session
+# byte/packet counters by IP -- same "the synthetic producer already
+# knows what it's simulating" convention simulation/ul_traffic_
+# simulator.py and the old BNGBlaster-era CSV already used.
+#
+# Read over a plain local HTTP GET (bng_subscriber_agent.py's own
+# _StateHTTPHandler, GET /active_scenario) rather than SSH+cat -- this
+# state changes only on attack start/stop, so a fresh SSH connection
+# (a real fork/exec + handshake, confirmed ~0.5s) on every collect()
+# cycle was pure overhead for reading unchanged bytes almost every
+# time. Must match bng_subscriber_agent.py's own _HTTP_PORT constant.
+BNG_DIST_SUSCRIPTOR_HTTP_PORT = 8765
 
 # FreeRADIUS's own accounting detail log on `bng` -- ONE flat-text
 # record per Access-Accept/Accounting-Start/-Interim-Update/-Stop
