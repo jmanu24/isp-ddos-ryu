@@ -155,10 +155,27 @@ def _rule_priority(n: int) -> int:
 
 
 def _run_ip(args: list) -> None:
+    """Confirmed on a real run: this used to only catch TimeoutExpired/
+    OSError (subprocess.run itself failing to launch) and never checked
+    the actual `ip` command's own exit code -- a non-zero return (e.g.
+    `ip rule add` silently rejected, or racing an interface that isn't
+    up yet) produced no error anywhere, so a missing per-subscriber
+    source-route rule looked identical to a healthy one in every log.
+    That's exactly how the missing `ip rule` for the active broadband
+    attacker went unnoticed (traffic silently routed out suscriptor's
+    MGMT NIC instead of via `bng`, zero FreeRADIUS accounting, zero
+    detection) -- see docs/vlan-backbone.md and this session's own
+    broadband domain-test investigation."""
     try:
-        subprocess.run(["ip", *args], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(["ip", *args], capture_output=True, text=True, timeout=5)
     except (subprocess.TimeoutExpired, OSError) as exc:
         print(f"[SUBSCRIBER] ip {' '.join(args)} failed: {exc}", file=sys.stderr)
+        return
+    if result.returncode != 0:
+        print(
+            f"[SUBSCRIBER] ip {' '.join(args)} exited {result.returncode}: {result.stderr.strip()}",
+            file=sys.stderr,
+        )
 
 
 def _read_iface_ip(iface: str) -> str:
