@@ -9,6 +9,10 @@ for the 16-VM ESXi lab) and generates everything derived from it:
   generated/ansible/inventory.ini       (grouped by role, matches ansible/roles/*)
   generated/govc/vms.csv                (name,template,vcpu,ram_mb,disk_gb --
                                           consumed by ../deploy_govc.sh)
+  generated/hosts                       (/etc/hosts-format, MGMT IP per VM --
+                                          so plain hostnames like `ssh
+                                          labadmin@ent-site-1` resolve
+                                          without depending on inventory.ini)
 
 Re-run this any time topology.yaml changes -- never hand-edit anything
 under generated/, it's all overwritten on each run.
@@ -110,7 +114,28 @@ write_files:
   - path: /etc/netplan/99-lab.yaml
     content: |
 {chr(10).join('      ' + l for l in netplan_lines)}
+  # Stops cloud-init from writing its own /etc/netplan/50-cloud-init.yaml
+  # (dhcp4: true, matched by MAC) on every future boot. Without this,
+  # netplan MERGES that file with 99-lab.yaml above instead of one
+  # overriding the other -- confirmed on a real run: every interface ends
+  # up with BOTH its static IP AND a live DHCP client, which just retries
+  # DHCPDISCOVER forever on any network with no DHCP server (every
+  # network in this lab). Harmless on most links (nothing is listening),
+  # but on br's PEERING uplink that broadcast noise is exactly what
+  # softflowd/nfcapd captures for the Peering domain's own telemetry --
+  # see docs/vlan-backbone.md and this session's own
+  # bgp_dhcp_false_positive investigation for how that surfaced as a
+  # bogus recurring UDP_FLOOD detection.
+  - path: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+    content: |
+      network: {{config: disabled}}
 runcmd:
+  # This boot's own 50-cloud-init.yaml was already written before
+  # write_files/runcmd ever ran (cloud-init's network stage runs earlier
+  # than the config/final stages) -- the write_files entry above only
+  # prevents it on the NEXT boot. Remove it here too so THIS boot is
+  # clean as well, not just future ones.
+  - rm -f /etc/netplan/50-cloud-init.yaml
   - netplan apply
 """
     (vm_dir / "user-data").write_text(user_data)
@@ -230,6 +255,38 @@ def render_ansible_inventory(vms: list, templates: dict, out_dir: Path) -> None:
     ansible_dir = out_dir / "ansible"
     ansible_dir.mkdir(parents=True, exist_ok=True)
     (ansible_dir / "inventory.ini").write_text("\n".join(lines) + "\n")
+
+
+def render_hosts_file(vms: list, out_dir: Path) -> None:
+    """Plain /etc/hosts-format file, one MGMT IP per VM -- same
+    next(...) lookup render_ansible_inventory() uses (first IP-addressed
+    interface -- MGMT is always listed first in topology.yaml, so this
+    never picks a BACKBONE_*/other secondary address instead). Lets any
+    manual `ssh labadmin@<vm-name>` (docs/vlan-backbone.md's testing
+    commands, ad-hoc debugging) resolve without hand-copying IPs out of
+    inventory.ini, on whichever machine this gets appended to (control
+    node, or any lab VM that also needs to reach others by name).
+    peer-router is the one exception worth knowing about: its MGMT
+    address (10.30.0.2) is NOT on the same L2 segment as the other VMs'
+    10.10.0.0/24 -- it's reachable only because the control node already
+    has a route to 10.30.0.0/29 via `br` (same route used by Ansible
+    itself against this host) -- this file only adds NAME resolution,
+    it doesn't grant reachability.
+    """
+    lines = [
+        "# Generado por render_topology.py -- NO editar a mano.",
+        "# Agregar a /etc/hosts (no reemplazar el archivo entero):",
+        "#   sudo tee -a /etc/hosts < deploy/vm-lab/generated/hosts",
+    ]
+    for vm in sorted(vms, key=lambda v: v["name"]):
+        mgmt_ip = next(
+            (i["ip"] for i in vm["interfaces"] if i["ip"] is not None),
+            None,
+        )
+        if mgmt_ip is None:
+            continue
+        lines.append(f"{mgmt_ip}\t{vm['name']}")
+    (out_dir / "hosts").write_text("\n".join(lines) + "\n")
 
 
 def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
@@ -489,12 +546,14 @@ def main() -> None:
     render_ansible_group_vars(topology, OUT_DIR)
     render_ansible_host_vars(topology, OUT_DIR)
     render_govc_csv(vms, OUT_DIR)
+    render_hosts_file(vms, OUT_DIR)
 
     print(f"Generado en {OUT_DIR}:")
     print(f"  - cloud-init/  ({sum(1 for v in vms if templates[v['template']]['os_family'] in ('ubuntu','debian'))} VMs)")
     print(f"  - alpine/      ({sum(1 for v in vms if templates[v['template']]['os_family'] == 'alpine')} VMs)")
     print(f"  - ansible/inventory.ini  ({len(vms)} VMs, {len(set(v['role'] for v in vms))} roles)")
     print(f"  - govc/vms.csv")
+    print(f"  - hosts")
 
 
 if __name__ == "__main__":
