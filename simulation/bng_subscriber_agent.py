@@ -102,7 +102,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_DIR)
-from simulation.bng_ipoe_config import SCENARIOS, BASELINE_SCENARIO, build_scenario  # noqa: E402
+from simulation.bng_ipoe_config import SCENARIOS, SCENARIO_PARAMS, BASELINE_SCENARIO, build_scenario  # noqa: E402
 
 _MAX_SUBSCRIBERS = 8
 _DHCP_RUN_DIR = "/run/bng-subscribers"
@@ -418,24 +418,46 @@ class SubscriberPool:
         for n in range(1, count + 1):
             self.subscribers[n].session_up()
 
-    def _ensure_down(self, keep: int) -> None:
-        for n in range(keep + 1, _MAX_SUBSCRIBERS + 1):
-            self.subscribers[n].session_down()
-
     def launch(self, scenario: str) -> None:
+        """Switches subscribers 1..subscriber_count to this scenario's
+        attack traffic; every OTHER subscriber up to _MAX_SUBSCRIBERS
+        keeps (or gets put back on) the baseline's own low-rate traffic
+        -- it is NEVER torn down for a scenario switch.
+
+        Used to tear down/rebuild subscribers past subscriber_count via
+        _ensure_down() (session_down(): real DHCPRELEASE + a fresh
+        DHCPDISCOVER on the next _ensure_up()). Confirmed on a real run
+        this is a genuine BNG-session-consistency hazard, not just
+        churn: scaling the pool down then back up under load raced
+        accel-ppp's own session bookkeeping on `bng`, leaving a subscriber
+        the Python side believed was up (a real kernel IP on its
+        macvlan) with NO matching accel-ppp session server-side --
+        traffic sourced from it generated zero accounting and was
+        invisible to detection, indistinguishable from the attack
+        simply not existing. Per the user's own explicit direction:
+        attacking should never kill sessions -- 8 stay up throughout,
+        one (or a few) of them just sends more traffic. This also
+        matches a real botnet's actual shape better than a pool that
+        shrinks to just the attacker(s) every time one exists.
+        """
         scn = build_scenario(scenario)
+        baseline = SCENARIO_PARAMS[BASELINE_SCENARIO]
         count = scn["subscriber_count"]
         with self._lock:
-            self._ensure_up(count)
-            self._ensure_down(count)
+            self._ensure_up(_MAX_SUBSCRIBERS)
             for n in range(1, count + 1):
                 self.subscribers[n].start_attack(scn["protocol"], scn["dst_port"], scn["pps"], self.target_ip)
+            for n in range(count + 1, _MAX_SUBSCRIBERS + 1):
+                self.subscribers[n].start_attack(
+                    baseline["protocol"], baseline["dst_port"], baseline["pps"], self.target_ip
+                )
             self.current_scenario = scenario
             self._active_protocol = scn["protocol"]
             self._active_dst_port = scn["dst_port"]
             self._active_count = count
             self._write_state()
-        print(f"[SUBSCRIBER] scenario={scenario} subscribers={count} started")
+        print(f"[SUBSCRIBER] scenario={scenario} subscribers={count} started "
+              f"(remaining {_MAX_SUBSCRIBERS - count} kept on baseline traffic)")
 
     def stop_attack_only(self) -> None:
         with self._lock:

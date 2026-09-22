@@ -14,10 +14,18 @@ used, just against the real detection thresholds:
   LOW_SLOW_MOBILE_MAX_PPS=8.0 (ceiling), LOW_SLOW_MOBILE_MIN_SOURCES=5
 
 subscriber_count picks how many of the macvlan-backed subscriber
-sessions (roles/suscriptor's setup_macvlans.sh.j2, macvlan1..N)
-participate -- 1 for the single-attacker scenarios, 8 (>=
-DIST_MIN_SOURCES) for the distributed/low-and-slow ones, uniform rate
-per subscriber so DDoSDetectionEngine's entropy check reads high.
+sessions (roles/suscriptor's setup_macvlans.sh.j2, macvlan1..N) get
+switched to THIS scenario's attack traffic -- 1 for the single-attacker
+scenarios, 8 (>= DIST_MIN_SOURCES) for the distributed/low-and-slow
+ones, uniform rate per subscriber so DDoSDetectionEngine's entropy
+check reads high. All _MAX_SUBSCRIBERS sessions stay up regardless of
+this number -- simulation/bng_subscriber_agent.py's SubscriberPool.
+launch() puts whichever ones aren't attacking on the baseline scenario's
+own low-rate traffic instead of tearing them down (confirmed on a real
+run: tearing sessions down and rebuilding them raced accel-ppp's own
+session bookkeeping on `bng`, leaving some subscribers as silent
+"ghosts" -- a real kernel IP with no matching BNG-side session, so
+real traffic from them generated zero accounting).
 
 pps is a generic target rate, None meaning "as fast as possible"
 (a flood) -- bng_subscriber_agent.py translates this into whatever the
