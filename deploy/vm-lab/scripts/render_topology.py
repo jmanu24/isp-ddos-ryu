@@ -450,11 +450,18 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # a separate Ansible task (not done here -- credentials don't
         # belong in topology.yaml).
         "tesis_controller_repo_url": "https://github.com/jmanu24/isp-ddos-ryu.git",
-        # feature/peering-distributed-vm, not feature/bgp-peering-domain --
-        # it's branched FROM that one (strict superset: everything it had,
-        # plus PEERING_DISTRIBUTED_MODE support webtool/peering_ops.py
-        # needs to run flow/exabgp against real VMs instead of Mininet).
-        "tesis_controller_branch": "feature/peering-distributed-vm",
+        # integrate/vm-lab-distributed-detection, not feature/peering-
+        # distributed-vm -- confirmed on a real run this stale default
+        # kept silently reverting orchestrator's and suscriptor's own
+        # /opt/Tesis_Controller checkouts back to the old pre-merge
+        # branch on every Ansible re-run (the git task's `force: false`
+        # still updates to this VERSION's tip, it just doesn't discard
+        # local edits), undoing manual `git checkout` fixes applied
+        # directly on those VMs earlier in the same session. This branch
+        # is the actual merge of that old branch's real-VM distributed-
+        # mode work with deploy/esxi-vm-lab's VLAN_BACKBONE/topology
+        # work -- see this repo's own git log for the merge commit.
+        "tesis_controller_branch": "integrate/vm-lab-distributed-detection",
     }
 
     group_vars_dir = out_dir / "ansible" / "group_vars"
