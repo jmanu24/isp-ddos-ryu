@@ -23,6 +23,12 @@ class TelemetryEvent:
                 derived ones leave it 0, since LearningSwitch's L3
                 forwarding match doesn't carry in_port)
     flags     : optional protocol flags, e.g. {"SYN": True}
+    imsi/amf_ue_ngap_id : subscriber identity for this event's src_ip,
+                when the producing domain has one (mobile domain only,
+                resolved from Open5GS's own AMF/SMF session state — see
+                oran_bridge/ue_telemetry_api.py). Empty/None for every
+                other domain, and for a mobile UE whose session hasn't
+                been correlated yet.
     """
     domain: str
     device_id: str
@@ -34,6 +40,8 @@ class TelemetryEvent:
     bps: float
     in_port: int = 0
     flags: dict = field(default_factory=dict)
+    imsi: str = ""
+    amf_ue_ngap_id: int = 0
     timestamp: float = field(
         default_factory=lambda: datetime.now().timestamp()
     )

@@ -422,3 +422,38 @@ BNG_DIST_ACCEL_CMD_PORT = 2000
 # BNGBlaster's own periodic re-DHCP taught -- session-stop/terminate
 # alone gets silently undone) keeps failing auth until unblocked.
 BNG_DIST_FREERADIUS_USERS_PATH = "/etc/freeradius/3.0/users"
+
+# ---------------------------------------------------------------------
+# Mobile domain -- real srsRAN Project + Open5GS VM lab pipeline.
+# REPLACES the earlier ns-3/mmwave-LENA-oran simulated-scenario design
+# (static config/ue_ip_map.csv + simulation/parse_xapp_kpm_log.py's KPM
+# CSV, both built against fake ns-3 IMSI/IP assignment -- see
+# oran_bridge/amf_ue_ngap_id.py's docstring for the full history of why
+# that design doesn't apply to a real Open5GS core at all: real
+# amf_ue_ngap_id values are small sequential integers, not this fork's
+# 5-ASCII-digit IMSI encoding).
+#
+# Neither Open5GS nor FlexRIC expose a live query API for the one thing
+# this domain actually needs (which UE, identified by subscriber, is
+# sending how much traffic to which destination) -- that state only
+# ever exists in each NF's own process memory, surfaced only via
+# Open5GS's own AMF/SMF docker logs (identity: amf_ue_ngap_id -> imsi ->
+# ip) and the kernel's own conntrack table on core5g (volumetric flow
+# data: all UE uplink traffic is decapsulated onto core5g's single
+# ogstun interface). Rather than have THIS process (orchestrator, the
+# Ryu controller) tail either of those directly, oran_bridge/
+# ue_telemetry_api.py runs as its own persistent local service ON
+# core5g, joins the two there, and exposes one plain read-only JSON API
+# -- mobile_adapter.py's collect() is then a single HTTP GET per cycle,
+# the exact same shape as telemetry/broadband_adapter.py's own
+# _read_active_scenario() call to suscriptor's /active_scenario.
+# ---------------------------------------------------------------------
+MOBILE_DIST_CORE5G_IP = "10.10.0.5"
+MOBILE_DIST_TELEMETRY_API_PORT = 8766
+MOBILE_DIST_TELEMETRY_API_URL = (
+    f"http://{MOBILE_DIST_CORE5G_IP}:{MOBILE_DIST_TELEMETRY_API_PORT}/telemetry"
+)
+# Same posture as broadband_adapter.py's own SSH timeout for its HTTP
+# call to suscriptor -- a slow/unreachable core5g shouldn't stall the
+# whole pipeline cycle (COLLECT_INTERVAL, nominally 0.5s).
+MOBILE_DIST_TELEMETRY_API_TIMEOUT_S = 2

@@ -1,74 +1,53 @@
-import csv
 import json
 import logging
-import os
+import urllib.error
+import urllib.request
 from typing import Dict, List, Optional
 
+import config.settings as settings
 from core.log_format import log_line
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
-from oran_bridge.ue_ip_map import DEFAULT_PATH as DEFAULT_UE_IP_MAP_PATH, load_ue_ip_map
 
-DEFAULT_KPM_CSV_PATH = "/tmp/ddos_xapp_events.csv"
 DEFAULT_RC_COMMAND_QUEUE_PATH = "/tmp/oran_rc_commands.jsonl"
-
-# simulation/parse_xapp_kpm_log.py writes these exact columns (see that
-# file's record_to_csv_row) -- "rnti" there is actually the decoded IMSI,
-# not a real RNTI (see oran_bridge/amf_ue_ngap_id.py).
-#
-# dst_ip: this is UPLINK telemetry, so the UE is the traffic's SOURCE,
-# not its destination -- a UE generating attack-volume UL traffic is
-# flooding some external target, not itself. RAN-level KPM has no
-# flow-level visibility to know that target's real IP (it's an
-# aggregate per-UE throughput/PRB measurement, not a 5-tuple), so a
-# real E2/KPM-fed producer can only ever leave this blank ("*", the
-# same "no single known destination" convention DetectionResult/
-# MitigationAction already use for DDOS_DISTRIBUTED). A synthetic
-# producer that already knows what it's simulating (e.g.
-# simulation/ul_traffic_simulator.py) can supply a real one instead.
-_CSV_COLUMNS = ["timestamp", "imsi", "gnb_id", "dst_ip", "ul_thr_mbps", "prb_usage_pct", "sinr_db", "state"]
-
-# dst_port/protocol: same RAN-has-no-L4-visibility limitation as dst_ip
-# above -- a real KPM-fed producer (simulation/parse_xapp_kpm_log.py)
-# never has these and keeps writing the _CSV_COLUMNS row above unchanged.
-# Only a synthetic producer that already knows what attack it's
-# simulating (ul_traffic_simulator.py) can supply them, as two optional
-# trailing columns -- kept separate from _CSV_COLUMNS, rather than
-# replacing it, so the real pipeline's rows don't suddenly fail the
-# column-count check in collect() below.
-_CSV_COLUMNS_EXT = _CSV_COLUMNS + ["dst_port", "protocol"]
-
-# Falls back to this when a row uses the legacy (no dst_port/protocol)
-# format -- matches DetectionResult/MitigationAction's existing "unknown
-# protocol, no port" convention for telemetry with no L4 visibility.
-_DEFAULT_PROTOCOL = "UDP"
-
-# Average packet size assumed when converting a KPM throughput reading
-# (bytes/sec) into an approximate packets/sec figure -- DDoSDetectionEngine
-# thresholds purely on pps (config/settings.py), never bps, and KPM has no
-# native packet-count field to derive a real one from. Matches this
-# proposal's own test traffic (test_oran_e2_logging.cc's OnOff
-# PacketSize=512) -- an approximation, not a measured value.
-ASSUMED_AVG_PACKET_SIZE_BYTES = 512
 
 
 class MobileNetworkAdapter(DomainAdapter):
     """
-    Telemetry + mitigation adapter for the Mobile Network Domain
-    (O-RAN Near-RT RIC, real E2/KPM pipeline -- see simulation/
-    run_oran_e2_test.sh and parse_xapp_kpm_log.py for how the real
-    pipeline up to this adapter's input CSV is wired and validated).
+    Telemetry + mitigation adapter for the Mobile Network Domain (real
+    srsRAN Project + Open5GS VM lab -- see docs/ran-testing.md).
 
-    Telemetry (collect()): tails the CSV that
-    simulation/parse_xapp_kpm_log.py produces from xapp_kpm_moni's real
-    output (one row per UE per KPM indication: imsi, ul_thr_mbps,
-    prb_usage_pct, ...). Each row becomes a TelemetryEvent with
-    domain="mobile" and dst_ip resolved from the static IMSI->IP table
-    (oran_bridge/ue_ip_map.py) -- the RAN side only knows a UE by its
-    IMSI; it has no visibility into which external IP(s) are actually
-    flooding it, so src_ip is left as "*" (the same convention
-    DetectionResult/MitigationAction already use for DDOS_DISTRIBUTED,
-    where no single attacker IP is known either).
+    REPLACES the earlier ns-3/mmwave-LENA-oran simulated-scenario design
+    (static config/ue_ip_map.csv + a KPM-CSV tail, both built against
+    that fork's fake IMSI/IP assignment -- see git history for
+    oran_bridge/amf_ue_ngap_id.py and oran_bridge/ue_ip_map.py, kept
+    around only as historical reference for a scenario this lab no
+    longer runs). That design produced synthetic numbers with no real
+    backing at all; this one is built entirely on real, live testbed
+    state.
+
+    Telemetry (collect()): a single HTTP GET per cycle to
+    oran_bridge/ue_telemetry_api.py -- a small persistent service that
+    runs on core5g itself (NOT on this process), since that's the one
+    place both halves of what this domain needs actually live:
+
+      - identity (amf_ue_ngap_id -> imsi -> ip), from Open5GS's own
+        AMF/SMF docker logs -- there is no live query API in Open5GS
+        for this (WebUI's own REST API is subscriber CRUD against
+        MongoDB only, confirmed by reading its server/routes/db.js --
+        no live session state ever reaches Mongo).
+      - real per-(UE ip, destination) volumetric flow data, from the
+        kernel's own conntrack table on core5g -- every UE's uplink
+        traffic is decapsulated onto core5g's single ogstun interface,
+        so this is a real, complete, OpenFlow/enterprise-domain-
+        independent view of exactly what each UE is sending where.
+
+    This adapter itself never tails a log or opens an SSH connection --
+    it only ever does a plain, cheap HTTP GET, the same shape
+    telemetry/broadband_adapter.py's own _read_active_scenario() already
+    uses for suscriptor's /active_scenario endpoint. ue_telemetry_api.py
+    already joins the two halves above server-side, so each row it
+    returns maps directly onto one TelemetryEvent.
 
     Mitigation (apply_mitigation()): the actual E2SM-RC CONTROL message
     that would tell the Near-RT RIC to throttle/deny RAN resources to a
@@ -85,36 +64,17 @@ class MobileNetworkAdapter(DomainAdapter):
 
     def __init__(
         self,
-        kpm_csv_path: str = DEFAULT_KPM_CSV_PATH,
+        telemetry_api_url: str = None,
         rc_command_queue_path: str = DEFAULT_RC_COMMAND_QUEUE_PATH,
-        ue_ip_map: Optional[Dict[int, str]] = None,
         logger: Optional[logging.Logger] = None,
     ):
-        self.kpm_csv_path = kpm_csv_path
+        self.telemetry_api_url = telemetry_api_url or settings.MOBILE_DIST_TELEMETRY_API_URL
         self.rc_command_queue_path = rc_command_queue_path
         # Passed down from the Ryu app (its own self.logger) so every log
         # line across domains shares the same name/format -- defaults to
         # a plain logging.Logger so this stays usable standalone (tests,
         # no Ryu runtime).
         self._logger = logger or logging.getLogger(__name__)
-        # An explicitly-passed map (tests, callers with their own source
-        # of truth) is used as-is, never reloaded. Otherwise this
-        # adapter watches config/ue_ip_map.csv's mtime and reloads it on
-        # change -- a long-running ryu-manager process previously cached
-        # whatever was on disk at __init__ time forever, silently
-        # ignoring a fresher mapping written by a telemetry source
-        # started later (confirmed: a live run kept resolving IMSIs
-        # against a stale map from hours earlier, dropping every event
-        # for an IMSI the old map didn't even have).
-        self._ue_ip_map_path = None if ue_ip_map is not None else DEFAULT_UE_IP_MAP_PATH
-        self._ue_ip_map_mtime: Optional[float] = None
-        self._ue_ip_map = ue_ip_map if ue_ip_map is not None else {}
-        if self._ue_ip_map_path is not None:
-            self._refresh_ue_ip_map()
-        # Byte offset up to which kpm_csv_path has already been read --
-        # collect() tails new rows only, same pattern as
-        # parse_xapp_kpm_log.py's own follow().
-        self._csv_read_offset = 0
 
         # Tracks the last-logged connection state so collect() logs a
         # "telemetry source connected/lost" event only on the transition
@@ -123,158 +83,99 @@ class MobileNetworkAdapter(DomainAdapter):
         # stats-poll cycle.
         self._was_connected = False
 
-    def _refresh_ue_ip_map(self) -> None:
-        if self._ue_ip_map_path is None:
-            return
-        try:
-            mtime = os.path.getmtime(self._ue_ip_map_path)
-        except OSError:
-            return
-        if mtime != self._ue_ip_map_mtime:
-            self._ue_ip_map = load_ue_ip_map(self._ue_ip_map_path)
-            self._ue_ip_map_mtime = mtime
-            self._logger.info(log_line(
-                "mobile", "TELEMETRY", "UE_MAP_RELOADED",
-                f"path={self._ue_ip_map_path} entries={len(self._ue_ip_map)}",
-            ))
+        # ip -> imsi, refreshed from every collect() response -- the
+        # only place apply_mitigation() can resolve a src_ip back to a
+        # subscriber, since MitigationAction only ever carries the IP
+        # DDoSDetectionEngine classified, never the imsi itself.
+        self._imsi_by_ip: Dict[str, str] = {}
 
     def is_connected(self) -> bool:
-        return os.path.exists(self.kpm_csv_path)
+        try:
+            with urllib.request.urlopen(
+                self.telemetry_api_url, timeout=settings.MOBILE_DIST_TELEMETRY_API_TIMEOUT_S
+            ):
+                return True
+        except (urllib.error.URLError, OSError, TimeoutError):
+            return False
 
     def collect(self) -> List[TelemetryEvent]:
-        self._refresh_ue_ip_map()
+        # Plain HTTP GET, not SSH -- eventlet's own monkey-patching
+        # (applied by ryu-manager's startup, before this module ever
+        # imports) already makes plain socket/urllib I/O cooperative, so
+        # this doesn't need broadband_adapter.py's tpool.execute()
+        # workaround (that exists specifically for subprocess.run()'s
+        # fork/exec/waitpid, which isn't covered by that patching -- see
+        # that module's own _ssh() docstring). Same reasoning as
+        # broadband_adapter.py's own _read_active_scenario().
+        try:
+            with urllib.request.urlopen(
+                self.telemetry_api_url, timeout=settings.MOBILE_DIST_TELEMETRY_API_TIMEOUT_S
+            ) as resp:
+                body = json.loads(resp.read())
+            connected = True
+        except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError):
+            connected = False
+            body = None
 
-        connected = os.path.exists(self.kpm_csv_path)
         if connected and not self._was_connected:
             self._logger.info(log_line(
-                "mobile", "TELEMETRY", "SOURCE_CONNECTED", f"path={self.kpm_csv_path}"
+                "mobile", "TELEMETRY", "SOURCE_CONNECTED", f"url={self.telemetry_api_url}"
             ))
         elif not connected and self._was_connected:
             self._logger.warning(log_line(
-                "mobile", "TELEMETRY", "SOURCE_LOST", f"path={self.kpm_csv_path}"
+                "mobile", "TELEMETRY", "SOURCE_LOST", f"url={self.telemetry_api_url}"
             ))
         self._was_connected = connected
 
         if not connected:
             return []
 
-        # One event per IMSI per collect() call, not per CSV row: each
-        # row is a RATE sample (ul_thr_mbps), not a byte count to sum,
-        # and the source can write faster than this gets polled (e.g.
-        # ul_traffic_simulator.py's --tick vs. config/settings.py's
-        # COLLECT_INTERVAL). MultidomainCorrelator sums every event in
-        # a dst_ip bucket assuming they're concurrent flows -- handing
-        # it N accumulated rate samples for one UE would inflate that
-        # UE's apparent pps by ~N regardless of real traffic, including
-        # for perfectly benign UEs. Keeping only the most recent sample
-        # per IMSI is the correct fix at the source, not a downstream
-        # threshold tweak.
-        # Detect truncation/rotation -- e.g. ul_traffic_simulator.py
-        # truncates this same path on every (re)start. A long-running
-        # ryu-manager process's _csv_read_offset would otherwise still
-        # point past the freshly-truncated file's new (much smaller) size;
-        # seeking past EOF doesn't error, it just silently reads nothing
-        # until the file grows back past that stale offset -- meaning a
-        # fresh attack right after a simulator restart could go completely
-        # undetected for as long as that takes. Falling back to 0 picks
-        # the new file's contents back up from the start instead.
-        try:
-            if os.path.getsize(self.kpm_csv_path) < self._csv_read_offset:
-                self._logger.info(log_line(
-                    "mobile", "TELEMETRY", "SOURCE_TRUNCATED",
-                    f"path={self.kpm_csv_path} resuming_from=0",
-                ))
-                self._csv_read_offset = 0
-        except OSError:
-            pass
-
-        latest_by_imsi: dict = {}
-
-        with open(self.kpm_csv_path, "r", newline="") as f:
-            f.seek(self._csv_read_offset)
-            reader = csv.reader(f)
-            for row in reader:
-                # >= (not ==) _CSV_COLUMNS_EXT -- ul_traffic_simulator.py's
-                # --extended-kpms appends connected_ticks/pkt_interval_ms
-                # trailing columns this adapter has no TelemetryEvent field
-                # for. zip() with the shorter _CSV_COLUMNS_EXT just stops
-                # consuming there and ignores the extras, instead of the
-                # row failing this length check entirely and getting
-                # silently dropped (which would have meant turning on
-                # --extended-kpms breaks mobile telemetry collection).
-                if len(row) >= len(_CSV_COLUMNS_EXT):
-                    fields = dict(zip(_CSV_COLUMNS_EXT, row))
-                elif len(row) == len(_CSV_COLUMNS):
-                    fields = dict(zip(_CSV_COLUMNS, row))
-                else:
-                    continue
-                imsi_raw = fields.get("imsi")
-                if imsi_raw is not None:
-                    latest_by_imsi[imsi_raw] = fields
-            self._csv_read_offset = f.tell()
-
         events: List[TelemetryEvent] = []
-        for fields in latest_by_imsi.values():
-            event = self._row_to_event(fields)
+        for row in body.get("flows", []):
+            event = self._row_to_event(row)
             if event is not None:
                 events.append(event)
         return events
 
-    def _row_to_event(self, fields: dict) -> Optional[TelemetryEvent]:
-        try:
-            imsi = int(float(fields["imsi"]))
-            gnb_id = fields["gnb_id"]
-            ul_thr_mbps = float(fields["ul_thr_mbps"])
-        except (KeyError, ValueError):
+    def _row_to_event(self, row: dict) -> Optional[TelemetryEvent]:
+        src_ip = row.get("src_ip")
+        dst_ip = row.get("dst_ip")
+        if not src_ip or not dst_ip:
             return None
 
-        src_ip = self._ue_ip_map.get(imsi)
-        if src_ip is None:
-            # No static mapping for this IMSI yet -- config/ue_ip_map.csv
-            # needs a row for it (see oran_bridge/ue_ip_map.py). Silently
-            # dropping rather than raising: a partially-populated map
-            # during incremental testbed setup shouldn't take down the
-            # whole adapter.
-            return None
-
-        # "*" (no single known target) unless the producer supplied a
-        # real one -- see _CSV_COLUMNS' dst_ip comment above.
-        dst_ip = fields.get("dst_ip") or "*"
-
-        # dst_port/protocol: only present in the extended (synthetic)
-        # format -- see _CSV_COLUMNS_EXT above. Falls back to the same
-        # "no L4 visibility" convention the real KPM pipeline has always
-        # used otherwise.
-        try:
-            dst_port = int(float(fields["dst_port"])) if "dst_port" in fields else 0
-        except (KeyError, ValueError):
-            dst_port = 0
-        protocol = fields.get("protocol") or _DEFAULT_PROTOCOL
-
-        bps = (ul_thr_mbps * 1e6) / 8.0
-        pps = bps / ASSUMED_AVG_PACKET_SIZE_BYTES
+        imsi = row.get("imsi") or ""
+        amf_ue_ngap_id = row.get("amf_ue_ngap_id") or 0
+        if imsi:
+            # Refreshed on every sighting -- apply_mitigation() reads
+            # this later, potentially several cycles after the UE that
+            # triggered a detection last appeared here.
+            self._imsi_by_ip[src_ip] = imsi
 
         return TelemetryEvent(
             domain=self.domain_name,
-            device_id=gnb_id,
+            # No real gNB/cell id is joined in yet (ue_telemetry_api.py
+            # doesn't currently pull it from KPM) -- imsi/amf_ue_ngap_id
+            # already identify the UE precisely enough for detection and
+            # mitigation, so device_id is left blank rather than faked.
+            device_id="",
             src_ip=src_ip,
             dst_ip=dst_ip,
-            dst_port=dst_port,
-            protocol=protocol,
-            pps=pps,
-            bps=bps,
+            dst_port=row.get("dst_port", 0),
+            protocol=row.get("protocol", "IP"),
+            pps=row.get("pps", 0.0),
+            bps=row.get("bps", 0.0),
+            imsi=imsi,
+            amf_ue_ngap_id=amf_ue_ngap_id,
         )
 
     def apply_mitigation(self, action: MitigationAction) -> bool:
-        self._refresh_ue_ip_map()
-        # The attacking UE is action.src_ip now (UL traffic's real
-        # source), not action.dst_ip (the external target it was
-        # flooding) -- see _row_to_event's src_ip/dst_ip comment.
-        imsi = self._imsi_for_ip(action.src_ip)
+        # The attacking UE is action.src_ip (the real source this domain
+        # reported it under in collect() above).
+        imsi = self._imsi_by_ip.get(action.src_ip)
         if imsi is None:
             self._logger.warning(log_line(
                 "mobile", "MITIGATION", "IMSI_UNRESOLVED",
-                f"src_ip={action.src_ip} (ue_ip_map.csv may be out of date for this run)",
+                f"src_ip={action.src_ip} (no recent telemetry row resolved this UE's imsi)",
             ))
             return False
 
@@ -295,9 +196,3 @@ class MobileNetworkAdapter(DomainAdapter):
         # would just be noise. Real E2SM-RC delivery to the Near-RT RIC
         # is not yet implemented -- see this adapter's docstring.
         return True
-
-    def _imsi_for_ip(self, ip: str) -> Optional[int]:
-        for imsi, mapped_ip in self._ue_ip_map.items():
-            if mapped_ip == ip:
-                return imsi
-        return None
