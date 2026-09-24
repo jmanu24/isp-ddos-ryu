@@ -61,6 +61,31 @@ _BNG_SESSION_SUBNETS = [
     ipaddress.ip_network(f"10.61.{vid}.0/24") for vid in range(1, _BNG_MAX_VLAN + 1)
 ]
 
+# Distributed-VM data-plane ranges that cross the shared PE OpenFlow
+# bridge but belong to another detector. The PE sees mobile and fixed
+# traffic after NAT (10.91.0.2 / 10.92.0.2), while peering keeps the
+# external source (10.30.0.2). Treating those transit addresses as
+# enterprise made one physical packet appear twice in correlation and
+# allowed enterprise mitigation to race the owning domain.
+_DISTRIBUTED_NON_ENTERPRISE_SUBNETS = (
+    ipaddress.ip_network("10.45.0.0/16"),  # Open5GS PDU pool
+    ipaddress.ip_network("10.20.0.0/24"),  # fixed BNG access sessions
+    ipaddress.ip_network("10.30.0.0/24"),  # external peering segment
+    ipaddress.ip_network("10.91.0.0/30"),  # mobile backbone
+    ipaddress.ip_network("10.92.0.0/30"),  # fixed backbone
+    ipaddress.ip_network("10.93.0.0/30"),  # peering backbone
+)
+
+
+def _is_distributed_non_enterprise_source(ip: Optional[str]) -> bool:
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in _DISTRIBUTED_NON_ENTERPRISE_SUBNETS)
+
 
 def _is_bng_source(ip: Optional[str]) -> bool:
     if not ip:
@@ -75,7 +100,11 @@ def _is_bng_source(ip: Optional[str]) -> bool:
 def _is_simulated_domain_source(ip: Optional[str]) -> bool:
     """Union of every other domain's simulated-traffic address space that
     happens to also transit this domain's real OpenFlow switches."""
-    return _is_mobile_ue_source(ip) or _is_bng_source(ip)
+    return (
+        _is_mobile_ue_source(ip)
+        or _is_bng_source(ip)
+        or _is_distributed_non_enterprise_source(ip)
+    )
 
 
 def _is_simulated_domain_flow(src_ip: Optional[str], dst_ip: Optional[str]) -> bool:
