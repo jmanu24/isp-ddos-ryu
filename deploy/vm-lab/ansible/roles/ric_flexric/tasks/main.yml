@@ -238,11 +238,65 @@
     dest: /usr/local/etc/flexric/ric.conf
     mode: "0644"
 
-- name: Note about starting the near-RT RIC (no systemd service here either)
-  ansible.builtin.debug:
-    msg: >-
-      Same as ran_srsran, this role has no systemd service -- start
-      manually: cd /opt/flexric/build/examples/ric && sudo
-      ./nearRT-RIC -c /usr/local/etc/flexric/ric.conf. The E2 Agent
-      (the gNB) connects OUT to the RIC as an SCTP client, so start
-      this BEFORE ran_srsran's gnb, not after.
+- name: Deploy the near-RT RIC systemd unit
+  ansible.builtin.template:
+    src: near-rt-ric.service.j2
+    dest: /etc/systemd/system/near-rt-ric.service
+    mode: "0644"
+  become: true
+  register: near_rt_ric_unit
+
+- name: Restart the near-RT RIC after its unit changes
+  ansible.builtin.systemd:
+    name: near-rt-ric.service
+    daemon_reload: true
+    state: restarted
+  become: true
+  when: near_rt_ric_unit.changed
+
+- name: Enable and start the near-RT RIC
+  ansible.builtin.systemd:
+    name: near-rt-ric.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  become: true
+
+- name: Create the KPM telemetry exporter directory
+  ansible.builtin.file:
+    path: /opt/isp-ddos-ryu
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Deploy the RIC-local KPM telemetry exporter
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../oran_bridge/kpm_telemetry_api.py"
+    dest: /opt/isp-ddos-ryu/kpm_telemetry_api.py
+    mode: "0755"
+  become: true
+  register: kpm_telemetry_script
+
+- name: Deploy the KPM telemetry exporter systemd unit
+  ansible.builtin.template:
+    src: kpm-telemetry-api.service.j2
+    dest: /etc/systemd/system/kpm-telemetry-api.service
+    mode: "0644"
+  become: true
+  register: kpm_telemetry_unit
+
+- name: Restart the KPM telemetry exporter after a deployment change
+  ansible.builtin.systemd:
+    name: kpm-telemetry-api.service
+    daemon_reload: true
+    state: restarted
+  become: true
+  when: kpm_telemetry_script.changed or kpm_telemetry_unit.changed
+
+- name: Enable and start the KPM telemetry exporter
+  ansible.builtin.systemd:
+    name: kpm-telemetry-api.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  become: true

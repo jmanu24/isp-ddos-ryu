@@ -38,16 +38,27 @@ just "GET a URL and build TelemetryEvents", nothing more.
 
 import ipaddress
 import json
+import os
 import re
 import subprocess
 from typing import Dict
 import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LISTEN_PORT = 8766
 CONTAINER_NAME = "open5gs_5gc"
 UE_POOL = ipaddress.ip_network("10.45.0.0/16")
+KPM_API_URL = os.environ.get("KPM_API_URL", "http://10.10.0.4:8767/kpm")
+KPM_API_TIMEOUT_S = 2.0
+KPM_POLL_INTERVAL_S = 1.0
+KPM_SAMPLE_TTL_S = 10.0
+# The lab config uses a 22-bit gNB id. An NR Cell Identity has 36 bits,
+# leaving 14 low bits for the cell-local id (DU sector in this topology).
+GNB_ID_BIT_LENGTH = 22
+NCI_BIT_LENGTH = 36
 
 CONNTRACK_POLL_INTERVAL_S = 1.0
 LOG_POLL_INTERVAL_S = 0.5
@@ -61,8 +72,14 @@ PENDING_NGAP_ID_TTL_S = 15.0
 # staleness conventions (see broadband_adapter.py's own TTL comments).
 SESSION_TTL_S = 3600.0
 
-_AMF_NGAP_ID_RE = re.compile(r"RAN_UE_NGAP_ID\[(\d+)\]\s+AMF_UE_NGAP_ID\[(\d+)\]")
+_AMF_NGAP_ID_RE = re.compile(
+    r"RAN_UE_NGAP_ID\[(\d+)\]\s+AMF_UE_NGAP_ID\[(\d+)\]"
+    r".*?CellID\[0x([0-9a-fA-F]+)\]"
+)
 _SMF_IPV4_RE = re.compile(r"UE SUPI\[imsi-(\d{15,16})\].*?IPv4\[(\d+\.\d+\.\d+\.\d+)\]")
+_SESSION_REMOVED_RE = re.compile(
+    r"Removed Session: UE IMSI:\[imsi-(\d{15,16})\].*?IPv4:\[(\d+\.\d+\.\d+\.\d+)\]"
+)
 
 _PROTO_NAMES = {"icmp": "ICMP", "tcp": "TCP", "udp": "UDP"}
 
@@ -74,8 +91,11 @@ class _State:
         self.sessions = {}
         # (src_ip,dst_ip,proto,dport) -> {"packets","bytes","pps","bps","updated_at"}
         self.flows = {}
+        # amf_ue_ngap_id -> latest identity-bound CU-CP KPM sample.
+        self.kpm_by_amf = {}
         self.log_connected = False
         self.conntrack_connected = False
+        self.kpm_connected = False
 
 
 state = _State()
@@ -97,7 +117,7 @@ def _log_tail_loop():
     import collections
 
     offset = 0
-    pending = collections.deque()  # (amf_ue_ngap_id, seen_at)
+    pending = collections.deque()  # (amf_ue_ngap_id, nr_cell_id, seen_at)
     log_path = None
 
     while True:
@@ -125,7 +145,7 @@ def _log_tail_loop():
 
             now = time.time()
             # Drop stale pending entries from the front.
-            while pending and (now - pending[0][1]) > PENDING_NGAP_ID_TTL_S:
+            while pending and (now - pending[0][2]) > PENDING_NGAP_ID_TTL_S:
                 pending.popleft()
 
             for line in new_bytes.splitlines():
@@ -137,20 +157,34 @@ def _log_tail_loop():
                 except (json.JSONDecodeError, AttributeError):
                     text = line
 
+                removed = _SESSION_REMOVED_RE.search(text)
+                if removed:
+                    removed_imsi, removed_ip = removed.group(1), removed.group(2)
+                    with state.lock:
+                        session = state.sessions.get(removed_ip)
+                        if session and session["imsi"] == removed_imsi:
+                            del state.sessions[removed_ip]
+                    continue
+
                 m = _AMF_NGAP_ID_RE.search(text)
                 if m:
                     amf_ngap_id = int(m.group(2))
-                    pending.append((amf_ngap_id, now))
+                    nr_cell_id = int(m.group(3), 16)
+                    pending.append((amf_ngap_id, nr_cell_id, now))
                     continue
 
                 m = _SMF_IPV4_RE.search(text)
                 if m and pending:
                     imsi, ip = m.group(1), m.group(2)
-                    amf_ngap_id, _ = pending.popleft()
+                    amf_ngap_id, nr_cell_id, _ = pending.popleft()
+                    cell_bits = NCI_BIT_LENGTH - GNB_ID_BIT_LENGTH
                     with state.lock:
                         state.sessions[ip] = {
                             "imsi": imsi,
                             "amf_ue_ngap_id": amf_ngap_id,
+                            "nr_cell_id": nr_cell_id,
+                            "gnb_id": nr_cell_id >> cell_bits,
+                            "cell_local_id": nr_cell_id & ((1 << cell_bits) - 1),
                             "updated_at": now,
                         }
 
@@ -169,7 +203,34 @@ def _log_tail_loop():
 
 
 # ---------------------------------------------------------------------
-# 2. conntrack poller (local -- netlink query, not a log)
+# 2. Identity-bound KPM poller (RIC-local exporter, plain HTTP)
+# ---------------------------------------------------------------------
+
+def _kpm_poll_loop():
+    while True:
+        try:
+            with urllib.request.urlopen(KPM_API_URL, timeout=KPM_API_TIMEOUT_S) as response:
+                payload = json.loads(response.read())
+            now = time.time()
+            samples = {}
+            for sample in payload.get("samples", []):
+                amf_id = sample.get("amf_ue_ngap_id")
+                updated_at = float(sample.get("updated_at", 0))
+                if amf_id is None or now - updated_at > KPM_SAMPLE_TTL_S:
+                    continue
+                samples[int(amf_id)] = sample
+            with state.lock:
+                state.kpm_by_amf = samples
+                state.kpm_connected = bool(payload.get("connected"))
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError):
+            with state.lock:
+                state.kpm_by_amf = {}
+                state.kpm_connected = False
+        time.sleep(KPM_POLL_INTERVAL_S)
+
+
+# ---------------------------------------------------------------------
+# 3. conntrack poller (local -- netlink query, not a log)
 # ---------------------------------------------------------------------
 
 _CT_LINE_RE = re.compile(
@@ -300,7 +361,7 @@ def _conntrack_poll_loop():
 
 
 # ---------------------------------------------------------------------
-# 3. HTTP API
+# 4. HTTP API
 # ---------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -316,22 +377,46 @@ class Handler(BaseHTTPRequestHandler):
         with state.lock:
             sessions = dict(state.sessions)
             flows = list(state.flows.values())
+            kpm_by_amf = dict(state.kpm_by_amf)
             log_connected = state.log_connected
             conntrack_connected = state.conntrack_connected
+            kpm_connected = state.kpm_connected
 
         rows = []
         for f in flows:
             sess = sessions.get(f["src_ip"])
+            kpm = kpm_by_amf.get(sess["amf_ue_ngap_id"]) if sess else None
             rows.append({
                 **f,
                 "imsi": sess["imsi"] if sess else None,
                 "amf_ue_ngap_id": sess["amf_ue_ngap_id"] if sess else None,
+                "nr_cell_id": sess["nr_cell_id"] if sess else None,
+                "gnb_id": sess["gnb_id"] if sess else None,
+                "cell_local_id": sess["cell_local_id"] if sess else None,
+                "kpm": kpm["metrics"] if kpm else {},
+                "kpm_updated_at": kpm["updated_at"] if kpm else None,
+            })
+
+        session_rows = []
+        for ip, sess in sessions.items():
+            kpm = kpm_by_amf.get(sess["amf_ue_ngap_id"])
+            session_rows.append({
+                "ip": ip,
+                "imsi": sess["imsi"],
+                "amf_ue_ngap_id": sess["amf_ue_ngap_id"],
+                "nr_cell_id": sess["nr_cell_id"],
+                "gnb_id": sess["gnb_id"],
+                "cell_local_id": sess["cell_local_id"],
+                "kpm": kpm["metrics"] if kpm else {},
+                "kpm_updated_at": kpm["updated_at"] if kpm else None,
             })
 
         body = json.dumps({
             "flows": rows,
+            "sessions": session_rows,
             "log_connected": log_connected,
             "conntrack_connected": conntrack_connected,
+            "kpm_connected": kpm_connected,
             "session_count": len(sessions),
         }).encode("utf-8")
 
@@ -345,6 +430,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     threading.Thread(target=_log_tail_loop, daemon=True).start()
     threading.Thread(target=_conntrack_poll_loop, daemon=True).start()
+    threading.Thread(target=_kpm_poll_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
     server.serve_forever()
 

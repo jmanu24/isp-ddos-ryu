@@ -153,11 +153,9 @@ class MobileNetworkAdapter(DomainAdapter):
 
         return TelemetryEvent(
             domain=self.domain_name,
-            # No real gNB/cell id is joined in yet (ue_telemetry_api.py
-            # doesn't currently pull it from KPM) -- imsi/amf_ue_ngap_id
-            # already identify the UE precisely enough for detection and
-            # mitigation, so device_id is left blank rather than faked.
-            device_id="",
+            # ue_telemetry_api derives the real 22-bit gNB id from the
+            # NR Cell Identity Open5GS reports for this exact NGAP UE.
+            device_id=str(row.get("gnb_id") or ""),
             src_ip=src_ip,
             dst_ip=dst_ip,
             dst_port=row.get("dst_port", 0),
@@ -166,6 +164,7 @@ class MobileNetworkAdapter(DomainAdapter):
             bps=row.get("bps", 0.0),
             imsi=imsi,
             amf_ue_ngap_id=amf_ue_ngap_id,
+            kpm=row.get("kpm") or {},
         )
 
     def apply_mitigation(self, action: MitigationAction) -> bool:

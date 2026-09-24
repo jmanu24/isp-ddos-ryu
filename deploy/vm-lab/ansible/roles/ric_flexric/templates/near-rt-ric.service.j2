@@ -1,0 +1,14 @@
+[Unit]
+Description=FlexRIC near-RT RIC
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/flexric/build/examples/ric
+ExecStart=/opt/flexric/build/examples/ric/nearRT-RIC -c /usr/local/etc/flexric/ric.conf
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Open5GS UE identity and conntrack telemetry API
+After=network-online.target open5gs-5gc.service
+Wants=network-online.target
+Requires=open5gs-5gc.service
+
+[Service]
+Type=simple
+Environment=KPM_API_URL=http://{{ ric_addr }}:8767/kpm
+ExecStart=/usr/bin/python3 /opt/isp-ddos-ryu/ue_telemetry_api.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

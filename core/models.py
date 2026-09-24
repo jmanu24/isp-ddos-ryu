@@ -29,6 +29,8 @@ class TelemetryEvent:
                 oran_bridge/ue_telemetry_api.py). Empty/None for every
                 other domain, and for a mobile UE whose session hasn't
                 been correlated yet.
+    kpm       : latest identity-bound E2SM-KPM measurements for this UE.
+                Empty for other domains or while the RIC source is stale.
     """
     domain: str
     device_id: str
@@ -42,6 +44,7 @@ class TelemetryEvent:
     flags: dict = field(default_factory=dict)
     imsi: str = ""
     amf_ue_ngap_id: int = 0
+    kpm: dict = field(default_factory=dict)
     timestamp: float = field(
         default_factory=lambda: datetime.now().timestamp()
     )

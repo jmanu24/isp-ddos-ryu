@@ -1,0 +1,20 @@
+[Unit]
+Description=FlexRIC identity-bound E2SM-KPM telemetry API
+After=network-online.target near-rt-ric.service
+Wants=network-online.target
+Requires=near-rt-ric.service
+
+[Service]
+Type=simple
+Environment=RIC_ADDR={{ ric_addr }}
+ExecStart=/usr/bin/python3 /opt/isp-ddos-ryu/kpm_telemetry_api.py
+Restart=always
+RestartSec=2
+# FlexRIC's subscription-delete path can crash nearRT-RIC when this
+# example xApp exits normally. Existing lab playbooks therefore stop it
+# with SIGKILL; keep the same proven behavior under systemd.
+KillSignal=SIGKILL
+TimeoutStopSec=2
+
+[Install]
+WantedBy=multi-user.target

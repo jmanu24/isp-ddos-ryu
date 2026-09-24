@@ -230,3 +230,43 @@
     daemon_reload: "{{ backbone_route_unit.changed }}"
     enabled: true
     state: started
+
+- name: Install conntrack for real UE flow accounting
+  ansible.builtin.apt:
+    name: conntrack
+    state: present
+    update_cache: true
+
+- name: Create the mobile telemetry sidecar directory
+  ansible.builtin.file:
+    path: /opt/isp-ddos-ryu
+    state: directory
+    mode: "0755"
+
+- name: Deploy the Open5GS and conntrack telemetry sidecar
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../oran_bridge/ue_telemetry_api.py"
+    dest: /opt/isp-ddos-ryu/ue_telemetry_api.py
+    mode: "0755"
+  register: ue_telemetry_script
+
+- name: Deploy the mobile telemetry sidecar systemd unit
+  ansible.builtin.template:
+    src: ue-telemetry-api.service.j2
+    dest: /etc/systemd/system/ue-telemetry-api.service
+    mode: "0644"
+  register: ue_telemetry_unit
+
+- name: Restart the mobile telemetry sidecar after a deployment change
+  ansible.builtin.systemd:
+    name: ue-telemetry-api.service
+    daemon_reload: true
+    state: restarted
+  when: ue_telemetry_script.changed or ue_telemetry_unit.changed
+
+- name: Enable and start the mobile telemetry sidecar
+  ansible.builtin.systemd:
+    name: ue-telemetry-api.service
+    daemon_reload: true
+    enabled: true
+    state: started
