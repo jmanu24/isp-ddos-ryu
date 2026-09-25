@@ -6,10 +6,26 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from run_vm_lab_trials import TrialResult, extract_result, parse_ts, write_outputs
+from run_vm_lab_trials import Lab, TrialResult, extract_result, parse_ts, write_outputs
 
 
 class TrialParsingTests(unittest.TestCase):
+    def test_broadband_fifo_commands_preserve_space_and_newline(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.commands = []
+
+            def shell(self, host, command, **kwargs):
+                self.commands.append((host, command))
+                return ""
+
+        lab = CapturingLab()
+        lab.launch("broadband", "ICMP_FLOOD", "test", 20)
+        lab.stop("broadband")
+        self.assertIn("printf '%s\\n' 'attack icmp_flood' > /run/bng-agent/cmd", lab.commands[0][1])
+        self.assertEqual(lab.commands[1], ("suscriptor", "printf '%s\\n' baseline > /run/bng-agent/cmd"))
+
     def test_correlates_all_domain_action_formats(self):
         cases = (
             ("enterprise", "enterprise", "10.70.0.11", "BLOCK flow source=10.70.0.11", "UNBLOCK flow source=10.70.0.11"),

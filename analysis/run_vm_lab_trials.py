@@ -174,7 +174,7 @@ class Lab:
             # The marker is written by the same shell that writes the FIFO.
             command = (
                 f"date +%s.%N > {marker}; "
-                f"printf attack\\040{scenario}\\n > /run/bng-agent/cmd"
+                f"printf '%s\\n' 'attack {scenario}' > /run/bng-agent/cmd"
             )
             self.shell(host, command)
         else:
@@ -193,7 +193,7 @@ class Lab:
     def stop(self, domain: str) -> None:
         host = HOST_BY_DOMAIN[domain]
         if domain == "broadband":
-            self.shell(host, "printf baseline\\n > /run/bng-agent/cmd", check=False)
+            self.shell(host, "printf '%s\\n' baseline > /run/bng-agent/cmd", check=False)
         else:
             self.shell(host, "pkill -f '[h]ping3' || true", check=False)
 

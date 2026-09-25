@@ -367,10 +367,13 @@ class Subscriber:
         self._attack_params = (protocol, dst_port, pps, target_ip)
         if protocol == "ICMP":
             # ping is genuine kernel-stack traffic, not hping3's raw
-            # injection -- already confirmed working over these
-            # interfaces throughout this project's debugging, -I bind
-            # and all.
-            argv = ["ping", "-q", "-i", f"{_ping_interval(pps):.4f}", "-I", self.iface, target_ip]
+            # injection. Bind to the subscriber's source IP, not its
+            # interface name: `ping -I macvlanN` treats an off-link
+            # target as directly connected and ARPs for the target
+            # itself, bypassing the source-policy route through the
+            # BNG. Binding the IP lets the kernel select table 100+N
+            # and its real gateway, just like the TCP/UDP generators.
+            argv = ["ping", "-q", "-i", f"{_ping_interval(pps):.4f}", "-I", self.ip, target_ip]
         else:
             # TCP_SYN/UDP: bng_flood.py -- real kernel sockets bound to
             # this subscriber's own IP. See its own module docstring for
