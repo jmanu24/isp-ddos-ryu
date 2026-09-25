@@ -10,3 +10,4 @@ __pycache__/
 deploy/vm-lab/*.iso
 deploy/vm-lab/lab_control_pubkey.pub
 simulation/output/
+analysis/results/

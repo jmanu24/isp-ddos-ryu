@@ -45,7 +45,7 @@ _TS_FMT = "%Y-%m-%d %H:%M:%S"
 # ── ryu-manager lines ────────────────────────────────────────────────────────
 
 _RYU_LINE_RE = re.compile(
-    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[.,]\d{3,6})?)"
     r"\s+\S+"              # level
     r"\s+FlowStatsIDS"
     r"\s+\[(?P<domain>[^\]]+)\]"
@@ -72,7 +72,7 @@ _DST_RE     = re.compile(r"destination=([^:]+):(\d+)/(\S+)")
 # ── webtool lines ─────────────────────────────────────────────────────────────
 
 _WEBTOOL_LINE_RE = re.compile(
-    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[.,]\d{3,6})?)"
     r"\s+\S+"              # level
     r"\s+\[webtool\]"
     r"\s+(?P<event_type>\w+):"
@@ -89,7 +89,9 @@ _ATTACK_START_RE = re.compile(
 
 
 def _ts(s: str) -> datetime:
-    return datetime.strptime(s, _TS_FMT)
+    normalized = s.replace(",", ".")
+    fmt = _TS_FMT + (".%f" if "." in normalized else "")
+    return datetime.strptime(normalized, fmt)
 
 
 def _parse_action_msg(msg: str) -> Optional[dict]:

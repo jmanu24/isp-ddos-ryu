@@ -21,7 +21,7 @@ import threading
 # a no-op and every self.logger.* call below would keep printing without a
 # timestamp.
 logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     level=logging.INFO,
     force=True,
