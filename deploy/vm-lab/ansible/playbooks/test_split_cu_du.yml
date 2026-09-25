@@ -116,6 +116,7 @@
             DU's own RAN-network address, NOT ran's)
       ansible.builtin.shell: >-
         rm -f /tmp/ue_direct.log &&
+        ulimit -s 1024 &&
         setsid nohup srsue /etc/srsran/ue_direct_zmq_split_du.conf
         > /tmp/ue_stdout.log 2>&1 < /dev/null &
       changed_when: true

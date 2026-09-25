@@ -64,6 +64,22 @@ class TrialParsingTests(unittest.TestCase):
 
         CapturingLab().wait_for_baseline(("peering",))
 
+    def test_startup_healthcheck_dry_run_is_non_mutating(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.healthchecks = 0
+
+            def healthcheck(self):
+                self.healthchecks += 1
+
+            def shell(self, *args, **kwargs):
+                self.fail("dry-run startup healthcheck must not run recovery commands")
+
+        lab = CapturingLab()
+        lab.startup_healthcheck()
+        self.assertEqual(lab.healthchecks, 1)
+
     def test_correlates_all_domain_action_formats(self):
         cases = (
             ("enterprise", "enterprise", "10.70.0.11", "BLOCK flow source=10.70.0.11", "UNBLOCK flow source=10.70.0.11"),

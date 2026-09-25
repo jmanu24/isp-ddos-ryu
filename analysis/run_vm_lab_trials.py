@@ -20,6 +20,7 @@ import csv
 import json
 import random
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -122,6 +123,53 @@ class Lab:
         argv += ["-m", "shell", "-a", command]
         return self._run(argv, timeout=timeout, check=check)
 
+    def playbook(self, path: str, *, limit: str, skip_tags: str = "",
+                 timeout: int = 300) -> str:
+        argv = ["ansible-playbook", "-i", str(self.inventory), path, "--limit", limit]
+        if skip_tags:
+            argv += ["--skip-tags", skip_tags]
+        return self._run(argv, timeout=timeout)
+
+    def healthy(self, host: str, command: str) -> bool:
+        try:
+            self.shell(host, command)
+            return True
+        except (LabError, subprocess.TimeoutExpired):
+            return False
+
+    def ensure_vm_reachable(self, host: str, vm_name: str) -> None:
+        """Recover an unreachable VM through the lab's configured govc path."""
+        for _ in range(3):
+            if self.healthy(host, "true"):
+                return
+            time.sleep(3)
+
+        env_candidates = (
+            self.repo / "deploy/vm-lab/.govc.env",
+            Path.home() / "isp-ddos-ryu/deploy/vm-lab/.govc.env",
+        )
+        env_file = next((path for path in env_candidates if path.is_file()), None)
+        if env_file is None:
+            raise LabError(f"{host} is unreachable and .govc.env was not found")
+
+        env_q = shlex.quote(str(env_file))
+        vm_q = shlex.quote(vm_name)
+        command = (
+            f"set -a; . {env_q}; set +a; "
+            f"state=$(govc vm.info {vm_q} | awk '/Power state:/ {{print $3}}'); "
+            f"if [ \"$state\" = poweredOff ]; then govc vm.power -on {vm_q}; "
+            f"elif [ \"$state\" != poweredOn ]; then exit 2; fi"
+        )
+        self._run(["bash", "-lc", command], timeout=90)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            if self.healthy(host, "true"):
+                return
+            time.sleep(5)
+        raise LabError(
+            f"{host} remains unreachable; VM {vm_name} is powered on and was not force-restarted"
+        )
+
     def log_size(self) -> int:
         if self.dry_run:
             return 0
@@ -220,6 +268,95 @@ class Lab:
             expected = 3 if host == "orchestrator" else (2 if host == "bng" else 1)
             if len(active) < expected:
                 raise LabError(f"health check failed on {host}: {out.strip()}")
+
+    def startup_healthcheck(self) -> None:
+        """Validate every domain and repair only the parts that are unhealthy."""
+        if self.dry_run:
+            self.healthcheck()
+            return
+
+        print("\n=== startup healthcheck: VM availability ===", flush=True)
+        for host in (
+            "orchestrator", "victim", "ent-site-1", "pe", "bng", "suscriptor",
+            "ran", "du", "ue", "br", "peer-router",
+        ):
+            self.ensure_vm_reachable(host, host)
+
+        print("\n=== startup healthcheck: shared services ===", flush=True)
+        if not self.healthy("orchestrator", "systemctl is-active ryu-manager nfcapd exabgp"):
+            self.shell("orchestrator", "systemctl restart nfcapd exabgp ryu-manager", timeout=90)
+        if not self.healthy("victim", f"ping -c 2 -W 2 {TARGET_IP}"):
+            raise LabError("victim is not reachable at 10.55.0.100")
+
+        print("=== startup healthcheck: enterprise ===", flush=True)
+        enterprise_ok = self.healthy("ent-site-1", f"ping -c 2 -W 2 {TARGET_IP}")
+        if not enterprise_ok:
+            self.playbook("deploy/vm-lab/ansible/site.yml", limit="pe,ent-site-1", timeout=300)
+            self.shell("orchestrator", "systemctl restart ryu-manager", timeout=90)
+            time.sleep(5)
+            if not self.healthy("ent-site-1", f"ping -c 3 -W 3 {TARGET_IP}"):
+                raise LabError("enterprise recovery failed: ent-site-1 cannot reach victim")
+
+        print("=== startup healthcheck: broadband ===", flush=True)
+        broadband_services = (
+            self.healthy("bng", "systemctl is-active accel-pppd freeradius")
+            and self.healthy("suscriptor", "systemctl is-active bng-subscriber-agent")
+        )
+        broadband_sessions = broadband_services and self.broadband_session_count() == 8
+        if not broadband_sessions:
+            self.shell("bng", "systemctl restart freeradius accel-pppd", timeout=90)
+            self.shell("suscriptor", "systemctl restart bng-subscriber-agent", timeout=90)
+            self.wait_for_baseline(("broadband",), timeout=150)
+
+        print("=== startup healthcheck: mobile ===", flush=True)
+        mobile_check = (
+            "pgrep -f '^srsue ' >/dev/null && "
+            "ip netns exec ue1 test -d /sys/class/net/tun_srsue && "
+            f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"
+        )
+        mobile_ok = (
+            self.healthy("ran", "pgrep -f '^srscu -c' >/dev/null")
+            and self.healthy("du", "pgrep -f '^srsdu -c' >/dev/null && grep -qE '\\s38472\\s' /proc/net/sctp/assocs")
+            and self.healthy("ue", mobile_check)
+        )
+        if not mobile_ok:
+            last_error = ""
+            for attempt in range(1, 4):
+                print(f"mobile recovery attempt {attempt}/3", flush=True)
+                try:
+                    self.playbook(
+                        "deploy/vm-lab/ansible/playbooks/test_split_cu_du.yml",
+                        limit="ran,du,ue", skip_tags="kpm,correlate", timeout=360,
+                    )
+                except (LabError, subprocess.TimeoutExpired) as exc:
+                    last_error = str(exc)
+                if self.healthy("ue", mobile_check):
+                    break
+            else:
+                raise LabError(
+                    "mobile recovery failed after 3 CU/DU/UE attempts: " + last_error
+                )
+
+        print("=== startup healthcheck: peering ===", flush=True)
+        peering_check = (
+            "systemctl is-active bird && "
+            "birdc show protocols | grep -qE 'br[[:space:]]+BGP.*Established' && "
+            f"ping -c 2 -W 2 {TARGET_IP}"
+        )
+        peering_ok = (
+            self.healthy("br", "systemctl is-active softflowd-peering")
+            and self.healthy("peer-router", peering_check)
+        )
+        if not peering_ok:
+            self.shell("br", "systemctl restart softflowd-peering", timeout=90)
+            self.shell("peer-router", "systemctl restart bird", timeout=90)
+            self.shell("orchestrator", "systemctl restart nfcapd exabgp ryu-manager", timeout=90)
+            time.sleep(5)
+            if not self.healthy("peer-router", peering_check):
+                raise LabError("peering recovery failed: BGP is not established or victim is unreachable")
+
+        self.healthcheck()
+        print("=== startup healthcheck: all domains healthy ===\n", flush=True)
 
     def broadband_session_count(self) -> int:
         out = self.shell("bng", "accel-cmd -p 2000 show sessions")
@@ -449,7 +586,7 @@ def main() -> int:
     lab = Lab(repo, inventory, args.dry_run)
     rng = random.Random(args.seed)
 
-    lab.healthcheck()
+    lab.startup_healthcheck()
     lab.cleanup()
     lab.wait_for_baseline(args.domains)
 
