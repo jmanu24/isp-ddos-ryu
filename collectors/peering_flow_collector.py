@@ -224,28 +224,14 @@ class PeeringFlowCollector:
         """Runs entirely inside a tpool worker thread -- see
         _decode_file()'s own comment for why both halves need to.
 
-        -A srcip,dstip,proto,dstport -- confirmed on a real run: a flood
-        tool that varies its source port per packet (hping3 --flood
-        does, by default -- no --keep) makes softflowd/nfcapd treat
-        every packet as its OWN distinct flow (5-tuple includes src
-        port), not one flow -- measured 158,013 individual flow records
-        in a single 2s capture file during one real test, 11-15MB each,
-        nfdump itself (before any Python-side parsing) taking ~4s
-        CPU-bound to decode ONE such file. That 4s is squarely inside
-        this method's own tpool.execute() now (see _decode_file()), so
-        it no longer freezes the reactor -- but it's still 4s of real
-        added latency per file, and still real GIL-contending CPU work
-        in a worker thread. This aggregation flag makes nfdump itself
-        (C code, not this project's Python) collapse those 158,013
-        records into the ONE that actually matters for detection (same
-        source/destination/protocol/port, pps/bps summed) BEFORE they
-        ever reach this process at all -- confirmed 0.08s to decode the
-        same file this way, ~50x faster, and detection/engine.py's own
-        pps-threshold classification only ever needed the aggregate
-        rate per (src, dst, protocol) anyway, never the per-packet
-        source-port detail this flag discards."""
+        Do not aggregate here. nfdump 1.7 clears the `flg` column when
+        `-A srcip,dstip,proto,dstport` is used (observed `......S.` in the
+        raw record and `........` after aggregation). That silently turns a
+        bare SYN into generic TCP and prevents SYN_FLOOD classification.
+        The statistical runner uses hping3 --keep so TCP and UDP each stay
+        in one 5-tuple and remain cheap to decode without losing flags."""
         result = subprocess.run(
-            [self.nfdump_bin, "-r", path, "-A", "srcip,dstip,proto,dstport", "-o", "csv"],
+            [self.nfdump_bin, "-r", path, "-o", "csv"],
             capture_output=True, text=True, timeout=30, check=True,
         )
         return self._parse_csv(result.stdout)

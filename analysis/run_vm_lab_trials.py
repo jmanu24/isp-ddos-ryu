@@ -147,9 +147,13 @@ class Lab:
                        duration: int) -> str:
         marker = self.marker_path(run_id, domain)
         if vector in ("UDP_FLOOD", "MULTIDOMAIN_FLOOD"):
-            args = f"--udp -p 53 -i u1000 {TARGET_IP}"
+            args = f"--udp --keep -p 53 -i u1000 {TARGET_IP}"
         elif vector == "TCP_SYN_FLOOD":
-            args = f"-S -p 443 -i u1000 {TARGET_IP}"
+            # Keep one source port so softflowd tracks one flow instead
+            # of one flow per packet. This preserves the aggregate rate
+            # and avoids delaying NetFlow export behind thousands of
+            # short-lived records in the Peering domain.
+            args = f"-S --keep -p 443 -i u1000 {TARGET_IP}"
         elif vector == "ICMP_FLOOD":
             args = f"--icmp -i u1000 {TARGET_IP}"
         else:
@@ -204,6 +208,7 @@ class Lab:
     def healthcheck(self) -> None:
         checks = (
             ("orchestrator", "systemctl is-active ryu-manager nfcapd exabgp"),
+            ("br", "systemctl is-active softflowd-peering"),
             ("bng", "systemctl is-active accel-pppd freeradius"),
             ("suscriptor", "systemctl is-active bng-subscriber-agent"),
         )
@@ -220,8 +225,10 @@ class Lab:
         out = self.shell("bng", "accel-cmd -p 2000 show sessions")
         return len(re.findall(r"(?m)^\s*ipoe\d+\s+\|.*\|\s+active\s+\|", out))
 
-    def wait_for_baseline(self, timeout: int = 120) -> None:
+    def wait_for_baseline(self, domains=DOMAINS, timeout: int = 120) -> None:
         if self.dry_run:
+            return
+        if "broadband" not in domains:
             return
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -444,7 +451,7 @@ def main() -> int:
 
     lab.healthcheck()
     lab.cleanup()
-    lab.wait_for_baseline()
+    lab.wait_for_baseline(args.domains)
 
     for iteration in range(1, args.iterations + 1):
         jobs: list[tuple[str, tuple[str, ...]]] = []
@@ -467,7 +474,7 @@ def main() -> int:
             print(f"\n=== iteration={iteration} vector={vector} domains={','.join(domains)} ===", flush=True)
             lab.healthcheck()
             lab.cleanup()
-            lab.wait_for_baseline()
+            lab.wait_for_baseline(domains)
             rows = run_trial(lab, iteration, vector, domains, args.attack_duration,
                              args.event_timeout, args.poll)
             append_checkpoint(checkpoint, rows)
@@ -480,7 +487,7 @@ def main() -> int:
             time.sleep(args.cooldown)
 
     lab.cleanup()
-    lab.wait_for_baseline()
+    lab.wait_for_baseline(args.domains)
     write_outputs(out_dir, previous)
     print(f"\nCompleted. Results: {out_dir / 'trials_table.csv'}")
     return 0

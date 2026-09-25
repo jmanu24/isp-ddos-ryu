@@ -5,9 +5,10 @@
 # configure, to avoid two competing softflowd instances both trying to
 # capture the same interface with different flags.
 #
-# Same flags as webtool/peering_ops.py's Mininet-mode softflowd.popen()
-# call -- see that module's own extensive comment on why each one is
-# there (NetFlow v5 not v9, general=1/maxlife=2 timeouts).
+# Export every protocol promptly. softflowd has protocol-specific
+# defaults (TCP 3600s, UDP/ICMP 300s) and a 60s export interval, so
+# general=1/maxlife=2 alone does not make short statistical trials
+# observable in time.
 #
 # Exports to {{ orchestrator_addr }}:9995, NOT 127.0.0.1 -- nfcapd runs
 # on orchestrator now, not here (see roles/orchestrator's own nfcapd
@@ -26,7 +27,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/softflowd -d -i {{ peering_external_iface }} -n {{ orchestrator_addr }}:9995 -v 5 -t general=1 -t maxlife=2
+ExecStart=/usr/sbin/softflowd -d -i {{ peering_external_iface }} -n {{ orchestrator_addr }}:9995 -v 5 -t tcp=1 -t tcp.rst=1 -t tcp.fin=1 -t udp=1 -t icmp=1 -t general=1 -t maxlife=2 -t expint=1
 Restart=on-failure
 RestartSec=2
 

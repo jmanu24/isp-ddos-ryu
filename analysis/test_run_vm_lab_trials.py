@@ -26,6 +26,44 @@ class TrialParsingTests(unittest.TestCase):
         self.assertIn("printf '%s\\n' 'attack icmp_flood' > /run/bng-agent/cmd", lab.commands[0][1])
         self.assertEqual(lab.commands[1], ("suscriptor", "printf '%s\\n' baseline > /run/bng-agent/cmd"))
 
+    def test_peering_syn_uses_one_softflowd_flow(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.command = ""
+
+            def shell(self, host, command, **kwargs):
+                self.command = command
+                return ""
+
+        lab = CapturingLab()
+        lab.launch("peering", "TCP_SYN_FLOOD", "test", 20)
+        self.assertIn("hping3 -S --keep -p 443", lab.command)
+
+    def test_peering_udp_uses_one_softflowd_flow(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.command = ""
+
+            def shell(self, host, command, **kwargs):
+                self.command = command
+                return ""
+
+        lab = CapturingLab()
+        lab.launch("peering", "UDP_FLOOD", "test", 20)
+        self.assertIn("hping3 --udp --keep -p 53", lab.command)
+
+    def test_non_broadband_baseline_does_not_query_bng(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+
+            def broadband_session_count(self):
+                self.fail("peering baseline must not depend on broadband")
+
+        CapturingLab().wait_for_baseline(("peering",))
+
     def test_correlates_all_domain_action_formats(self):
         cases = (
             ("enterprise", "enterprise", "10.70.0.11", "BLOCK flow source=10.70.0.11", "UNBLOCK flow source=10.70.0.11"),
