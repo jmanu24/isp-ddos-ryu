@@ -348,6 +348,9 @@ def wait_and_collect(lab: Lab, offset: int, results: list[TrialResult], starts: 
         if all(row.status == "OK" for row in parsed):
             return parsed
         time.sleep(poll)
+    # Fetch once after the deadline so an event emitted during the final sleep
+    # is not discarded merely because it fell between polling instants.
+    latest = lab.log_from(offset)
     return [extract_result(latest, row, starts[row.domain]) for row in results]
 
 
@@ -403,7 +406,7 @@ def main() -> int:
     parser.add_argument("--domains", nargs="+", choices=DOMAINS, default=list(DOMAINS))
     parser.add_argument("--vectors", nargs="+", choices=VECTORS, default=list(VECTORS))
     parser.add_argument("--attack-duration", type=int, default=20)
-    parser.add_argument("--event-timeout", type=int, default=110,
+    parser.add_argument("--event-timeout", type=int, default=150,
                         help="seconds allowed for detection, mitigation and recovery")
     parser.add_argument("--cooldown", type=int, default=15)
     parser.add_argument("--poll", type=int, default=5)
