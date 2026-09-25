@@ -6,10 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from run_vm_lab_trials import Lab, TrialResult, extract_result, parse_ts, write_outputs
+from run_vm_lab_trials import DOMAINS, Lab, TrialResult, extract_result, parse_ts, write_outputs
 
 
 class TrialParsingTests(unittest.TestCase):
+    def test_active_domains_exclude_mobile(self):
+        self.assertEqual(DOMAINS, ("enterprise", "broadband", "peering"))
+
     def test_broadband_fifo_commands_preserve_space_and_newline(self):
         class CapturingLab(Lab):
             def __init__(self):

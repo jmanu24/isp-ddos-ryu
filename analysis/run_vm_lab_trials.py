@@ -31,20 +31,23 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
-DOMAINS = ("enterprise", "broadband", "mobile", "peering")
+DOMAINS = ("enterprise", "broadband", "peering")
+# Mobile is intentionally excluded from statistical trials until the
+# CU/DU/UE attach path is stable enough to recover deterministically.
+# DOMAINS = ("enterprise", "broadband", "mobile", "peering")
 VECTORS = ("TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "MULTIDOMAIN_FLOOD")
 TARGET_IP = "10.55.0.100"
 
 HOST_BY_DOMAIN = {
     "enterprise": "ent-site-1",
     "broadband": "suscriptor",
-    "mobile": "ue",
+    # "mobile": "ue",
     "peering": "peer-router",
 }
 
 SOURCE_HINT = {
     "enterprise": "10.70.0.11",
-    "mobile": "10.45.1.2",
+    # "mobile": "10.45.1.2",
     "peering": "10.30.0.2",
 }
 
@@ -206,7 +209,9 @@ class Lab:
             args = f"--icmp -i u1000 {TARGET_IP}"
         else:
             raise LabError(f"unsupported vector: {vector}")
-        prefix = "ip netns exec ue1 " if domain == "mobile" else ""
+        # Mobile prefix retained for a future re-enable:
+        # prefix = "ip netns exec ue1 " if domain == "mobile" else ""
+        prefix = ""
         return (
             f"date +%s.%N > {marker}; "
             f"timeout {duration} {prefix}hping3 {args} "
@@ -278,7 +283,8 @@ class Lab:
         print("\n=== startup healthcheck: VM availability ===", flush=True)
         for host in (
             "orchestrator", "victim", "ent-site-1", "pe", "bng", "suscriptor",
-            "ran", "du", "ue", "br", "peer-router",
+            # Mobile VMs intentionally disabled: "ran", "du", "ue".
+            "br", "peer-router",
         ):
             self.ensure_vm_reachable(host, host)
 
@@ -308,34 +314,30 @@ class Lab:
             self.shell("suscriptor", "systemctl restart bng-subscriber-agent", timeout=90)
             self.wait_for_baseline(("broadband",), timeout=150)
 
-        print("=== startup healthcheck: mobile ===", flush=True)
-        mobile_check = (
-            "pgrep -f '^srsue ' >/dev/null && "
-            "ip netns exec ue1 test -d /sys/class/net/tun_srsue && "
-            f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"
-        )
-        mobile_ok = (
-            self.healthy("ran", "pgrep -f '^srscu -c' >/dev/null")
-            and self.healthy("du", "pgrep -f '^srsdu -c' >/dev/null && grep -qE '\\s38472\\s' /proc/net/sctp/assocs")
-            and self.healthy("ue", mobile_check)
-        )
-        if not mobile_ok:
-            last_error = ""
-            for attempt in range(1, 4):
-                print(f"mobile recovery attempt {attempt}/3", flush=True)
-                try:
-                    self.playbook(
-                        "deploy/vm-lab/ansible/playbooks/test_split_cu_du.yml",
-                        limit="ran,du,ue", skip_tags="kpm,correlate", timeout=360,
-                    )
-                except (LabError, subprocess.TimeoutExpired) as exc:
-                    last_error = str(exc)
-                if self.healthy("ue", mobile_check):
-                    break
-            else:
-                raise LabError(
-                    "mobile recovery failed after 3 CU/DU/UE attempts: " + last_error
-                )
+        # Mobile healthcheck/recovery intentionally disabled. Re-enable this
+        # block together with the mobile entries in DOMAINS, HOST_BY_DOMAIN
+        # and SOURCE_HINT once CU -> DU -> UE attach is deterministic.
+        #
+        # print("=== startup healthcheck: mobile ===", flush=True)
+        # mobile_check = (
+        #     "pgrep -f '^srsue ' >/dev/null && "
+        #     "ip netns exec ue1 test -d /sys/class/net/tun_srsue && "
+        #     f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"
+        # )
+        # mobile_ok = (
+        #     self.healthy("ran", "pgrep -f '^srscu -c' >/dev/null")
+        #     and self.healthy("du", "pgrep -f '^srsdu -c' >/dev/null && "
+        #                      "grep -qE '\\s38472\\s' /proc/net/sctp/assocs")
+        #     and self.healthy("ue", mobile_check)
+        # )
+        # if not mobile_ok:
+        #     for attempt in range(1, 4):
+        #         self.playbook(
+        #             "deploy/vm-lab/ansible/playbooks/test_split_cu_du.yml",
+        #             limit="ran,du,ue", skip_tags="kpm,correlate", timeout=360,
+        #         )
+        #         if self.healthy("ue", mobile_check):
+        #             break
 
         print("=== startup healthcheck: peering ===", flush=True)
         peering_check = (
@@ -348,12 +350,19 @@ class Lab:
             and self.healthy("peer-router", peering_check)
         )
         if not peering_ok:
-            self.shell("br", "systemctl restart softflowd-peering", timeout=90)
-            self.shell("peer-router", "systemctl restart bird", timeout=90)
+            self.playbook(
+                "deploy/vm-lab/ansible/site.yml",
+                limit="br,peer-router,victim", timeout=300,
+            )
             self.shell("orchestrator", "systemctl restart nfcapd exabgp ryu-manager", timeout=90)
-            time.sleep(5)
-            if not self.healthy("peer-router", peering_check):
-                raise LabError("peering recovery failed: BGP is not established or victim is unreachable")
+            for _ in range(12):
+                time.sleep(5)
+                if self.healthy("peer-router", peering_check):
+                    break
+            else:
+                raise LabError(
+                    "peering recovery failed: BGP is not established or victim is unreachable"
+                )
 
         self.healthcheck()
         print("=== startup healthcheck: all domains healthy ===\n", flush=True)
