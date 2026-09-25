@@ -101,6 +101,13 @@ class Lab:
         cp = subprocess.run(
             argv, cwd=self.repo, text=True, capture_output=True, timeout=timeout
         )
+        combined = "\n".join(part for part in (cp.stdout, cp.stderr) if part)
+        if argv and argv[0] == "ansible" and (
+            "No hosts matched" in combined
+            or "Could not match supplied host pattern" in combined
+            or "No inventory was parsed" in combined
+        ):
+            raise LabError(f"Ansible did not execute the requested host:\n{combined.strip()}")
         if check and cp.returncode != 0:
             raise LabError(f"command failed ({cp.returncode}): {cp.stderr.strip()}\n{cp.stdout.strip()}")
         return cp.stdout
@@ -408,7 +415,20 @@ def main() -> int:
         parser.error("--iterations must be at least 2; use 30 for the thesis dataset")
 
     repo = Path(__file__).resolve().parents[1]
-    inventory = args.inventory if args.inventory.is_absolute() else repo / args.inventory
+    if args.inventory.is_absolute():
+        inventory = args.inventory
+    else:
+        candidates = (
+            repo / args.inventory,
+            Path.home() / "isp-ddos-ryu" / args.inventory,
+        )
+        inventory = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+    if not inventory.is_file():
+        parser.error(
+            "Ansible inventory not found. Generate the VM lab inventory or pass "
+            "--inventory /absolute/path/to/inventory.ini"
+        )
+    print(f"Using Ansible inventory: {inventory}", flush=True)
     out_dir = args.output_dir if args.output_dir.is_absolute() else repo / args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = out_dir / "trials.jsonl"

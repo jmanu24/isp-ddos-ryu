@@ -31,6 +31,10 @@ python3 analysis/run_vm_lab_trials.py --iterations 30 \
   --output-dir analysis/results/vm-lab-30
 ```
 
+Desde un worktree, el script usa automáticamente el inventario generado en el
+checkout principal (`~/isp-ddos-ryu`). También puede indicarse explícitamente
+con `--inventory /ruta/absoluta/inventory.ini`.
+
 La ejecución completa puede tardar varias horas porque cada corrida espera el
 desbloqueo real y un periodo de enfriamiento. No deben lanzarse ataques
 manuales mientras esté activa.
