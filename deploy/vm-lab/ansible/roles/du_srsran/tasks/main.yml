@@ -64,6 +64,62 @@
     basedir: /opt/srsRAN_Project
     strip: 1
 
+# TRIED AND REVERTED (both of these, in sequence) -- kept as a documented
+# dead end, NOT reapplied. See docs/ran-testing.md if that file gets a
+# write-up of this; otherwise this comment is the only record.
+#
+# 1) radio_zmq_rx_channel::receive() blocking deadlock. Confirmed via a
+#    real gdb thread backtrace on a stuck du2: receive() -- called
+#    synchronously from lower_phy_baseband_processor::ul_process() on the
+#    DU's single real-time "phy_worker" thread, shared with dl_process()/
+#    transmit() -- had no deadline and blocked forever whenever the UE
+#    hadn't sent real uplink samples yet, starving the DL path so the DU
+#    never broadcast SIB1/PSS/SSS/PBCH at all -- the UE never even
+#    attempted a single RACH transmission, no matter how many times DU/UE
+#    were restarted. Patched receive() to bound its wait (reusing
+#    trx_timeout_ms) and zero-fill the remainder instead of blocking
+#    forever, matching how a real SDR RX call behaves. Confirmed this DID
+#    fix that exact symptom on a real run.
+#
+# 2) Also tried a `triple` executor-profile fix (separate dedicated
+#    threads for downlink tx/uplink rx/uplink demod, instead of ZMQ
+#    always being forced into single-threaded `blocking` mode) on top of
+#    (1). Confirmed working architecturally (`ps -T` showed real
+#    lower_phy_tx#0/lower_phy_rx#0/lower_phy_ul#0 threads) -- but it HUNG
+#    a DU VM outright (had to be power-reset) once all 5 DUs ran it
+#    simultaneously, likely from os_thread_realtime_priority::max()
+#    starving the guest's own kernel under virtualization on this lab's
+#    shared, contended ESXi host. Reverted back to just (1).
+#
+# BUT (1) turned out to have its own, worse regression, found via a
+# controlled A/B test (same DU/UE conf, same restart sequence, only the
+# code differed): with (1) applied, the DU's rx channel would reconnect
+# once (completely normal/expected -- e.g. before the UE's first RACH
+# attempt, matching the deadlock (1) was written to fix) and immediately
+# enter a PERMANENT "Real-time failure in RF: overflow" storm afterward
+# (confirmed in du.log: ~11,000 warnings/second, continuously, never
+# recovering) -- the rx circular_buffer stayed full/unrecoverable from
+# that point on, and the UE could never complete RACH again (kept
+# transmitting preambles the DU could no longer actually process). Also
+# tried loosening circ_buffer_try_push_sleep/circ_buffer_try_pop_sleep
+# from 1us to 100us (radio_zmq_rx_channel.h/radio_zmq_tx_channel.h) on
+# the theory this was a mutex-fairness livelock between the async push
+# thread and receive()'s own pop loop -- did NOT fix it (same storm, just
+# a slower log rate). The controlled A/B test was decisive: reverting (1)
+# alone (100% pristine radio_zmq_rx_channel.cpp/.h, same conf, same
+# restart sequence) made the UE attach on the FIRST RACH attempt with
+# zero overflow lines in du.log. Whatever receive()'s real-world timing
+# characteristics are when genuinely unbounded, they matter for correct
+# RACH operation in a way this patch's bounded/zero-fill replacement
+# broke -- root cause of THAT interaction not confirmed, only that
+# reverting to the original blocking behavior reliably works and the
+# patched version reliably doesn't. Net effect: the original "UE never
+# even attempts RACH" deadlock (1) targeted is real and still
+# undocumented/unfixed, but it's evidently rarer/narrower in practice
+# than the regression trying to fix it in this way introduced -- pristine
+# upstream code is the better trade-off until a fix is found that doesn't
+# have this side effect.
+
 # NOT applied (deliberately) -- srsran-mac-rlc-tm-executor-stall-
 # workaround.patch (still kept in files/ for the full story, see its own
 # header) was an earlier attempt at fixing "DU never activates the cell"

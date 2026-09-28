@@ -104,6 +104,18 @@
     basedir: /opt/srsRAN_Project
     strip: 1
 
+# TRIED AND REVERTED (twice, stacked) -- see du_srsran's own copy of this
+# task for the full story: a bounded-wait fix for a real
+# radio_zmq_rx_channel::receive() deadlock (confirmed via gdb on a stuck
+# du2) was applied and DID fix that exact symptom, but a controlled A/B
+# test later found it caused a WORSE regression -- a permanent "Real-time
+# failure in RF: overflow" storm after the rx channel's very first
+# reconnect, breaking RACH completion entirely. A separate `triple`
+# executor-profile fix (tried on top of it) also hung a DU VM outright.
+# Both reverted; this role builds the SAME source files as du_srsran for
+# the fused `gnb` binary, so neither is applied here either, for the same
+# reasons.
+
 # Confirmed on a real run: e2sm_kpm_cu_cp_meas_provider_impl registered
 # ZERO metrics and get_ues_matching_test_conditions() was a bare `return
 # true` (no ues populated) -- the ONLY way to get a UE's real
