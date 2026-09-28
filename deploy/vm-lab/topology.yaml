@@ -353,6 +353,32 @@ vms:
 
   - name: du4
     role: du_srsran
+    # f1_cu: this DU pairs with `cu2` (a SECOND, independent CU VM), not
+    # the default `ran` -- explicit per-user direction: split the single
+    # CU into two, one serving du1-du3 (`ran`), one serving du4-du5
+    # (`cu2`), instead of 5 DUs all racing to attach against one shared
+    # CU process. render_topology.py resolves this into a host_var
+    # (f1_cu_addr) consumed by du_split.yaml.j2's f1ap.cu_cp_addr.
+    f1_cu: cu2
+    # datastore: datastore2 -- moved on explicit direction alongside cu2/
+    # ue2 (see cu2's own comment for the datastore1-out-of-space story this
+    # is the same fix for): du4/du5's own srsRAN_Project builds/rebuilds
+    # (this session's ZMQ deadlock-fix debugging) pushed datastore1 down to
+    # ~22GB free, triggering the same "no more space for virtual disk"
+    # VMware pause this VM lab already hit once for cu2 -- migrated the
+    # same way (power off, vmkfstools -i clone datastore1->datastore2,
+    # vm.unregister/vm.register -ds datastore2, delete the old datastore1
+    # copy). Also needed the same post-migration fix as cu2 (stale-MAC
+    # netplan: cloud-init's own auto-generated 50-cloud-init.yaml matches a
+    # NIC by a hardcoded macaddress captured at first boot; a fresh
+    # "generated"-type MAC from the unregister/register cycle stops
+    # matching it, leaving that interface administratively DOWN even
+    # though this file's own 99-lab.yaml has a correct by-NAME rule for
+    # it) -- fixed live (rm the stale file + netplan apply) and disabled
+    # cloud-init's own network stage for good measure; the same fix is
+    # now also baked into render_topology.py's render_cloud_init(), so a
+    # from-scratch rebuild gets it automatically.
+    datastore: datastore2
     template: ubuntu
     vcpu: 8
     ram_mb: 8192
@@ -363,6 +389,10 @@ vms:
 
   - name: du5
     role: du_srsran
+    # See du4's own f1_cu comment -- same reasoning, same target CU.
+    f1_cu: cu2
+    # datastore: datastore2 -- see du4's own comment, same story.
+    datastore: datastore2
     template: ubuntu
     vcpu: 8
     ram_mb: 8192
@@ -370,6 +400,68 @@ vms:
     interfaces:
       - {network: MGMT, ip: "10.10.0.14"}
       - {network: RAN, ip: "10.40.0.8"}
+
+  - name: cu2
+    role: ran_srsran
+    # Second, independent CU (srscu, CU-CP+CU-UP) -- serves du4/du5 only.
+    # Same role as `ran` (reuses ran_srsran's build/config tasks and
+    # cu_split.yaml.j2 template unchanged, now templated on own_ran_addr/
+    # own_mgmt_addr instead of the group-var-hardcoded ran_ran_addr/
+    # ran_mgmt_addr so a second instance of this role doesn't bind to
+    # `ran`'s own address -- see cu_split.yaml.j2's own header comment).
+    # Same 4-vCPU sizing as `ran` -- same justification (CU-CP+CU-UP only,
+    # no PHY/MAC real-time worker-pool dependency the way a DU has).
+    # datastore: datastore2 -- confirmed on a real run: this VM's own
+    # build (srscu+gnb compile, ~16GB of real written data) hit
+    # datastore1's shared free-space pool going dry mid-build (VMware
+    # paused the VM outright asking "no more space for virtual disk,
+    # Retry/Cancel" -- confirmed via `govc vm.question`), even though
+    # this VM's own disk_gb (20) was never exceeded -- datastore1 itself
+    # was just too full (other, unrelated tenants' VMs on the same
+    # shared host). Migrated after the fact (power off, vmkfstools -i
+    # clone datastore1->datastore2, vm.unregister/vm.register -ds
+    # datastore2, delete the old datastore1 copy -- no Storage vMotion
+    # on standalone ESXi, same vmkfstools workaround deploy_govc.sh's
+    # own header already documents for cloning) -- setting this field
+    # here keeps a future from-scratch rebuild consistent with that.
+    datastore: datastore2
+    template: ubuntu
+    vcpu: 4
+    ram_mb: 8192
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.15"}
+      - {network: RAN, ip: "10.40.0.9"}
+
+  - name: ue2
+    role: ue_srsue
+    # Second UE-hosting VM -- runs UE4/UE5's srsue processes (ue1-ue3
+    # stay on the original `ue` VM). Reuses ue_srsue unchanged (it
+    # already deploys all 5 per-UE configs/netns on every VM in this
+    # role's group; only ue_direct_zmq_du4/du5.conf are actually launched
+    # here). Same sizing as `ue` for headroom consistency, even though
+    # this VM only ever runs 2 of the 5 srsue instances.
+    # datastore: datastore1 (where the golden templates live) was down
+    # to ~27GB free by the time this VM was added -- confirmed on a real
+    # run: vmkfstools -i's clone of tpl-ubuntu-2204 (its real/thin-
+    # provisioned written data is ~12-16GB, same order of magnitude as
+    # every other VM cloned from it) failed deterministically at 82%,
+    # twice, "not enough space on the file system", even right after
+    # deleting the previous failed attempt's own leftover directory. Per
+    # explicit direction, this VM's DESTINATION disk lives on datastore2
+    # instead (264GB free at the time) -- deploy_govc.sh still reads the
+    # SOURCE template from datastore1 (that's where the golden images
+    # are), only this VM's own new vmdk/vmx/register call target
+    # datastore2. Every other VM in this lab keeps the implicit default
+    # (blank -- same datastore as GOVC_DATASTORE/the templates).
+    datastore: datastore2
+    template: ubuntu
+    vcpu: 8
+    ram_mb: 8192
+    disk_gb: 10
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.16"}
+      - {network: RAN, ip: "10.40.0.10"}
 
   - name: ue
     role: ue_srsue

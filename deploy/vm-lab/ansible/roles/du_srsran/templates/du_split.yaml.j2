@@ -53,7 +53,13 @@
 # same logical gNB, only gnb_du_id needs to differ.
 gnb_du_id: {{ 1 if du_num == '' else (du_num | int) }}
 f1ap:
-  cu_cp_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+  # f1_cu_addr: a per-host var (render_topology.py, only set for DUs
+  # whose topology.yaml entry declares f1_cu: <some other CU VM name>,
+  # e.g. du4/du5 -> cu2) -- lets a subset of DUs pair with a SECOND,
+  # independent CU instead of the default `ran`. Falls back to
+  # ran_ran_addr (the pre-existing group var, still correct for every DU
+  # that doesn't set f1_cu) so du/du2/du3 are unaffected.
+  cu_cp_addr: {{ f1_cu_addr | default(ran_ran_addr) | default('10.40.0.2') }}
   bind_addr: {{ own_ran_addr }}
 
 # peer_port: 2153, NOT the default (GTPU_PORT/2152) -- confirmed on a

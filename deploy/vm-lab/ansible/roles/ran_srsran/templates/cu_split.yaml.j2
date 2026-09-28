@@ -22,11 +22,24 @@
 # To run: sudo ./srscu -c cu_split.yaml (start BEFORE the DU -- the DU's
 # own F1 setup needs the CU's f1ap.bind_addr already listening)
 
+# gnb_id MUST be unique per CU -- same E2/RIC registry collision risk as
+# du_split.yaml.j2's own gnb_du_id (see that file's header comment for
+# the exact crash this avoids: nearRT-RIC asserts on a duplicate Global
+# E2 Node ID and takes down every OTHER agent with it, not just the
+# offending one). srsRAN Project's own C++ default (cu_cp_unit_config.h:
+# gnb_id_t gnb_id = {411, 22}) is kept verbatim for `ran` (the original,
+# already-validated single-CU baseline) so adding a 2nd CU doesn't
+# disturb it; cu2 (and any future CU) gets a distinct id derived from its
+# own numeric suffix, same pattern as du_split.yaml.j2's du_num.
+{% set cu_num = (inventory_hostname | regex_replace('^[^0-9]+', '')) %}
+gnb_id: {{ 411 if cu_num == '' else (400 + (cu_num | int)) }}
+gnb_id_bit_length: 22
+
 cu_cp:
   amf:
     addr: {{ core5g_ran_addr | default('10.40.0.1') }}
     port: 38412
-    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    bind_addr: {{ own_ran_addr | default('10.40.0.2') }}
     supported_tracking_areas:
       - tac: 7
         plmn_list:
@@ -37,11 +50,15 @@ cu_cp:
   f1ap:
     # This VM's own real RAN-network address, NOT loopback -- CU (this
     # VM, `ran`) and DU (the separate `du` VM) are two different VMs now.
-    # ran_ran_addr is already this VM's own address (also used for the
+    # own_ran_addr is already this VM's own address (also used for the
     # AMF-facing bind_addr above), reused here rather than adding a new
     # dedicated F1 address -- nothing else on this VM's RAN interface
-    # conflicts with F1AP's own port.
-    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    # conflicts with F1AP's own port. own_ran_addr (a per-host var), NOT
+    # ran_ran_addr (a group var hardcoded to the VM literally named
+    # `ran`) -- same du_ran_addr/own_ran_addr collision class documented
+    # in du_split.yaml.j2's own header, now that a 2nd CU (`cu2`) exists
+    # in this same role's group.
+    bind_addr: {{ own_ran_addr | default('10.40.0.2') }}
 
 cu_up:
   # f1u IS nested under cu_up -- confirmed by reading srsRAN Project's own
@@ -71,7 +88,7 @@ cu_up:
   f1u:
     bind_port: 2153
     socket:
-      - bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+      - bind_addr: {{ own_ran_addr | default('10.40.0.2') }}
 
 # Gives the CU-CP its OWN E2 agent (separate SCTP association from the
 # DU's own, confirmed via apps/cu/cu.cpp: create_e2_gateway_client()
@@ -113,7 +130,7 @@ e2:
   e2sm_rc_enabled: false
   addr: {{ ric_addr | default('10.10.0.4') }}
   port: 36421
-  bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
+  bind_addr: {{ own_mgmt_addr | default('10.10.0.6') }}
 
 log:
   filename: /tmp/cu.log

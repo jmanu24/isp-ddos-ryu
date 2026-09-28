@@ -136,12 +136,20 @@ PYEOF
 
 deploy_one() {
   local name="$1" template_key="$2" vcpu="$3" ram_mb="$4" disk_gb="$5"
+  # dest_ds: this VM's OWN destination datastore (topology.yaml's
+  # optional per-VM `datastore` field) -- defaults to $DATASTORE (the
+  # same datastore the golden templates live on) when blank. The SOURCE
+  # template is always read from $DATASTORE regardless -- only this VM's
+  # own new vmdk/vmx/register call target dest_ds. See topology.yaml's
+  # own ue2 comment for why this exists (datastore1 ran low on space).
+  local dest_ds="${6:-}"
+  [ -z "$dest_ds" ] && dest_ds="$DATASTORE"
 
   local os_family source_vm
   os_family="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['$name']['os_family'])" "$VM_META_JSON")"
   source_vm="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['$name']['source_vm'])" "$VM_META_JSON")"
 
-  echo "== $name (de $source_vm, ${vcpu}vCPU/${ram_mb}MB/${disk_gb}GB) =="
+  echo "== $name (de $source_vm, ${vcpu}vCPU/${ram_mb}MB/${disk_gb}GB, datastore=${dest_ds}) =="
 
   # `govc vm.info <name>` exits 0 even when nothing matches -- it just
   # prints nothing -- confirmed empirically against a real ESXi host, so
@@ -155,14 +163,14 @@ deploy_one() {
   echo "  clonando disco vía SSH (vmkfstools -i, standalone ESXi no soporta CloneVM_Task)..."
   esxi_ssh "
     set -e
-    mkdir -p /vmfs/volumes/${DATASTORE}/${name}
-    vmkfstools -i /vmfs/volumes/${DATASTORE}/${source_vm}/${source_vm}.vmdk -d thin /vmfs/volumes/${DATASTORE}/${name}/${name}.vmdk
-    cp /vmfs/volumes/${DATASTORE}/${source_vm}/${source_vm}.vmx /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
-    sed -i 's/${source_vm}/${name}/g' /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
-    sed -i '/^uuid\\.\\|^vc\\.uuid/d' /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
-    echo 'answer.msg.uuid.altered = \"I copied it\"' >> /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
+    mkdir -p /vmfs/volumes/${dest_ds}/${name}
+    vmkfstools -i /vmfs/volumes/${DATASTORE}/${source_vm}/${source_vm}.vmdk -d thin /vmfs/volumes/${dest_ds}/${name}/${name}.vmdk
+    cp /vmfs/volumes/${DATASTORE}/${source_vm}/${source_vm}.vmx /vmfs/volumes/${dest_ds}/${name}/${name}.vmx
+    sed -i 's/${source_vm}/${name}/g' /vmfs/volumes/${dest_ds}/${name}/${name}.vmx
+    sed -i '/^uuid\\.\\|^vc\\.uuid/d' /vmfs/volumes/${dest_ds}/${name}/${name}.vmx
+    echo 'answer.msg.uuid.altered = \"I copied it\"' >> /vmfs/volumes/${dest_ds}/${name}/${name}.vmx
   "
-  govc vm.register "${name}/${name}.vmx"
+  govc vm.register -ds "$dest_ds" "${name}/${name}.vmx"
   govc vm.change -vm "$name" -c "$vcpu" -m "$ram_mb"
   govc vm.disk.change -vm "$name" -disk.name disk-1000-0 -size "${disk_gb}G" 2>/dev/null \
     || echo "  (aviso: no se pudo redimensionar el disco automaticamente -- ajustalo a mano si hace falta)"
@@ -214,14 +222,14 @@ for i in meta['interfaces']:
 
 {
   read -r _header
-  while IFS=, read -r name template vcpu ram_mb disk_gb; do
+  while IFS=, read -r name template vcpu ram_mb disk_gb datastore; do
     [ -z "$name" ] && continue
     if [ "${#FILTER[@]}" -gt 0 ]; then
       match=0
       for f in "${FILTER[@]}"; do [ "$f" = "$name" ] && match=1; done
       [ "$match" -eq 0 ] && continue
     fi
-    deploy_one "$name" "$template" "$vcpu" "$ram_mb" "$disk_gb"
+    deploy_one "$name" "$template" "$vcpu" "$ram_mb" "$disk_gb" "$datastore"
   done
 } < "$VMS_CSV"
 

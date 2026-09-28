@@ -110,7 +110,27 @@ write_files:
   - path: /etc/netplan/99-lab.yaml
     content: |
 {chr(10).join('      ' + l for l in netplan_lines)}
+  # Disables cloud-init's OWN network config generation (its
+  # auto-generated /etc/netplan/50-cloud-init.yaml, which matches a NIC
+  # by a HARDCODED macaddress captured at first boot) -- confirmed on a
+  # real run, twice, both times as a MAC-address-change side effect:
+  # (1) originally, netplan merging that DHCP-configured 50-cloud-init.yaml
+  # with this VM's own static 99-lab.yaml produced a phantom DHCP client
+  # on every boot; (2) after migrating a VM to a different datastore via
+  # the vmkfstools unregister/register workaround (no Storage vMotion on
+  # standalone ESXi -- see deploy_govc.sh's own header), the re-register
+  # assigns fresh "generated"-type MACs, so 50-cloud-init.yaml's stale
+  # match no longer matches ANY real NIC -- that interface (still legitimately
+  # named ens160/ens192 by PCI slot) came up with NO netplan config applied
+  # at all (administratively DOWN), even though 99-lab.yaml's own by-NAME
+  # rule for it was present and correct. Disabling cloud-init's own network
+  # stage entirely (not just deleting the generated file once) means this
+  # can't recur on ANY future reboot/re-register, not just this boot.
+  - path: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+    content: |
+      network: {{config: disabled}}
 runcmd:
+  - rm -f /etc/netplan/50-cloud-init.yaml
   - netplan apply
 """
     (vm_dir / "user-data").write_text(user_data)
@@ -424,6 +444,12 @@ def render_ansible_host_vars(topology: dict, out_dir: Path) -> None:
     own_mgmt_addr for ITS OWN address while a same-named group_var
     (ran_ran_addr, ric_addr, etc.) stays correctly shared/fixed across
     every host that legitimately points AT that one other VM."""
+    by_name = {v["name"]: v for v in topology["vms"]}
+
+    def net_ip(vm_name: str, network: str) -> str:
+        vm = by_name[vm_name]
+        return next(i["ip"] for i in vm["interfaces"] if i["network"] == network)
+
     host_vars_dir = out_dir / "ansible" / "host_vars"
     host_vars_dir.mkdir(parents=True, exist_ok=True)
     written = set()
@@ -448,6 +474,12 @@ def render_ansible_host_vars(topology: dict, out_dir: Path) -> None:
             lines.append(f'own_ran_addr: "{ran_ips[0]}"')
         if backbone_ips:
             lines.append(f'own_backbone_addr: "{backbone_ips[0]}"')
+        # f1_cu: explicit DU->CU pairing override (topology.yaml, e.g.
+        # du4/du5 -> cu2) -- only present for DUs that don't pair with
+        # the default CU (`ran`). See du_split.yaml.j2's own
+        # f1ap.cu_cp_addr comment.
+        if "f1_cu" in vm:
+            lines.append(f'f1_cu_addr: "{net_ip(vm["f1_cu"], "RAN")}"')
         (host_vars_dir / f"{vm['name']}.yml").write_text("\n".join(lines) + "\n")
         written.add(vm["name"])
     # Stale host_vars files for VMs removed from topology.yaml since the
@@ -460,9 +492,17 @@ def render_ansible_host_vars(topology: dict, out_dir: Path) -> None:
 def render_govc_csv(vms: list, out_dir: Path) -> None:
     govc_dir = out_dir / "govc"
     govc_dir.mkdir(parents=True, exist_ok=True)
-    lines = ["name,template,vcpu,ram_mb,disk_gb"]
+    # datastore: optional per-VM override for the DESTINATION datastore
+    # (see topology.yaml's own ue2 comment for why -- datastore1, where
+    # the golden templates live, ran low on free space). Blank means
+    # "same as GOVC_DATASTORE/deploy_govc.sh's default" -- every VM
+    # except ue2 leaves this unset.
+    lines = ["name,template,vcpu,ram_mb,disk_gb,datastore"]
     for vm in vms:
-        lines.append(f"{vm['name']},{vm['template']},{vm['vcpu']},{vm['ram_mb']},{vm['disk_gb']}")
+        lines.append(
+            f"{vm['name']},{vm['template']},{vm['vcpu']},{vm['ram_mb']},"
+            f"{vm['disk_gb']},{vm.get('datastore', '')}"
+        )
     (govc_dir / "vms.csv").write_text("\n".join(lines) + "\n")
 
 
