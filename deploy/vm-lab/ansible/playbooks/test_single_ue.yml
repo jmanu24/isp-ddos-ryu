@@ -65,8 +65,26 @@
       register: stale_ue
       changed_when: false
 
-    - name: Kill it
-      ansible.builtin.shell: "kill -9 {{ stale_ue.stdout_lines | join(' ') }} 2>/dev/null; true"
+    - name: Gracefully stop it (SIGTERM, not SIGKILL -- confirmed suspected
+            root cause of reattach flakiness: srsue's own signal handler
+            (srsran_register_signal_handler) only runs its NAS/RRC detach
+            teardown on SIGTERM/SIGINT, never on SIGKILL, which skips it
+            entirely and leaves stale UE/RA context behind in the DU/CU
+            that the next attach attempt then collides with -- see
+            du_split.yaml.j2's own header for the full reasoning. Falls
+            back to SIGKILL only if the process is still alive 10s later.)
+      ansible.builtin.shell: |
+        set -u
+        pids="{{ stale_ue.stdout_lines | join(' ') }}"
+        kill -TERM $pids 2>/dev/null || true
+        for i in $(seq 1 20); do
+          alive=""
+          for p in $pids; do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+          [ -z "$alive" ] && break
+          sleep 0.5
+        done
+        kill -9 $pids 2>/dev/null || true
+        true
       when: stale_ue.stdout_lines | length > 0
       changed_when: true
 

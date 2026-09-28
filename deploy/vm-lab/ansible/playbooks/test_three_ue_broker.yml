@@ -76,8 +76,22 @@
       register: stale_procs
       changed_when: false
 
-    - name: Kill them
-      ansible.builtin.shell: "kill -9 {{ stale_procs.stdout_lines | join(' ') }} 2>/dev/null; true"
+    - name: Gracefully stop them (SIGTERM, not SIGKILL -- same reasoning as
+            test_single_ue.yml's own UE-kill task: srsue only runs its
+            NAS/RRC detach teardown on SIGTERM/SIGINT, never on SIGKILL.
+            Falls back to SIGKILL only if still alive 10s later.)
+      ansible.builtin.shell: |
+        set -u
+        pids="{{ stale_procs.stdout_lines | join(' ') }}"
+        kill -TERM $pids 2>/dev/null || true
+        for i in $(seq 1 20); do
+          alive=""
+          for p in $pids; do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+          [ -z "$alive" ] && break
+          sleep 0.5
+        done
+        kill -9 $pids 2>/dev/null || true
+        true
       when: stale_procs.stdout_lines | length > 0
       changed_when: true
 
