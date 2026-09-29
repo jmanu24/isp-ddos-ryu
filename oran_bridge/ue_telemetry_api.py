@@ -31,7 +31,14 @@ locally, where the raw state actually lives:
      each UE is talking to, with real packet/byte counters (requires
      net.netfilter.nf_conntrack_acct=1, enabled once by this script).
 
-This process owns both pollers and joins them in memory; /telemetry
+  3. Per-UE UL KPM (RRU.PrbUsedUl, DRB.UEThpUl, ...) from the oran-sc-ric
+     KPM bridge xApp (KPM_API_URL, default http://10.10.0.4:8767/kpm). The
+     bridge registers each DU as its own E2 node and keys each sample by
+     imsi (via its gnb_du_id->imsi map), so the UL metrics are already
+     per-UE. We join them to the flow/session rows by imsi -- the same
+     imsi resolved from the SMF log in (1) -- not by amf_ue_ngap_id.
+
+This process owns all pollers and joins them in memory; /telemetry
 returns pre-joined, ready-to-use rows so mobile_adapter.py's own job is
 just "GET a URL and build TelemetryEvents", nothing more.
 """
@@ -91,8 +98,11 @@ class _State:
         self.sessions = {}
         # (src_ip,dst_ip,proto,dport) -> {"packets","bytes","pps","bps","updated_at"}
         self.flows = {}
-        # amf_ue_ngap_id -> latest identity-bound CU-CP KPM sample.
-        self.kpm_by_amf = {}
+        # imsi -> latest per-UE KPM sample from the oran-sc-ric bridge.
+        # (The bridge registers each DU as its own E2 node and keys samples
+        # by imsi via the gnb_du_id->imsi map, so the UL metrics are already
+        # per-UE; we join them to flows by imsi, not amf_ue_ngap_id.)
+        self.kpm_by_imsi = {}
         self.log_connected = False
         self.conntrack_connected = False
         self.kpm_connected = False
@@ -214,17 +224,17 @@ def _kpm_poll_loop():
             now = time.time()
             samples = {}
             for sample in payload.get("samples", []):
-                amf_id = sample.get("amf_ue_ngap_id")
+                imsi = sample.get("imsi")
                 updated_at = float(sample.get("updated_at", 0))
-                if amf_id is None or now - updated_at > KPM_SAMPLE_TTL_S:
+                if not imsi or now - updated_at > KPM_SAMPLE_TTL_S:
                     continue
-                samples[int(amf_id)] = sample
+                samples[str(imsi)] = sample
             with state.lock:
-                state.kpm_by_amf = samples
+                state.kpm_by_imsi = samples
                 state.kpm_connected = bool(payload.get("connected"))
         except (urllib.error.URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError):
             with state.lock:
-                state.kpm_by_amf = {}
+                state.kpm_by_imsi = {}
                 state.kpm_connected = False
         time.sleep(KPM_POLL_INTERVAL_S)
 
@@ -377,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
         with state.lock:
             sessions = dict(state.sessions)
             flows = list(state.flows.values())
-            kpm_by_amf = dict(state.kpm_by_amf)
+            kpm_by_imsi = dict(state.kpm_by_imsi)
             log_connected = state.log_connected
             conntrack_connected = state.conntrack_connected
             kpm_connected = state.kpm_connected
@@ -385,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
         rows = []
         for f in flows:
             sess = sessions.get(f["src_ip"])
-            kpm = kpm_by_amf.get(sess["amf_ue_ngap_id"]) if sess else None
+            kpm = kpm_by_imsi.get(sess["imsi"]) if sess else None
             rows.append({
                 **f,
                 "imsi": sess["imsi"] if sess else None,
@@ -399,7 +409,7 @@ class Handler(BaseHTTPRequestHandler):
 
         session_rows = []
         for ip, sess in sessions.items():
-            kpm = kpm_by_amf.get(sess["amf_ue_ngap_id"])
+            kpm = kpm_by_imsi.get(sess["imsi"])
             session_rows.append({
                 "ip": ip,
                 "imsi": sess["imsi"],
