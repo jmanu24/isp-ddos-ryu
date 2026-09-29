@@ -37,19 +37,24 @@ would disambiguate is the E2 node, which xapp_kpm_moni does NOT print in
 its callback. Net effect: a DU indication carries no usable key to
 attribute it to a specific amf_ue_ngap_id.
 
-This module still parses and joins DU blocks by gnb_cu_ue_f1ap and, when
-an id maps to EXACTLY ONE amf_ue_ngap_id, merges the DU radio metrics
-(DRB.UEThpUl/Dl, RRU.Prb*, delays -- confirmed real and per-UE-varying)
-into that UE's sample. When an id maps to >1 UE (the f1ap=0 case above,
-or a genuine cross-CU collision) the DU metrics are dropped, never
-mis-attributed, and counted in `ambiguous_f1ap` so the condition is
-observable rather than silent. So the join is correct and forward-ready,
-but stays inert until a per-UE key exists. Two ways to unblock it, both
-C-side: (a) modify xapp_kpm_moni to print the originating E2 node id per
-indication (each DU -> one UE here, so node id resolves the UE); or
-(b) make the DU meas provider populate ran_ue_id (globally unique) in its
-KPM UEID -- it currently sets ran_ue_id_present = false
-(e2sm_kpm_du_meas_provider_impl.cpp) -- then join on ran_ue_id here.
+UNBLOCKED via the DU patch: du_srsran/files/srsran-du-kpm-ran-ue-id.patch
+makes the DU fill the optional ran_ue_id with (gnb_du_id << 20 |
+gnb_cu_ue_f1ap_id). So each DU block now carries a per-DU-unique key. This
+module:
+  * decodes gnb_du_id from ran_ue_id (bit 44 -- see _RAN_UE_ID_RE) and
+    ALWAYS exposes that DU's UL radio metrics (DRB.UEThpUl/Dl, RRU.Prb*,
+    delays -- confirmed real and per-UE-varying) under `du_metrics`, keyed
+    by gnb_du_id (one UE per DU in this lab). This never depends on a
+    CU-CP join, so the UL KPM is never lost.
+  * additionally merges those metrics into the amf-keyed `samples` when a
+    join to an amf_ue_ngap_id is available: preferentially via ran_ue_id
+    (once the CU-CP is patched to emit the same id -- ran_ue_id_map), else
+    via the gnb_cu_ue_f1ap map when that id is unambiguous. A colliding
+    f1ap id (the f1ap=0 case) is counted in `ambiguous_f1ap`, never
+    mis-attributed.
+
+Until the CU-CP emits a matching ran_ue_id, attribute du_metrics to a UE
+downstream (ue_telemetry_api joins gnb_du_id -> the UE's session).
 """
 
 import json
@@ -79,6 +84,21 @@ _CUCP_UEID_RE = re.compile(r"UE ID type = gNB, amf_ue_ngap_id = (\d+)")
 _DU_UEID_RE = re.compile(r"UE ID type = gNB-DU, gnb_cu_ue_f1ap = (\d+)")
 _CUUP_UEID_RE = re.compile(r"UE ID type = gNB-CU-UP")
 _F1AP_ID_RE = re.compile(r"^gnb_cu_ue_f1ap = (\d+)$")
+# The DU (and, once patched symmetrically, the CU-CP) fills the optional
+# ran_ue_id octet string with (gnb_du_id << 20 | gnb_cu_ue_f1ap_id). The
+# xApp prints it as the octstring's hex; fixed_octstring<8>::from_number's
+# byte layout puts gnb_du_id at bit 44 of the printed value (confirmed on a
+# real run: du gnb_du_id=1 -> "ran_ue_id = 100000000000"). See
+# du_srsran/files/srsran-du-kpm-ran-ue-id.patch.
+_RAN_UE_ID_RE = re.compile(r"^ran_ue_id = ([0-9a-fA-F]+)$")
+
+
+def _gnb_du_id_from_ran_ue_id(ran_ue_id):
+    # ran_ue_id is the integer value of the octet string; gnb_du_id sits at
+    # bit 44 (see the module regex comment).
+    if ran_ue_id is None:
+        return None
+    return ran_ue_id >> 44
 _METRIC_RE = re.compile(
     r"^([A-Za-z][A-Za-z0-9_.]*) = (-?\d+(?:\.\d+)?)\s*(?:\[([^]]*)\]|\(([^)]*)\))?"
 )
@@ -112,6 +132,16 @@ class KpmState:
         # gnb_cu_ue_f1ap -> {"amf": set(amf_ue_ngap_id), "updated_at"};
         # a set so an id claimed by >1 UE (cross-CU collision) is detected.
         self.f1ap_map = {}
+        # ran_ue_id (int) -> amf_ue_ngap_id, from CU-CP blocks that carry it
+        # (once the CU-CP is patched to emit the same id as the DU). Until
+        # then this stays empty and DU metrics are still exposed per-DU
+        # under du_metrics below.
+        self.ran_ue_id_map = {}
+        # gnb_du_id -> {"metrics", "gnb_cu_ue_f1ap", "updated_at"}: the DU's
+        # per-UE UL radio metrics, keyed by the DU that reported them (one UE
+        # per DU in this lab). Always populated from the DU's ran_ue_id even
+        # when no CU-CP amf join exists yet, so the UL KPM is never lost.
+        self.du_metrics = {}
         self.connected = False
         self.node_count = 0
         self.ambiguous_f1ap = 0
@@ -150,6 +180,10 @@ class KpmState:
                         f1ap, {"amf": set(), "updated_at": now})
                     entry["amf"].add(amf)
                     entry["updated_at"] = now
+                # If the CU-CP also emits ran_ue_id, it is the reliable join
+                # key to the DU's metrics (survives the f1ap=0 collapse).
+                if cur.get("ran_ue_id") is not None:
+                    self.ran_ue_id_map[cur["ran_ue_id"]] = amf
                 sample = self.samples.get(amf)
                 if sample is None:
                     sample = {"amf_ue_ngap_id": amf, "gnb_cu_ue_f1ap": None,
@@ -162,7 +196,24 @@ class KpmState:
             elif cur["kind"] == "du":
                 if not cur["metrics"]:
                     return
-                amf = self._amf_for_f1ap(cur["f1ap"], now)
+                ran_ue_id = cur.get("ran_ue_id")
+                # Always expose the DU metrics per-DU, keyed by gnb_du_id
+                # decoded from ran_ue_id -- this is what the DU patch makes
+                # possible and never depends on a CU-CP join.
+                if ran_ue_id is not None:
+                    gnb_du_id = _gnb_du_id_from_ran_ue_id(ran_ue_id)
+                    if gnb_du_id is not None:
+                        self.du_metrics[gnb_du_id] = {
+                            "gnb_du_id": gnb_du_id,
+                            "gnb_cu_ue_f1ap": cur["f1ap"],
+                            "metrics": cur["metrics"],
+                            "updated_at": now,
+                        }
+                # Prefer the ran_ue_id join to an amf sample; fall back to
+                # the (usually ambiguous) f1ap map.
+                amf = self.ran_ue_id_map.get(ran_ue_id) if ran_ue_id else None
+                if amf is None:
+                    amf = self._amf_for_f1ap(cur["f1ap"], now)
                 if amf is None:
                     entry = self.f1ap_map.get(cur["f1ap"])
                     if entry is not None and len(entry["amf"]) > 1:
@@ -217,6 +268,15 @@ class KpmState:
             self._cur["f1ap_ids"].append(int(m.group(1)))
             return
 
+        # ran_ue_id appears in both CU-CP and gNB-DU blocks (when emitted).
+        m = _RAN_UE_ID_RE.match(line)
+        if m and self._cur["kind"] in ("cucp", "du"):
+            try:
+                self._cur["ran_ue_id"] = int(m.group(1), 16)
+            except ValueError:
+                pass
+            return
+
         m = _METRIC_RE.match(line)
         if m and m.group(1) in _KEEP_METRICS:
             value = float(m.group(2))
@@ -237,11 +297,16 @@ class KpmState:
                          if now - v["updated_at"] > F1AP_MAP_TTL_S]
             for k in stale_map:
                 del self.f1ap_map[k]
+            stale_du = [k for k, v in self.du_metrics.items()
+                        if now - v["updated_at"] > SAMPLE_TTL_S]
+            for k in stale_du:
+                del self.du_metrics[k]
             return {
                 "connected": self.connected,
                 "node_count": self.node_count,
                 "ambiguous_f1ap": self.ambiguous_f1ap,
                 "samples": list(self.samples.values()),
+                "du_metrics": list(self.du_metrics.values()),
                 "last_error": self.last_error,
             }
 
