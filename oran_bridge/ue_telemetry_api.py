@@ -75,9 +75,12 @@ LOG_POLL_INTERVAL_S = 0.5
 # registration leaving a stale entry at the front of the FIFO forever.
 PENDING_NGAP_ID_TTL_S = 15.0
 # A session entry (amf_ue_ngap_id/imsi/ip) is dropped from the live map
-# if not refreshed within this long -- matches this project's other
-# staleness conventions (see broadband_adapter.py's own TTL comments).
-SESSION_TTL_S = 3600.0
+# if not refreshed within this long. The SMF only logs the "UE SUPI...IPv4..."
+# line once at PDU establishment and nothing refreshes updated_at, so this must
+# outlast how long a UE stays attached. Kept at 24h to match the RAN idle/
+# inactivity timers (srsRAN CU inactivity_timer=86400, AMF t3512=86400); a
+# shorter TTL purges live sessions mid-connection and starves KPM attribution.
+SESSION_TTL_S = 86400.0
 
 _AMF_NGAP_ID_RE = re.compile(
     r"RAN_UE_NGAP_ID\[(\d+)\]\s+AMF_UE_NGAP_ID\[(\d+)\]"
