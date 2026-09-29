@@ -118,7 +118,10 @@ class KpmBridge(xAppBase):
         self._api_port = api_port
 
     def _callback(self, e2_agent_id, subscription_id, indication_hdr,
-                  indication_msg, kpm_report_style, ue_id):
+                  indication_msg):
+        # oran-sc-ric invokes the indication callback with exactly
+        # (agent, sub, hdr, msg); the report style / ue_id are not passed
+        # for Style 1, so we must not declare them as required args.
         m = _DU_ID_RE.search(e2_agent_id)
         if not m:
             return
