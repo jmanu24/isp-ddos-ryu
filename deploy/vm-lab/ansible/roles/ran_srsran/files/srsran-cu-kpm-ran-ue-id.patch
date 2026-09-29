@@ -1,0 +1,75 @@
+# CU-CP counterpart to du_srsran/files/srsran-du-kpm-ran-ue-id.patch.
+# Makes the CU-CP E2SM-KPM provider emit the SAME ran_ue_id the DU emits
+# (gnb_du_id << 20 | gnb_cu_ue_f1ap_id) in its per-UE UEID, so the RIC/KPM
+# sidecar (oran_bridge/kpm_telemetry_api.py) can join a CU-CP indication
+# (which carries amf_ue_ngap_id) to the DU indication (which carries the
+# UL radio metrics) for the same physical UE. Without this, gnb_cu_ue_f1ap
+# is per-DU (0 for every UE, one UE per DU here) and the DU's UL metrics
+# cannot be attributed to any amf_ue_ngap_id. The CU-CP gets the UE's real
+# gnb_du_id from its du_processor's F1-Setup context (get_context()->id),
+# added here as cu_configurator::get_gnb_du_id_for_kpm(). Applies on top of
+# srsran-cu-f1ap-ue-id-kpm-correlation.patch (needs its get_f1ap_ue_id_for_kpm).
+# strip: 1.
+#
+--- a/include/srsran/cu_cp/cu_configurator.h
++++ b/include/srsran/cu_cp/cu_configurator.h
+@@ -79,6 +79,7 @@
+   /// letting an xApp correlate the two without a separate NGAP/F1AP cross-reference. Returns
+   /// gnb_cu_ue_f1ap_id_t::invalid if the UE has no DU/F1AP association yet.
+   virtual gnb_cu_ue_f1ap_id_t get_f1ap_ue_id_for_kpm(const srs_cu_cp::ue_index_t& ue_index) const = 0;
++  virtual uint64_t get_gnb_du_id_for_kpm(const srs_cu_cp::ue_index_t& ue_index) const = 0;
+ 
+   /// Trigger UE Handover.
+   virtual async_task<srs_cu_cp::cu_cp_intra_cu_handover_response>
+--- a/lib/cu_cp/cu_configurator_impl.h
++++ b/lib/cu_cp/cu_configurator_impl.h
+@@ -60,6 +60,7 @@
+   std::vector<srs_cu_cp::ue_index_t> get_ue_indexes() const override;
+ 
+   gnb_cu_ue_f1ap_id_t get_f1ap_ue_id_for_kpm(const srs_cu_cp::ue_index_t& ue_index) const override;
++  uint64_t get_gnb_du_id_for_kpm(const srs_cu_cp::ue_index_t& ue_index) const override;
+ 
+   async_task<srs_cu_cp::cu_cp_intra_cu_handover_response>
+   trigger_handover(const srs_cu_cp::du_index_t&                      source_du_index,
+--- a/lib/cu_cp/cu_configurator_impl.cpp
++++ b/lib/cu_cp/cu_configurator_impl.cpp
+@@ -94,6 +94,20 @@
+   return du_db.get_du_processor(du_index).get_f1ap_handler().get_f1ap_ue_id_for_kpm(ue_index);
+ }
+ 
++uint64_t cu_configurator_impl::get_gnb_du_id_for_kpm(const ue_index_t& ue_index) const
++{
++  cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
++  if (ue == nullptr) {
++    return 0;
++  }
++  du_index_t du_index = ue->get_du_index();
++  if (du_index == du_index_t::invalid or du_db.find_du_processor(du_index) == nullptr) {
++    return 0;
++  }
++  const du_configuration_context* ctx = du_db.get_du_processor(du_index).get_context();
++  return ctx == nullptr ? 0 : static_cast<uint64_t>(ctx->id);
++}
++
+ async_task<cu_cp_intra_cu_handover_response> cu_configurator_impl::return_handover_response(bool ack)
+ {
+   return launch_async([ack](coro_context<async_task<cu_cp_intra_cu_handover_response>>& ctx) {
+--- a/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.cpp
++++ b/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.cpp
+@@ -156,6 +156,16 @@
+     f1ap_item.gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(f1ap_id);
+     ueid_gnb.gnb_cu_ue_f1ap_id_list.push_back(f1ap_item);
+   }
++  // Emit the SAME ran_ue_id the DU KPM provider encodes (gnb_du_id<<20 |
++  // gnb_cu_ue_f1ap_id) so the RIC/KPM sidecar joins this CU-CP indication
++  // (amf_ue_ngap_id) to the DU's per-UE UL metrics -- gnb_cu_ue_f1ap_id
++  // alone is per-DU (0) and cannot disambiguate UEs across DUs.
++  uint64_t du_id_for_ran_ue_id = cu_cfg->get_gnb_du_id_for_kpm(ue_index);
++  if (du_id_for_ran_ue_id != 0 && f1ap_id != gnb_cu_ue_f1ap_id_t::invalid) {
++    ueid_gnb.ran_ue_id_present = true;
++    ueid_gnb.ran_ue_id.from_number((du_id_for_ran_ue_id << 20) |
++        (gnb_cu_ue_f1ap_id_to_uint(f1ap_id) & 0xfffffULL));
++  }
+   ueid.set_gnb_ue_id() = ueid_gnb;
+   ues.push_back(ueid);
+   return true;

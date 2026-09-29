@@ -166,6 +166,14 @@
     basedir: /opt/srsRAN_Project
     strip: 1
 
+- name: Emit a per-UE ran_ue_id in the CU-CP KPM UEID matching the DU's
+        (gnb_du_id<<20 | f1ap) so the KPM sidecar joins amf_ue_ngap_id to the
+        DU's UL radio metrics -- pairs with du_srsran's own ran-ue-id patch
+  ansible.builtin.patch:
+    src: srsran-cu-kpm-ran-ue-id.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
 - name: Create build directory
   ansible.builtin.file:
     path: /opt/srsRAN_Project/build
