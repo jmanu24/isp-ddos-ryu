@@ -477,3 +477,34 @@ y descartado como bug nuevo — coincide con la flakiness de RACH ya documentada
 proyecto (~50%+ de fallo por intento, peor aún en escenarios split, ver §2/§6). El propio
 playbook documenta esto en su cabecera e instruye reintentar, mismo patrón ya establecido por
 `test_single_ue.yml`.
+
+## 10. Mitigación real per-UE (E2SM-RC 2_6) y su limitación: 1 UE por DU
+
+La detección del dominio móvil se decide con el KPM UL del RAN (`RRU.PrbUsedUl`
+saturado **Y** `DRB.UEThpUl` alto — ver `detection/engine.py` y las
+`MOBILE_KPM_*` de `config/settings.py`); conntrack en el UPF solo identifica el
+flujo (dst/protocolo/puerto + IMSI). La **mitigación real** es un lazo cerrado
+KPM→RC con **histéresis** (dos umbrales UL: activación y recuperación, más una
+ventana de N reportes consecutivos) que evita la oscilación block/unblock, y un
+actuador **E2SM-RC (RIC Control)** hacia el DU del atacante.
+
+### Limitación de la tesis: solo 1 UE por DU para mitigación per-UE
+
+srsRAN Project implementa **únicamente dos acciones E2SM-RC** (verificado en
+`lib/e2/e2sm/e2sm_rc/`): CU **3_1 = Handover Control** y DU
+**2_6 = "Slice-level PRB quota"** (RRM policy: min/max/dedicated PRB ratio por
+S-NSSAI, aplicada por `inter_slice_scheduler`). **No existe una acción de
+PRB/bitrate por UE individual.** Por lo tanto el único lever de throttling real
+que expone el agente E2 de srsRAN es **por slice/celda, no por UE**.
+
+Consecuencia: para que bajar el PRB de una celda/slice equivalga a castigar a un
+**único** UE (y no a todos los de esa celda), **cada UE debe estar solo en su
+celda/DU**. Este lab cumple esa condición por diseño (1 UE por DU: du→UE1,
+du2→UE2, …, du5→UE5), así que el RC 2_6 sobre el DU del atacante da un efecto
+per-UE. **Esta es una limitación asumida de la tesis**: el enforcement per-UE vía
+E2SM-RC 2_6 solo es equivalente a per-UE bajo la topología de 1 UE por DU. El
+caso general (varios UEs por celda) requeriría o bien una acción E2SM-RC per-UE
+que srsRAN no implementa (habría que parchear el scheduler MAC en tiempo real),
+o reasignar dinámicamente al UE atacante a un "slice de penalización" propio
+(reasignación de S-NSSAI en tiempo real, no soportada por la 2_6, que solo
+modifica el ratio PRB de un slice existente). Ambas quedan fuera de alcance.
