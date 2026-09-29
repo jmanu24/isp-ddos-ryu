@@ -131,6 +131,18 @@ LOW_SLOW_MOBILE_MAX_PPS = 8.0      # below SYN_THRESHOLD -- "low rate" band ceil
 LOW_SLOW_MOBILE_MIN_SOURCES = 5    # distinct low-rate UEs toward one dst, same cycle
 LOW_SLOW_MOBILE_MIN_CYCLES = 20    # consecutive cycles that count must hold before flagging
 
+# Mobile (O-RAN) attack signal: the RAN's own UL E2SM-KPM, NOT conntrack.
+# conntrack at the UPF only identifies WHICH flow a UE is hammering
+# (dst_ip/protocol/port + imsi); whether it's an attack is decided from
+# the radio layer -- an attacking UE saturates its uplink PRBs and pushes
+# far more UL throughput than any legitimate app. A UE is flagged only
+# when BOTH cross their threshold (AND), so a lone high-throughput burst
+# or a momentary PRB spike alone doesn't trip it. Confirmed on a real
+# UDP-flood run: idle UE reads PrbUsedUl~0/UEThpUl~0, a light ping
+# ~1/28kbps, a flood PrbUsedUl=50 (saturated) / UEThpUl~6700kbps.
+MOBILE_KPM_PRB_UL_THRESHOLD = 45          # RRU.PrbUsedUl (of ~50 max) -- near-saturation
+MOBILE_KPM_THPUL_KBPS_THRESHOLD = 500     # DRB.UEThpUl kbps -- well above normal UL app rates
+
 # Domains whose mitigation is inherently per-source (one quarantine action
 # per attacking UE/session, not one destination-wide network lever the way
 # an OpenFlow drop rule is) -- DDoSDetectionEngine.analyze_low_slow_mobile

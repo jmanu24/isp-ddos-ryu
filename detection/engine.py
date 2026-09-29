@@ -453,16 +453,59 @@ class DDoSDetectionEngine:
             threshold = getattr(settings, threshold_name)
 
             proto_events = [e for e in event.events if e.protocol == protocol]
+            if not proto_events:
+                continue
             total_pps = sum(e.pps for e in proto_events)
 
-            if total_pps <= threshold:
+            # Mobile domain is KPM-driven: the attack signal is the RAN's
+            # own UL E2SM-KPM (PRB saturation AND high UL throughput), not
+            # conntrack pps -- conntrack only says WHICH flow (this
+            # protocol/dst) the UE is on. Every other domain keeps the
+            # pps-threshold trigger. non_mobile_pps excludes mobile events
+            # so a below-pps-threshold mobile flood (conntrack under-counts
+            # over ZMQ) still fires on its KPM alone.
+            kpm_attack, kpm_score = self._mobile_kpm_signal(proto_events)
+            non_mobile_pps = sum(e.pps for e in proto_events if e.domain != "mobile")
+
+            if non_mobile_pps <= threshold and not kpm_attack:
                 continue
 
-            return self._build_result(event, proto_events, total_pps, threshold, attack_type)
+            return self._build_result(
+                event, proto_events, total_pps, threshold, attack_type,
+                kpm_score=kpm_score if kpm_attack else None,
+            )
 
         # No single protocol's aggregate crossed its threshold — still check
         # the protocol-agnostic case (e.g. raw/no-flag floods tagged "IP").
         return self._classify_distributed(event, event.events, settings.DIST_PPS_THRESHOLD)
+
+    def _mobile_kpm_signal(self, proto_events: List[TelemetryEvent]):
+        """
+        Mobile (O-RAN) attack signal from the RAN UL E2SM-KPM. A mobile UE
+        is flagged only when BOTH its UL PRB usage is near-saturation AND
+        its UL throughput is well above normal (AND -- see settings). The
+        returned score is the UL-throughput overshoot ratio, so a genuine
+        flood scores far above DECISION_THRESHOLD even though conntrack pps
+        (which under-counts over ZMQ) would not. Returns (is_attack, score).
+        """
+        attack = False
+        best_score = 0.0
+        for e in proto_events:
+            if e.domain != "mobile" or not e.kpm:
+                continue
+            # conntrack picks the carrier flow: only a flow actually
+            # carrying volume this cycle is a candidate, so a KPM-flagged
+            # UE's incidental low-rate flow on another protocol isn't
+            # itself flagged. The attack VERDICT is still the KPM below.
+            if e.pps <= settings.LOW_SLOW_MOBILE_MAX_PPS:
+                continue
+            prb_ul = e.kpm.get("RRU.PrbUsedUl", 0) or 0
+            thp_ul = e.kpm.get("DRB.UEThpUl", 0) or 0
+            if (prb_ul >= settings.MOBILE_KPM_PRB_UL_THRESHOLD
+                    and thp_ul >= settings.MOBILE_KPM_THPUL_KBPS_THRESHOLD):
+                attack = True
+                best_score = max(best_score, thp_ul / settings.MOBILE_KPM_THPUL_KBPS_THRESHOLD)
+        return attack, best_score
 
     def _build_result(
         self,
@@ -471,12 +514,18 @@ class DDoSDetectionEngine:
         total_pps: float,
         threshold: float,
         single_source_attack_type: str,
+        kpm_score: Optional[float] = None,
     ) -> DetectionResult:
         """
         Decide, for traffic that already crossed a protocol's threshold,
         whether it's concentrated in one source (single-source flood) or
         spread across many (distributed flood), and build the matching
         DetectionResult.
+
+        kpm_score (mobile only): when set, this detection was triggered by
+        the RAN UL KPM, not conntrack pps -- the score comes from the KPM
+        overshoot so the decision escalates correctly even though the
+        conntrack pps that only identified the flow is low.
         """
         pps_by_src: Dict[str, float] = defaultdict(float)
         for e in proto_events:
@@ -490,7 +539,7 @@ class DDoSDetectionEngine:
             and entropy >= settings.DIST_ENTROPY_THRESHOLD
         )
 
-        score = total_pps / threshold
+        score = kpm_score if kpm_score is not None else total_pps / threshold
         total_bps = sum(e.bps for e in proto_events)
         multidomain = len(event.domains) > 1
 
