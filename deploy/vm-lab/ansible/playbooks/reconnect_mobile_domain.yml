@@ -1,0 +1,419 @@
+---
+# reconnect_mobile_domain.yml -- one-shot, idempotent reconnection of the
+# whole mobile (5G O-RAN) domain on the oran-sc-ric stack, with every
+# validation this lab has learned the hard way. Run it directly; it does
+# NOT depend on any interactive help.
+#
+#   ansible-playbook playbooks/reconnect_mobile_domain.yml
+#
+# What it does, in the exact order that is known to work:
+#   0. (power_cycle=true, default) power-cycle every mobile VM via govc --
+#      the ONLY reliable way to clear degraded ZMQ / half-open SCTP / stale
+#      F1 contexts. Set -e power_cycle=false to skip and just relaunch
+#      services on already-running VMs.
+#   1. core5g  -- wait for Open5GS healthy (auto-starts on boot).
+#   2. ric     -- oran-sc-ric via `docker compose down && up` (NOT just up:
+#      a plain up after a power-cycle leaves the RMR mesh inconsistent ->
+#      e2term RMR_ERR_NOENDPT / submgr 503 and KPM never reaches the
+#      bridge). Verifies the 7 containers, the 12050->4561 indication route,
+#      and that ports 8767 (bridge) + 8768 (RC actuator) are published.
+#   3. CUs (ran=cu1, cu2) -- srscu, one at a time. A CU MUST be freshly
+#      (re)started before its DUs or F1 Setup fails with
+#      "message-not-compatible-with-receiver-state" and the cell never
+#      broadcasts SSB (UEs then hang at "Attaching UE...").
+#   4. DUs (du,du2,du3,du4,du5) -- srsdu, staggered (serial:1) to avoid the
+#      concurrent-E2-Setup race. Validated by the DU's OWN log
+#      ("E2 Setup procedure successful" + RC ran-function id 3), NOT by
+#      e2mgr (whose connectionStatus is frequently stale here).
+#   5. UEs (ue1..ue5) -- srsue via systemd-run, one at a time, with an
+#      automatic "restart the DU with the UE listening" retry for the
+#      non-deterministic ZMQ RACH. Adds the default route (dev-only; `via`
+#      fails on the POINTOPOINT/NOARP tun) and pings the victim.
+#   6. ric -- launch the KPM bridge + RC actuator xApps; confirm /kpm
+#      samples flow (brief UL burst) and the actuator answers /status.
+#   7. summary -- E2 count, per-UE IPs + victim reachability.
+#
+# Tags: use --tags to re-run only part of it against an already-up domain,
+#   e.g.  --skip-tags power           (don't power-cycle)
+#         --tags validate             (just re-run the end validations)
+#         --skip-tags victim          (skip data-plane ping, e.g. pe down)
+
+######################################################################
+# Play 0 -- power-cycle every mobile VM (govc, from the control node)
+######################################################################
+- name: Power-cycle the mobile domain
+  hosts: localhost
+  gather_facts: false
+  become: false
+  tags: [power]
+  vars:
+    power_cycle: true
+    # govc VM names, in no particular order (power ops are parallel-safe;
+    # only SERVICE bring-up below must be ordered).
+    mobile_vms: [core5g, ric, ran, du, du2, du3, cu2, du4, du5, ue, ue2]
+  tasks:
+    - name: Skip notice
+      ansible.builtin.debug:
+        msg: "power_cycle=false -> skipping power-cycle, will relaunch services on running VMs."
+      when: not power_cycle
+
+    - name: Power off all mobile VMs
+      ansible.builtin.shell: |
+        set -a; . ~/.govc_env; set +a
+        govc vm.power -off=true {{ item }} >/dev/null 2>&1 || true
+      loop: "{{ mobile_vms }}"
+      changed_when: true
+      when: power_cycle
+
+    - name: Settle before power-on
+      ansible.builtin.wait_for: { timeout: 3 }
+      when: power_cycle
+
+    - name: Power on all mobile VMs
+      ansible.builtin.shell: |
+        set -a; . ~/.govc_env; set +a
+        govc vm.power -on=true {{ item }} >/dev/null 2>&1 || true
+      loop: "{{ mobile_vms }}"
+      changed_when: true
+      when: power_cycle
+
+    - name: Wait for every mobile VM's SSH to come back (UE hosts boot slowest)
+      ansible.builtin.wait_for:
+        host: "{{ item }}"
+        port: 22
+        timeout: 240
+        delay: 5
+      loop: [10.10.0.5, 10.10.0.4, 10.10.0.6, 10.10.0.15, 10.10.0.10,
+             10.10.0.11, 10.10.0.12, 10.10.0.13, 10.10.0.14, 10.10.0.8, 10.10.0.16]
+      when: power_cycle
+
+######################################################################
+# Play 1 -- core5g (Open5GS auto-starts; just validate)
+######################################################################
+- name: Validate 5G core (Open5GS)
+  hosts: core5g_open5gs
+  gather_facts: false
+  tags: [core, validate]
+  tasks:
+    - name: Wait for the open5gs_5gc container to report healthy
+      ansible.builtin.shell: >-
+        docker ps --filter name=open5gs_5gc --format '{{ "{{" }}.Status{{ "}}" }}'
+      register: core_status
+      until: "'healthy' in core_status.stdout"
+      retries: 24
+      delay: 5
+      changed_when: false
+
+    - name: Confirm the NFs are running
+      ansible.builtin.shell: docker exec open5gs_5gc pgrep -c 'open5gs-' || true
+      register: nf_count
+      changed_when: false
+      failed_when: nf_count.stdout | trim | int < 8
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "core5g healthy, {{ nf_count.stdout | trim }} Open5GS NFs up."
+
+######################################################################
+# Play 2 -- oran-sc-ric (compose down && up for a consistent RMR mesh)
+######################################################################
+- name: Bring up the oran-sc-ric (consistent RMR mesh)
+  hosts: ric_flexric        # inventory group name; host is the RIC (10.10.0.4)
+  gather_facts: false
+  tags: [ric]
+  vars:
+    ric_compose_dir: /home/labadmin/oran-sc-ric
+  tasks:
+    - name: Make sure FlexRIC's daemons are not stealing sctp/36421
+      ansible.builtin.shell: systemctl stop near-rt-ric kpm-telemetry-api 2>/dev/null; true
+      changed_when: false
+
+    - name: Ensure the RC actuator port (8768) is published next to the bridge (8767)
+      ansible.builtin.shell: >-
+        cd {{ ric_compose_dir }} &&
+        grep -q '8768:8768' docker-compose.yml ||
+        sed -i '/- "8767:8767"/a\      - "8768:8768"' docker-compose.yml
+      changed_when: false
+
+    - name: docker compose down && up (NOT just up -- see this file's header)
+      ansible.builtin.shell: >-
+        cd {{ ric_compose_dir }} &&
+        docker compose down &&
+        docker compose up -d
+      changed_when: true
+
+    - name: Wait for the 7 RIC containers to be up
+      ansible.builtin.shell: >-
+        cd {{ ric_compose_dir }} &&
+        docker compose ps --status running --format '{{ "{{" }}.Name{{ "}}" }}' | wc -l
+      register: ric_up
+      until: ric_up.stdout | trim | int >= 7
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Confirm the RIC_INDICATION route points ONLY at the bridge (4561)
+      ansible.builtin.shell: >-
+        docker exec ric_e2term grep -E '^rte\|12050\|' /opt/e2/dockerRouter.txt
+      register: ind_route
+      changed_when: false
+      failed_when: "'4561' not in ind_route.stdout or '4560' in ind_route.stdout or '4562' in ind_route.stdout"
+
+    - name: Confirm e2term is listening on sctp/36421 and 8767/8768 are published
+      ansible.builtin.shell: |
+        ss -lnp 2>/dev/null | grep -q ':36421' && echo sctp-ok
+        docker port python_xapp_runner | tr '\n' ' '
+      register: ric_ports
+      changed_when: false
+      failed_when: "'sctp-ok' not in ric_ports.stdout or '8767' not in ric_ports.stdout or '8768' not in ric_ports.stdout"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "oran-sc-ric up: {{ ric_up.stdout | trim }} containers, route={{ ind_route.stdout | trim }}, ports OK."
+
+######################################################################
+# Play 3 -- CUs (must be fresh BEFORE their DUs, for F1)
+######################################################################
+- name: Launch the CUs (srscu)
+  hosts: ran_srsran         # ran (cu1) + cu2
+  gather_facts: false
+  serial: 1
+  tags: [cu]
+  tasks:
+    - name: Kill any stale srscu
+      ansible.builtin.shell: pkill -9 -f '^srscu -c' 2>/dev/null; true
+      changed_when: false
+
+    - name: Drain any half-open E2 SCTP toward the RIC before relaunch
+      ansible.builtin.shell: >-
+        for i in $(seq 1 25); do
+          [ "$(ss -S 2>/dev/null | grep -c 36421)" = "0" ] && break; sleep 1;
+        done; true
+      changed_when: false
+
+    - name: Launch srscu
+      ansible.builtin.shell: >-
+        rm -f /tmp/cu.log /tmp/cu_stdout.log &&
+        setsid nohup srscu -c /etc/srsran/cu_split.yaml
+        > /tmp/cu_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for NGAP + E2 setup
+      ansible.builtin.wait_for: { timeout: 8 }
+      delegate_to: localhost
+
+    - name: Confirm srscu is still alive (didn't crash on startup)
+      ansible.builtin.shell: pgrep -f '^srscu -c'
+      register: cu_pid
+      changed_when: false
+      failed_when: cu_pid.stdout == ""
+
+    - name: Confirm this CU's E2 setup completed (its own log is authoritative)
+      ansible.builtin.shell: >-
+        grep -c 'E2 Setup procedure successful' /tmp/cu.log 2>/dev/null || true
+      register: cu_e2
+      until: cu_e2.stdout | trim | int > 0
+      retries: 6
+      delay: 3
+      changed_when: false
+      # Non-fatal: some srsRAN builds log the CU's E2 setup only at debug.
+      # The DU-side E2 checks below are the hard gate.
+      failed_when: false
+
+######################################################################
+# Play 4 -- DUs (staggered; validated by the DU's own log)
+######################################################################
+- name: Launch the DUs (srsdu)
+  hosts: du_srsran          # du, du2, du3, du4, du5
+  gather_facts: false
+  serial: 1                 # avoid the concurrent-E2-Setup race
+  tags: [du]
+  tasks:
+    - name: Kill any stale srsdu
+      ansible.builtin.shell: pkill -9 -f '^srsdu -c' 2>/dev/null; true
+      changed_when: false
+
+    - name: Drain any half-open E2 SCTP toward the RIC before relaunch
+      ansible.builtin.shell: >-
+        for i in $(seq 1 25); do
+          [ "$(ss -S 2>/dev/null | grep -c 36421)" = "0" ] && break; sleep 1;
+        done; true
+      changed_when: false
+
+    - name: Confirm e2sm_rc is enabled (the RC actuator needs ran-function 3)
+      ansible.builtin.shell: grep -qE '^\s*e2sm_rc_enabled:\s*true' /etc/srsran/du_split.yaml && echo ok || echo missing
+      register: rc_flag
+      changed_when: false
+      failed_when: "'ok' not in rc_flag.stdout"
+
+    - name: Launch srsdu
+      ansible.builtin.shell: >-
+        rm -f /tmp/du.log /tmp/du_stdout.log &&
+        setsid nohup srsdu -c /etc/srsran/du_split.yaml
+        > /tmp/du_stdout.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for E2/F1 setup
+      ansible.builtin.wait_for: { timeout: 8 }
+      delegate_to: localhost
+
+    - name: Confirm srsdu is alive
+      ansible.builtin.shell: pgrep -f '^srsdu -c'
+      register: du_pid
+      changed_when: false
+      failed_when: du_pid.stdout == ""
+
+    - name: Confirm F1 Setup did NOT fail (stale CU context would reject it)
+      ansible.builtin.shell: grep -c 'F1 Setup Failure' /tmp/du.log 2>/dev/null || true
+      register: f1_fail
+      changed_when: false
+      failed_when: f1_fail.stdout | trim | int > 0
+
+    - name: Confirm this DU's E2 setup completed AND it advertises RC (ran-func 3)
+      ansible.builtin.shell: >-
+        grep -q 'E2 Setup procedure successful' /tmp/du.log &&
+        grep -q 'Added supported RAN function with id 3' /tmp/du.log &&
+        echo ok || true
+      register: du_e2
+      until: "'ok' in du_e2.stdout"
+      retries: 8
+      delay: 3
+      changed_when: false
+      failed_when: "'ok' not in du_e2.stdout"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: srsdu up, F1 OK, E2 setup OK, RC (ran-func 3) advertised."
+
+######################################################################
+# Play 5 -- UEs on host `ue` (ue1, ue2, ue3), one at a time
+######################################################################
+- name: Attach UEs on host 'ue' (ue1/ue2/ue3)
+  hosts: ue                 # 10.10.0.8
+  gather_facts: false
+  tags: [ue]
+  vars:
+    ues:
+      - { num: 1, netns: ue1, config: ue_direct_zmq_split_du.conf, du_host: du }
+      - { num: 2, netns: ue2, config: ue_direct_zmq_du2.conf,      du_host: du2 }
+      - { num: 3, netns: ue3, config: ue_direct_zmq_du3.conf,      du_host: du3 }
+  tasks:
+    - name: Bring up each UE (with RACH retry)
+      ansible.builtin.include_tasks: tasks/bring_up_ue.yml
+      loop: "{{ ues }}"
+      loop_control:
+        loop_var: ue
+        label: "{{ ue.netns }}"
+
+######################################################################
+# Play 6 -- UEs on host `ue2` (ue4, ue5), one at a time
+######################################################################
+- name: Attach UEs on host 'ue2' (ue4/ue5)
+  hosts: ue2                # 10.10.0.16
+  gather_facts: false
+  tags: [ue]
+  vars:
+    ues:
+      - { num: 4, netns: ue4, config: ue_direct_zmq_du4.conf, du_host: du4 }
+      - { num: 5, netns: ue5, config: ue_direct_zmq_du5.conf, du_host: du5 }
+  tasks:
+    - name: Bring up each UE (with RACH retry)
+      ansible.builtin.include_tasks: tasks/bring_up_ue.yml
+      loop: "{{ ues }}"
+      loop_control:
+        loop_var: ue
+        label: "{{ ue.netns }}"
+
+######################################################################
+# Play 7 -- KPM bridge + RC actuator xApps, and confirm KPM flows
+######################################################################
+- name: Launch the KPM bridge and RC actuator, confirm KPM pipeline
+  hosts: ric_flexric
+  gather_facts: false
+  tags: [xapps, validate]
+  vars:
+    du_nodes: gnbd_001_001_00019b_1,gnbd_001_001_00019b_2,gnbd_001_001_00019b_3,gnbd_001_001_000192_4,gnbd_001_001_000192_5
+  tasks:
+    - name: Kill any stale bridge/actuator inside the xApp container
+      ansible.builtin.shell: >-
+        for p in $(docker top python_xapp_runner 2>/dev/null | grep -E 'kpm_bridge_xapp|rc_actuator_xapp' | awk '{print $2}');
+        do kill -9 $p 2>/dev/null; done; true
+      changed_when: false
+
+    - name: Launch the KPM bridge (foreground in the container; -d hangs after RMR init)
+      ansible.builtin.shell: >-
+        setsid nohup docker exec python_xapp_runner sh -c
+        "cd /opt/xApps && exec python3 -u kpm_bridge_xapp.py --du_nodes {{ du_nodes }} --api_port 8767"
+        > /tmp/kpm_bridge.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Launch the RC actuator
+      ansible.builtin.shell: >-
+        setsid nohup docker exec python_xapp_runner sh -c
+        "cd /opt/xApps && exec python3 -u rc_actuator_xapp.py --api_port 8768 --rmr_port 4560"
+        > /tmp/rc_actuator.log 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Wait for the bridge to complete its subscriptions
+      ansible.builtin.shell: grep -c 'Successfully subscribed' /tmp/kpm_bridge.log || true
+      register: subs
+      until: subs.stdout | trim | int >= 5
+      retries: 12
+      delay: 3
+      changed_when: false
+      # Non-fatal: submgr sometimes 503s a subset; report but let the KPM
+      # sample check below be the real gate.
+      failed_when: false
+
+    - name: Confirm the actuator answers /status
+      ansible.builtin.shell: docker exec python_xapp_runner curl -s -m4 http://localhost:8768/status || true
+      register: act_status
+      until: "'enforced' in act_status.stdout"
+      retries: 6
+      delay: 3
+      changed_when: false
+      failed_when: "'enforced' not in act_status.stdout"
+
+    - name: Generate a brief UL burst from ue1 so KPM shows non-zero
+      ansible.builtin.shell: >-
+        ip netns exec ue1 timeout 12 hping3 --udp -p 9999 -i u300 -c 40000 10.55.0.100
+        >/dev/null 2>&1; true
+      delegate_to: ue
+      changed_when: false
+
+    - name: Confirm /kpm reports live samples (KPM pipeline works end-to-end)
+      ansible.builtin.shell: >-
+        docker exec python_xapp_runner curl -s -m4 http://localhost:8767/kpm 2>/dev/null |
+        python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('samples',[])))"
+      register: kpm_samples
+      until: kpm_samples.stdout | trim | int > 0
+      retries: 8
+      delay: 3
+      changed_when: false
+      failed_when: kpm_samples.stdout | trim | int == 0
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "Bridge subscriptions: {{ subs.stdout | trim }}/5; /kpm samples: {{ kpm_samples.stdout | trim }}; actuator /status OK."
+
+######################################################################
+# Play 8 -- final validation summary
+######################################################################
+- name: Final validation summary
+  hosts: ric_flexric
+  gather_facts: false
+  tags: [validate]
+  tasks:
+    - name: Count E2 nodes e2mgr currently reports CONNECTED (informational)
+      ansible.builtin.shell: >-
+        docker exec ric_e2mgr curl -s -m4 http://localhost:3800/v1/nodeb/states 2>/dev/null |
+        python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for n in d if n['connectionStatus']=='CONNECTED'))" 2>/dev/null || echo '?'
+      register: e2_count
+      changed_when: false
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "e2mgr CONNECTED nodes: {{ e2_count.stdout | trim }} (expect ~9; may lag -- DU logs above are authoritative)"
+          - "Per-UE attach + victim reachability were validated in the UE plays above."
+          - "Mobile domain reconnection complete."

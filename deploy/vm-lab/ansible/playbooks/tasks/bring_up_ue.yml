@@ -1,0 +1,129 @@
+---
+# bring_up_ue.yml -- attach ONE srsue and prove it, with the automatic
+# anti-RACH retry this lab needs. Included per-UE from
+# reconnect_mobile_domain.yml with loop_var `ue`:
+#   ue.num    -- 1..5
+#   ue.netns  -- ue1..ue5 (also the systemd unit name)
+#   ue.config -- /etc/srsran/<config>
+#   ue.du_host-- inventory hostname of this UE's DU (for the retry)
+#
+# Runs on the UE's host (ue / ue2), become=true. srsue is launched with
+# systemd-run (survives the SSH session and is easy to stop/relaunch);
+# the ZMQ RACH is non-deterministic, so if the first attach doesn't
+# complete we restart the paired DU with the UE already listening (the
+# one trick that reliably clears a stuck REQ/REP handshake) and try once
+# more. The default route is added dev-only -- `via <gw>` fails on the
+# POINTOPOINT/NOARP tun_srsue and leaves the UE with no working route.
+
+- name: "{{ ue.netns }} | stop any stale instance"
+  ansible.builtin.shell: >-
+    systemctl stop {{ ue.netns }} 2>/dev/null;
+    systemctl reset-failed {{ ue.netns }} 2>/dev/null; true
+  changed_when: false
+
+- name: "{{ ue.netns }} | mark launch time"
+  ansible.builtin.command: date +%s
+  register: ue_t0
+  changed_when: false
+
+- name: "{{ ue.netns }} | launch srsue (systemd-run, absolute path)"
+  ansible.builtin.shell: >-
+    systemd-run --unit={{ ue.netns }} --collect
+    /usr/local/bin/srsue /etc/srsran/{{ ue.config }}
+  changed_when: true
+
+- name: "{{ ue.netns }} | poll for PDU Session Establishment (attempt 1)"
+  ansible.builtin.shell: >-
+    journalctl -u {{ ue.netns }} --no-pager --since "@{{ ue_t0.stdout }}" |
+    grep -c 'PDU Session Establishment successful' || true
+  register: pdu1
+  until: pdu1.stdout | trim | int > 0
+  retries: 9
+  delay: 2
+  changed_when: false
+  failed_when: false
+
+# ---- RACH retry: restart the paired DU with this UE already listening ----
+- name: "{{ ue.netns }} | RACH retry (restart DU {{ ue.du_host }} + relaunch UE)"
+  when: pdu1.stdout | trim | int == 0
+  block:
+    - name: "{{ ue.netns }} | restart the paired DU (SCTP drain + relaunch)"
+      ansible.builtin.shell: >-
+        pkill -9 -f '^srsdu -c' 2>/dev/null;
+        for i in $(seq 1 25); do
+          [ "$(ss -S 2>/dev/null | grep -c 36421)" = "0" ] && break; sleep 1;
+        done;
+        rm -f /tmp/du.log /tmp/du_stdout.log;
+        setsid nohup srsdu -c /etc/srsran/du_split.yaml
+        > /tmp/du_stdout.log 2>&1 < /dev/null &
+      delegate_to: "{{ ue.du_host }}"
+      changed_when: true
+
+    - name: "{{ ue.netns }} | wait for the DU cell to come back"
+      ansible.builtin.wait_for: { timeout: 10 }
+      delegate_to: localhost
+
+    - name: "{{ ue.netns }} | relaunch srsue against the fresh DU"
+      ansible.builtin.shell: >-
+        systemctl stop {{ ue.netns }} 2>/dev/null;
+        systemctl reset-failed {{ ue.netns }} 2>/dev/null;
+        sleep 2;
+        systemd-run --unit={{ ue.netns }} --collect
+        /usr/local/bin/srsue /etc/srsran/{{ ue.config }}
+      changed_when: true
+
+    - name: "{{ ue.netns }} | mark retry launch time"
+      ansible.builtin.command: date +%s
+      register: ue_t1
+      changed_when: false
+
+    - name: "{{ ue.netns }} | poll for PDU Session Establishment (attempt 2)"
+      ansible.builtin.shell: >-
+        journalctl -u {{ ue.netns }} --no-pager --since "@{{ ue_t1.stdout }}" |
+        grep -c 'PDU Session Establishment successful' || true
+      register: pdu2
+      until: pdu2.stdout | trim | int > 0
+      retries: 10
+      delay: 2
+      changed_when: false
+      failed_when: false
+
+- name: "{{ ue.netns }} | record attach result"
+  ansible.builtin.set_fact:
+    ue_attached: "{{ (pdu1.stdout | trim | int > 0) or (pdu2.stdout | default('0') | trim | int > 0) }}"
+
+- name: "{{ ue.netns }} | FAIL if it never attached (re-run the playbook)"
+  ansible.builtin.fail:
+    msg: >-
+      {{ ue.netns }} did not complete PDU establishment after 2 attempts
+      (including a DU restart). This is the known non-deterministic ZMQ
+      RACH -- re-run the playbook. If it persists, power-cycle
+      {{ ue.du_host }} + this UE host together (govc) and retry.
+  when: not (ue_attached | bool)
+
+- name: "{{ ue.netns }} | add default route (dev-only; `via` breaks on the tun)"
+  ansible.builtin.shell: >-
+    ip netns exec {{ ue.netns }} ip route add default dev tun_srsue 2>/dev/null; true
+  changed_when: true
+
+- name: "{{ ue.netns }} | read assigned IP"
+  ansible.builtin.shell: >-
+    ip netns exec {{ ue.netns }} ip -4 -o addr show tun_srsue |
+    awk '{print $4}' | cut -d/ -f1
+  register: ue_ip
+  changed_when: false
+
+- name: "{{ ue.netns }} | [victim] ping the victim (data-plane check)"
+  ansible.builtin.shell: >-
+    ip netns exec {{ ue.netns }} ping -c 3 -W 3 {{ victim_ip | default('10.55.0.100') }}
+  register: ue_ping
+  changed_when: false
+  failed_when: false
+  tags: [victim]
+
+- name: "{{ ue.netns }} | report"
+  ansible.builtin.debug:
+    msg: >-
+      {{ ue.netns }} attached, IP={{ ue_ip.stdout | trim }} --
+      victim: {{ (ue_ping.stdout | regex_search('[0-9]+% packet loss')) | default('not tested (pe/victim down?)') }}
+  tags: [always]
