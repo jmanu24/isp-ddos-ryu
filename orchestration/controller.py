@@ -1422,6 +1422,24 @@ class OrchestrationController:
                     e.domain == domain and e.src_ip == src_ip for e in c.events
                 )
 
+                # Recovery hysteresis (mobile only): a UE that is still
+                # reporting but whose UL throughput has fallen below the
+                # recovery threshold (well under the activation one) counts
+                # as recovered, so the release streak advances even before
+                # it stops entirely -- the lower edge of the hysteresis
+                # band (see settings.MOBILE_KPM_THPUL_RECOVERY_KBPS). Scoped
+                # to mobile+KPM so broadband/bgp keep pure presence-based
+                # recovery (they carry no per-source KPM).
+                if still_present and domain == "mobile" and c is not None:
+                    ue_thp_ul = max(
+                        (ev.kpm.get("DRB.UEThpUl", 0) or 0)
+                        for ev in c.events
+                        if ev.domain == "mobile" and ev.src_ip == src_ip and ev.kpm
+                    ) if any(ev.domain == "mobile" and ev.src_ip == src_ip and ev.kpm
+                             for ev in c.events) else None
+                    if ue_thp_ul is not None and ue_thp_ul < settings.MOBILE_KPM_THPUL_RECOVERY_KBPS:
+                        still_present = False
+
                 if still_present:
                     self._mobile_below_threshold_streak[key] = 0
                     continue

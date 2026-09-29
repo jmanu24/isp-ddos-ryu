@@ -99,6 +99,13 @@ class DDoSDetectionEngine:
         self._recent_flood_pairs: Dict[Tuple[str, str], int] = {}
         self._recent_flood_dsts: Dict[str, int] = {}
 
+        # src_ip -> consecutive cycles a mobile UE has been over the KPM
+        # activation thresholds. The activation half of the mitigation
+        # hysteresis: a UE is only flagged once this reaches
+        # MOBILE_KPM_ACTIVATION_CYCLES, so a single-cycle PRB/throughput
+        # spike never throttles a UE. Reset the moment it drops back under.
+        self._mobile_kpm_abuse_streak: Dict[str, int] = {}
+
     def analyze(self, correlated: List[CorrelatedEvent]) -> List[DetectionResult]:
         """
         Analyze a list of CorrelatedEvents and return detected attacks.
@@ -501,10 +508,21 @@ class DDoSDetectionEngine:
                 continue
             prb_ul = e.kpm.get("RRU.PrbUsedUl", 0) or 0
             thp_ul = e.kpm.get("DRB.UEThpUl", 0) or 0
-            if (prb_ul >= settings.MOBILE_KPM_PRB_UL_THRESHOLD
-                    and thp_ul >= settings.MOBILE_KPM_THPUL_KBPS_THRESHOLD):
-                attack = True
-                best_score = max(best_score, thp_ul / settings.MOBILE_KPM_THPUL_KBPS_THRESHOLD)
+            over_thresholds = (prb_ul >= settings.MOBILE_KPM_PRB_UL_THRESHOLD
+                               and thp_ul >= settings.MOBILE_KPM_THPUL_KBPS_THRESHOLD)
+            # Activation hysteresis: require N consecutive over-threshold
+            # reports for this UE before flagging it, so a one-cycle spike
+            # doesn't throttle. Streak is keyed per source and reset the
+            # moment the UE drops back under either threshold.
+            if over_thresholds:
+                streak = self._mobile_kpm_abuse_streak.get(e.src_ip, 0) + 1
+                self._mobile_kpm_abuse_streak[e.src_ip] = streak
+                if streak >= settings.MOBILE_KPM_ACTIVATION_CYCLES:
+                    attack = True
+                    best_score = max(best_score,
+                                     thp_ul / settings.MOBILE_KPM_THPUL_KBPS_THRESHOLD)
+            else:
+                self._mobile_kpm_abuse_streak.pop(e.src_ip, None)
         return attack, best_score
 
     def _build_result(

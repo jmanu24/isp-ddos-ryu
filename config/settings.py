@@ -143,6 +143,19 @@ LOW_SLOW_MOBILE_MIN_CYCLES = 20    # consecutive cycles that count must hold bef
 MOBILE_KPM_PRB_UL_THRESHOLD = 45          # RRU.PrbUsedUl (of ~50 max) -- near-saturation
 MOBILE_KPM_THPUL_KBPS_THRESHOLD = 500     # DRB.UEThpUl kbps -- well above normal UL app rates
 
+# Hysteresis for the mobile mitigation closed loop (avoids the throttle/
+# release oscillation a single threshold causes). ACTIVATION: a UE must
+# stay above the KPM thresholds above for this many CONSECUTIVE KPM
+# reports before it is flagged/penalized -- filters a one-cycle PRB/thp
+# spike. RECOVERY (the lower band edge): the penalty is only lifted once
+# the UE's UL throughput stays below the recovery threshold (well under
+# the activation one) -- the gap between the two is the hysteresis band.
+# In this lab, exit is additionally gated by presence (the UE stopping
+# telemetry toward the target -- see orchestration/controller.py's
+# check_mobile_unblocks), which is stricter than the recovery threshold.
+MOBILE_KPM_ACTIVATION_CYCLES = 3          # consecutive over-threshold reports before throttling
+MOBILE_KPM_THPUL_RECOVERY_KBPS = 200      # UEThpUl kbps below which recovery counting starts
+
 # Domains whose mitigation is inherently per-source (one quarantine action
 # per attacking UE/session, not one destination-wide network lever the way
 # an OpenFlow drop rule is) -- DDoSDetectionEngine.analyze_low_slow_mobile
