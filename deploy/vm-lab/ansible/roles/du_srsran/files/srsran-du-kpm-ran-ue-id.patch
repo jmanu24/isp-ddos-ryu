@@ -1,0 +1,72 @@
+# Populate the E2SM-KPM gNB-DU UEID's optional ran_ue_id so the RIC can
+# tell one DU's UE from another's. Confirmed on a real run: srsRAN reports
+# gnb_cu_ue_f1ap_id = 0 for EVERY UE (it is allocated per-DU-F1-interface
+# and this lab runs one UE per DU), and xapp_kpm_moni does not print the
+# originating E2 node -- so a DU KPM indication carried no per-UE key at
+# all and its UL radio metrics (DRB.UEThpUl, RRU.Prb*Ul, delays) could not
+# be attributed to any UE. The DU has no NGAP context (no real RAN-UE-NGAP-
+# ID), but it DOES know its own gnb_du_id (e2ap_configuration.gnb_du_id),
+# so we pack (gnb_du_id << 20 | gnb_cu_ue_f1ap_id) into the 8-byte ran_ue_id
+# octet string -- globally unique across DUs, decodable by the KPM sidecar
+# (oran_bridge/kpm_telemetry_api.py) as gnb_du_id = ran_ue_id >> 44 once
+# fixed_octstring::from_number's byte layout is accounted for. Not in
+# upstream srsRAN nor OCUDU (both set ran_ue_id_present = false). strip: 1.
+#
+diff --git a/lib/e2/common/e2_du_factory.cpp b/lib/e2/common/e2_du_factory.cpp
+index 139967dedf..343a7b1909 100644
+--- a/lib/e2/common/e2_du_factory.cpp
++++ b/lib/e2/common/e2_du_factory.cpp
+@@ -56,6 +56,8 @@ std::unique_ptr<e2_agent> srsran::create_e2_du_agent(const e2ap_configuration&
+ 
+   // E2SM-KPM
+   auto e2sm_kpm_meas_provider = std::make_unique<e2sm_kpm_du_meas_provider_impl>(*f1ap_ue_id_translator_);
++  e2sm_kpm_meas_provider->du_ue_id_base =
++      e2ap_cfg_.gnb_du_id.has_value() ? static_cast<uint64_t>(e2ap_cfg_.gnb_du_id.value()) : 0;
+   std::unique_ptr<e2sm_kpm_asn1_packer> e2sm_kpm_packer =
+       std::make_unique<e2sm_kpm_asn1_packer>(*e2sm_kpm_meas_provider);
+   std::unique_ptr<e2sm_kpm_impl> e2sm_kpm_iface =
+diff --git a/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.cpp b/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.cpp
+index f97c889059..6ad38d15f1 100644
+--- a/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.cpp
++++ b/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.cpp
+@@ -260,7 +260,10 @@ bool e2sm_kpm_du_meas_provider_impl::get_ues_matching_test_conditions(
+     ue_id_c        ueid;
+     ue_id_gnb_du_s ueid_gnb_du{};
+     ueid_gnb_du.gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id.value());
+-    ueid_gnb_du.ran_ue_id_present = false;
++    // Per-UE-unique id the RIC can key on: gnb_du_id high, f1ap id low.
++    ueid_gnb_du.ran_ue_id_present = true;
++    ueid_gnb_du.ran_ue_id.from_number((du_ue_id_base << 20) |
++        (gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id.value()) & 0xfffffULL));
+     ueid.set_gnb_du_ue_id()       = ueid_gnb_du;
+     ues.push_back(ueid);
+   }
+@@ -282,7 +285,10 @@ bool e2sm_kpm_du_meas_provider_impl::get_ues_matching_test_conditions(
+     ue_id_c        ueid;
+     ue_id_gnb_du_s ueid_gnb_du{};
+     ueid_gnb_du.gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id.value());
+-    ueid_gnb_du.ran_ue_id_present = false;
++    // Per-UE-unique id the RIC can key on: gnb_du_id high, f1ap id low.
++    ueid_gnb_du.ran_ue_id_present = true;
++    ueid_gnb_du.ran_ue_id.from_number((du_ue_id_base << 20) |
++        (gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id.value()) & 0xfffffULL));
+     ueid.set_gnb_du_ue_id()       = ueid_gnb_du;
+     ues.push_back(ueid);
+   }
+diff --git a/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.h b/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.h
+index 999d7d1244..2888077178 100644
+--- a/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.h
++++ b/lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.h
+@@ -122,6 +122,12 @@ private:
+   metric_meas_getter_func_t get_drb_ul_rlc_sdu_latency;
+   metric_meas_getter_func_t get_prach_cell_count;
+ 
++public:
++  // Per-DU base for the E2SM-KPM gNB-DU UEID ran_ue_id -- lets the RIC
++  // tell one UE from another when gnb_cu_ue_f1ap_id is per-DU (0 here).
++  uint64_t du_ue_id_base = 0;
++
++private:
+   srslog::basic_logger&                              logger;
+   srs_du::f1ap_ue_id_translator&                     f1ap_ue_id_provider;
+   unsigned                                           nof_cell_prbs;

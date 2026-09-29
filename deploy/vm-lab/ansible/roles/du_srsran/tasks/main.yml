@@ -64,6 +64,14 @@
     basedir: /opt/srsRAN_Project
     strip: 1
 
+- name: Populate the E2SM-KPM gNB-DU UEID ran_ue_id with this DU's gnb_du_id
+        (so the RIC/KPM sidecar can attribute per-UE UL radio metrics -- see
+        the patch header and oran_bridge/kpm_telemetry_api.py)
+  ansible.builtin.patch:
+    src: srsran-du-kpm-ran-ue-id.patch
+    basedir: /opt/srsRAN_Project
+    strip: 1
+
 # TRIED AND REVERTED (both of these, in sequence) -- kept as a documented
 # dead end, NOT reapplied. See docs/ran-testing.md if that file gets a
 # write-up of this; otherwise this comment is the only record.
