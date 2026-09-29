@@ -482,3 +482,16 @@ MOBILE_DIST_TELEMETRY_API_URL = (
 # call to suscriptor -- a slow/unreachable core5g shouldn't stall the
 # whole pipeline cycle (COLLECT_INTERVAL, nominally 0.5s).
 MOBILE_DIST_TELEMETRY_API_TIMEOUT_S = 2
+
+# E2SM-RC mitigation actuator (oran_bridge/rc_actuator_xapp.py, running in
+# the oran-sc-ric python_xapp_runner on the RIC). apply_mitigation() POSTs
+# each block/unblock command here so it becomes a real RIC Control Request;
+# empty string disables the live push (the JSONL queue is still written, so
+# the simulator/audit path is unaffected). Kept short like the telemetry
+# timeout so an unreachable RIC never stalls the pipeline cycle.
+MOBILE_DIST_RIC_IP = "10.10.0.4"
+MOBILE_RC_ACTUATOR_PORT = 8768
+MOBILE_RC_ACTUATOR_URL = (
+    f"http://{MOBILE_DIST_RIC_IP}:{MOBILE_RC_ACTUATOR_PORT}/rc"
+)
+MOBILE_RC_ACTUATOR_TIMEOUT_S = 2

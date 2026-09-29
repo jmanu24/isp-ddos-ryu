@@ -1422,23 +1422,42 @@ class OrchestrationController:
                     e.domain == domain and e.src_ip == src_ip for e in c.events
                 )
 
-                # Recovery hysteresis (mobile only): a UE that is still
-                # reporting but whose UL throughput has fallen below the
-                # recovery threshold (well under the activation one) counts
-                # as recovered, so the release streak advances even before
-                # it stops entirely -- the lower edge of the hysteresis
-                # band (see settings.MOBILE_KPM_THPUL_RECOVERY_KBPS). Scoped
-                # to mobile+KPM so broadband/bgp keep pure presence-based
-                # recovery (they carry no per-source KPM).
-                if still_present and domain == "mobile" and c is not None:
-                    ue_thp_ul = max(
-                        (ev.kpm.get("DRB.UEThpUl", 0) or 0)
-                        for ev in c.events
-                        if ev.domain == "mobile" and ev.src_ip == src_ip and ev.kpm
-                    ) if any(ev.domain == "mobile" and ev.src_ip == src_ip and ev.kpm
-                             for ev in c.events) else None
-                    if ue_thp_ul is not None and ue_thp_ul < settings.MOBILE_KPM_THPUL_RECOVERY_KBPS:
-                        still_present = False
+                # Recovery hysteresis (mobile): the recovery signal is the
+                # UE's UL throughput, and it must be FLOW-INDEPENDENT. A real
+                # E2SM-RC throttle drives the attacker's UL to ~0, which also
+                # kills its conntrack flow, so the UE vanishes from c.events
+                # entirely -- presence alone would then just wait out
+                # UNBLOCK_CONFIRM_CYCLES of absence (and never see the KPM
+                # that proves the throttle worked). The bridge keeps
+                # reporting this UE's radio KPM every period regardless, and
+                # ue_telemetry_api joins it onto the persistent session, so
+                # the mobile adapter can hand us the latest UL throughput by
+                # src_ip even with no flow. Use that as the authority when
+                # available: UL below the recovery threshold == recovered
+                # (throttle working / attack stopped), UL at/above it ==
+                # still attacking -- both independent of flow presence. Only
+                # if no KPM is available at all do we fall back to the pure
+                # presence signal (and broadband/bgp, carrying no per-source
+                # KPM, always use presence). See
+                # settings.MOBILE_KPM_THPUL_RECOVERY_KBPS.
+                if domain == "mobile":
+                    ue_thp_ul = None
+                    adapter = self._adapters.get("mobile")
+                    if adapter is not None and hasattr(adapter, "latest_ul_thp_ul"):
+                        ue_thp_ul = adapter.latest_ul_thp_ul(src_ip)
+                    if ue_thp_ul is None and c is not None:
+                        flow_thps = [
+                            ev.kpm.get("DRB.UEThpUl")
+                            for ev in c.events
+                            if ev.domain == "mobile" and ev.src_ip == src_ip
+                            and ev.kpm and ev.kpm.get("DRB.UEThpUl") is not None
+                        ]
+                        if flow_thps:
+                            ue_thp_ul = max(flow_thps)
+                    if ue_thp_ul is not None:
+                        still_present = (
+                            ue_thp_ul >= settings.MOBILE_KPM_THPUL_RECOVERY_KBPS
+                        )
 
                 if still_present:
                     self._mobile_below_threshold_streak[key] = 0

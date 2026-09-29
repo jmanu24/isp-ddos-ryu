@@ -49,15 +49,19 @@ class MobileNetworkAdapter(DomainAdapter):
     already joins the two halves above server-side, so each row it
     returns maps directly onto one TelemetryEvent.
 
-    Mitigation (apply_mitigation()): the actual E2SM-RC CONTROL message
-    that would tell the Near-RT RIC to throttle/deny RAN resources to a
-    UE has NOT been investigated or implemented yet in this proposal --
-    only the real KPM/E2 telemetry path has been validated end-to-end so
-    far. Until that follow-up investigation happens, this writes the
-    decided action to a JSONL command queue (one line per command) that
-    a future RC xApp bridge is meant to consume and translate into a
-    real E2AP RIC CONTROL REQUEST. This is a deliberate, explicit
-    integration seam, not a placeholder pretending to be a real actuator.
+    Mitigation (apply_mitigation()): the decided block/unblock action is
+    delivered to the Near-RT RIC as a real E2SM-RC Control Request by
+    oran_bridge/rc_actuator_xapp.py (Style 2 / Action 6, slice-level PRB
+    quota on the DU E2 node serving the attacking UE). This adapter keeps
+    two delivery paths, both fed the same command:
+      - a live HTTP POST to that actuator's /rc endpoint
+        (settings.MOBILE_RC_ACTUATOR_URL) -- best-effort, short timeout,
+        so an unreachable RIC never stalls the pipeline cycle;
+      - an append to a JSONL command queue (one line per command), which
+        the offline simulator/analysis consumers tail and which doubles
+        as an audit log.
+    The POST is skipped (queue-only) when MOBILE_RC_ACTUATOR_URL is empty,
+    so this stays usable in environments with no live RIC.
     """
 
     domain_name = "mobile"
@@ -66,10 +70,17 @@ class MobileNetworkAdapter(DomainAdapter):
         self,
         telemetry_api_url: str = None,
         rc_command_queue_path: str = DEFAULT_RC_COMMAND_QUEUE_PATH,
+        rc_actuator_url: str = None,
         logger: Optional[logging.Logger] = None,
     ):
         self.telemetry_api_url = telemetry_api_url or settings.MOBILE_DIST_TELEMETRY_API_URL
         self.rc_command_queue_path = rc_command_queue_path
+        # None -> take the configured default; pass "" explicitly to force
+        # queue-only (no live RIC push).
+        self.rc_actuator_url = (
+            settings.MOBILE_RC_ACTUATOR_URL if rc_actuator_url is None
+            else rc_actuator_url
+        )
         # Passed down from the Ryu app (its own self.logger) so every log
         # line across domains shares the same name/format -- defaults to
         # a plain logging.Logger so this stays usable standalone (tests,
@@ -88,6 +99,18 @@ class MobileNetworkAdapter(DomainAdapter):
         # subscriber, since MitigationAction only ever carries the IP
         # DDoSDetectionEngine classified, never the imsi itself.
         self._imsi_by_ip: Dict[str, str] = {}
+
+        # ip -> latest UL KPM dict (DRB.UEThpUl etc), refreshed from the
+        # telemetry "sessions" list on every collect(). Unlike the per-flow
+        # KPM (only present while a conntrack flow exists), this is
+        # flow-independent: the bridge reports each UE's radio KPM every
+        # period regardless of whether the UE is passing IP traffic, and
+        # ue_telemetry_api joins it onto the persistent session by imsi. It
+        # is what lets recovery detection see a UE's UL collapse to ~0 after
+        # a real RC throttle (which kills the conntrack flow, so the UE
+        # vanishes from the per-flow view entirely) -- see
+        # OrchestrationController.check_mobile_unblocks.
+        self._ul_kpm_by_ip: Dict[str, dict] = {}
 
     def is_connected(self) -> bool:
         try:
@@ -130,12 +153,40 @@ class MobileNetworkAdapter(DomainAdapter):
         if not connected:
             return []
 
+        # Refresh the flow-independent UL-KPM view from the session list
+        # (each session carries the UE's imsi + latest radio KPM even with
+        # no active flow). Rebuilt each cycle so a UE that stops reporting
+        # sessions drops out. Also seed _imsi_by_ip from sessions so a src
+        # can be resolved to its imsi even in a cycle where it has no flow.
+        ul_kpm_by_ip: Dict[str, dict] = {}
+        for sess in body.get("sessions", []):
+            ip = sess.get("ip")
+            if not ip:
+                continue
+            ul_kpm_by_ip[ip] = sess.get("kpm") or {}
+            if sess.get("imsi"):
+                self._imsi_by_ip[ip] = sess["imsi"]
+        self._ul_kpm_by_ip = ul_kpm_by_ip
+
         events: List[TelemetryEvent] = []
         for row in body.get("flows", []):
             event = self._row_to_event(row)
             if event is not None:
                 events.append(event)
         return events
+
+    def latest_ul_thp_ul(self, src_ip: str) -> Optional[float]:
+        """Latest flow-independent UL throughput (DRB.UEThpUl, kbps) this
+        UE reported via its session KPM, or None if no KPM is available for
+        it (bridge down, or the UE has no live session). Used by recovery
+        detection to release a throttled UE once its UL is confirmed low,
+        even though the throttle has already removed it from the per-flow
+        telemetry."""
+        kpm = self._ul_kpm_by_ip.get(src_ip)
+        if not kpm:
+            return None
+        val = kpm.get("DRB.UEThpUl")
+        return None if val is None else float(val)
 
     def _row_to_event(self, row: dict) -> Optional[TelemetryEvent]:
         src_ip = row.get("src_ip")
@@ -188,10 +239,33 @@ class MobileNetworkAdapter(DomainAdapter):
         with open(self.rc_command_queue_path, "a") as f:
             f.write(json.dumps(command) + "\n")
 
+        # Live delivery to the RIC's E2SM-RC actuator. Best-effort: a failed
+        # or slow POST is logged but never fails the mitigation or stalls the
+        # pipeline (the command is already durably queued above, and the
+        # orchestrator's hysteresis will re-issue on the next cycle if the UE
+        # keeps attacking). Skipped entirely when no actuator URL is set.
+        if self.rc_actuator_url:
+            self._push_to_actuator(command)
+
         # No print here -- OrchestrationController already reports this
         # action through the same MITIGATION dashboard/logger line every
         # other domain's actions go through (ryu_controller_2.py's
         # _run_pipeline), so a second, differently-formatted message here
-        # would just be noise. Real E2SM-RC delivery to the Near-RT RIC
-        # is not yet implemented -- see this adapter's docstring.
+        # would just be noise.
         return True
+
+    def _push_to_actuator(self, command: dict) -> None:
+        data = json.dumps(command).encode()
+        req = urllib.request.Request(
+            self.rc_actuator_url, data=data, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(
+                req, timeout=settings.MOBILE_RC_ACTUATOR_TIMEOUT_S).close()
+        except (urllib.error.URLError, OSError) as exc:
+            self._logger.warning(log_line(
+                "mobile", "MITIGATION", "RC_PUSH_FAILED",
+                f"imsi={command.get('imsi')} action={command.get('action')} "
+                f"url={self.rc_actuator_url} err={exc}",
+            ))
