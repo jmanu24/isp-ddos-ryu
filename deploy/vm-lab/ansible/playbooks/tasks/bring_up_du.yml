@@ -1,0 +1,62 @@
+---
+# bring_up_du.yml -- (re)launch srsdu on the current DU host and validate by
+# the DU's OWN log (E2 setup + RC ran-function 3 + no F1 failure), which is
+# authoritative here (e2mgr's connectionStatus is frequently stale). Runs ON
+# the DU host (become=true). Its paired CU must already be up (strict order).
+
+- name: "{{ inventory_hostname }} (DU) | kill any stale srsdu"
+  ansible.builtin.shell: pkill -9 -f '^srsdu -c' 2>/dev/null; true
+  changed_when: false
+
+- name: "{{ inventory_hostname }} (DU) | drain half-open E2 SCTP toward the RIC"
+  ansible.builtin.shell: >-
+    for i in $(seq 1 25); do
+      [ "$(ss -S 2>/dev/null | grep -c 36421)" = "0" ] && break; sleep 1;
+    done; true
+  changed_when: false
+
+- name: "{{ inventory_hostname }} (DU) | confirm e2sm_rc is enabled (RC actuator needs ran-func 3)"
+  ansible.builtin.shell: grep -qE '^\s*e2sm_rc_enabled:\s*true' /etc/srsran/du_split.yaml && echo ok || echo missing
+  register: rc_flag
+  changed_when: false
+  failed_when: "'ok' not in rc_flag.stdout"
+
+- name: "{{ inventory_hostname }} (DU) | launch srsdu"
+  ansible.builtin.shell: >-
+    rm -f /tmp/du.log /tmp/du_stdout.log &&
+    setsid nohup srsdu -c /etc/srsran/du_split.yaml
+    > /tmp/du_stdout.log 2>&1 < /dev/null &
+  changed_when: true
+
+- name: "{{ inventory_hostname }} (DU) | give E2/F1 setup a moment"
+  ansible.builtin.wait_for: { timeout: 8 }
+  delegate_to: localhost
+  become: false
+
+- name: "{{ inventory_hostname }} (DU) | confirm srsdu is alive"
+  ansible.builtin.shell: pgrep -f '^srsdu -c'
+  register: du_pid
+  changed_when: false
+  failed_when: du_pid.stdout == ""
+
+- name: "{{ inventory_hostname }} (DU) | confirm F1 Setup did NOT fail"
+  ansible.builtin.shell: grep -c 'F1 Setup Failure' /tmp/du.log 2>/dev/null || true
+  register: f1_fail
+  changed_when: false
+  failed_when: f1_fail.stdout | trim | int > 0
+
+- name: "{{ inventory_hostname }} (DU) | confirm E2 setup completed AND RC (ran-func 3) advertised"
+  ansible.builtin.shell: >-
+    grep -q 'E2 Setup procedure successful' /tmp/du.log &&
+    grep -q 'Added supported RAN function with id 3' /tmp/du.log &&
+    echo ok || true
+  register: du_e2
+  until: "'ok' in du_e2.stdout"
+  retries: 8
+  delay: 3
+  changed_when: false
+  failed_when: "'ok' not in du_e2.stdout"
+
+- name: "{{ inventory_hostname }} (DU) | report"
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: srsdu up, F1 OK, E2 setup OK, RC (ran-func 3) advertised."

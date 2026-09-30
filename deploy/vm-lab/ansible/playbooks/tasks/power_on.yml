@@ -1,0 +1,31 @@
+---
+# power_on.yml -- power ON one VM via govc (from the control node) and wait
+# for its SSH to answer, so the play that includes this can then run tasks
+# ON that VM. Idempotent: powering on an already-running VM is a no-op, and
+# the SSH wait returns immediately if it is already up (so it is safe to
+# include even for a UE that shares an already-powered host).
+#
+# Vars:
+#   pon_vm  -- govc VM name (e.g. ran, du, ue)
+#   pon_ip  -- that VM's management IP (for the SSH readiness wait)
+#
+# All tasks run on the control node (localhost), never on the -- possibly
+# still-off -- target, hence delegate_to: localhost + become: false (govc
+# and ~/.govc_env belong to the invoking user, not root).
+
+- name: "power_on {{ pon_vm }} | govc power-on"
+  ansible.builtin.shell: |
+    set -a; . ~/.govc_env; set +a
+    govc vm.power -on=true {{ pon_vm }} >/dev/null 2>&1 || true
+  delegate_to: localhost
+  become: false
+  changed_when: true
+
+- name: "power_on {{ pon_vm }} | wait for SSH ({{ pon_ip }})"
+  ansible.builtin.wait_for:
+    host: "{{ pon_ip }}"
+    port: 22
+    timeout: 240
+    delay: 3
+  delegate_to: localhost
+  become: false

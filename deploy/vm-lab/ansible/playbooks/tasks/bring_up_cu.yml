@@ -1,0 +1,53 @@
+---
+# bring_up_cu.yml -- (re)launch srscu on the current CU host and validate.
+# Runs ON the CU host (become=true inherited). A CU MUST be fresh before its
+# DUs or their F1 Setup is rejected "message-not-compatible-with-receiver-
+# state" and the cell never broadcasts SSB.
+
+- name: "{{ inventory_hostname }} (CU) | kill any stale srscu"
+  ansible.builtin.shell: pkill -9 -f '^srscu -c' 2>/dev/null; true
+  changed_when: false
+
+- name: "{{ inventory_hostname }} (CU) | drain half-open E2 SCTP toward the RIC"
+  ansible.builtin.shell: >-
+    for i in $(seq 1 25); do
+      [ "$(ss -S 2>/dev/null | grep -c 36421)" = "0" ] && break; sleep 1;
+    done; true
+  changed_when: false
+
+- name: "{{ inventory_hostname }} (CU) | launch srscu"
+  ansible.builtin.shell: >-
+    rm -f /tmp/cu.log /tmp/cu_stdout.log &&
+    setsid nohup srscu -c /etc/srsran/cu_split.yaml
+    > /tmp/cu_stdout.log 2>&1 < /dev/null &
+  changed_when: true
+
+- name: "{{ inventory_hostname }} (CU) | give NGAP + E2 setup a moment"
+  ansible.builtin.wait_for: { timeout: 8 }
+  delegate_to: localhost
+  become: false
+
+- name: "{{ inventory_hostname }} (CU) | confirm srscu is still alive"
+  ansible.builtin.shell: pgrep -f '^srscu -c'
+  register: cu_pid
+  changed_when: false
+  failed_when: cu_pid.stdout == ""
+
+- name: "{{ inventory_hostname }} (CU) | confirm E2 setup completed (own log)"
+  ansible.builtin.shell: >-
+    grep -c 'E2 Setup procedure successful' /tmp/cu.log 2>/dev/null || true
+  register: cu_e2
+  until: cu_e2.stdout | trim | int > 0
+  retries: 8
+  delay: 3
+  changed_when: false
+  # Non-fatal: some srsRAN builds log the CU's own E2 setup only at debug.
+  # The DU-side E2 checks are the hard gate; the CU's NGAP is proven by the
+  # DUs' F1 + the UEs attaching downstream.
+  failed_when: false
+
+- name: "{{ inventory_hostname }} (CU) | report"
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: srscu up{{ ' + E2 setup OK'
+      if (cu_e2.stdout | trim | int > 0) else ' (E2 setup line not in log; verify downstream)' }}.
