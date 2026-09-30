@@ -30,7 +30,7 @@ from webtool.inventory import BRINGUP_STEPS, NODES, to_topology_dict  # noqa: E4
 from webtool.ansible_runner import RECONNECT_PLAYBOOK  # noqa: E402
 from webtool.state import vmlab_state  # noqa: E402
 
-VMLAB_WEBTOOL_PORT = 5060
+VMLAB_WEBTOOL_PORT = 8070
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")

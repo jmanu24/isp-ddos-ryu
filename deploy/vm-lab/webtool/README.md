@@ -3,7 +3,7 @@
 Panel web para gestionar el laboratorio distribuido de 16 VMs (`deploy/vm-lab`),
 equivalente al webtool del laboratorio Mininet (`webtool/` en la raiz del repo)
 pero para VMs reales sobre ESXi. Proceso y puerto totalmente separados del
-webtool de Mininet (puerto **5060**, no 5050) -- no comparten codigo.
+webtool de Mininet (puerto **8070**, no 5050) -- no comparten codigo.
 
 ## Requisitos
 
@@ -22,7 +22,7 @@ pip install flask flask-socketio  # si no estan ya instalados
 python3 -m webtool.app
 ```
 
-Abrir `http://<control-node>:5060/`.
+Abrir `http://<control-node>:8070/`.
 
 ## Que hace
 
