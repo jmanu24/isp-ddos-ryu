@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VM Lab -- Control Panel</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>VM Lab -- Panel de control</h1>
+    <div id="conn-badge" class="badge">conectando...</div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="topology">Topologia</button>
+    <button class="tab-btn" data-tab="bringup">Power / Bring-up</button>
+    <button class="tab-btn" data-tab="attacks">Ataques DDoS</button>
+    <button class="tab-btn" data-tab="kpm">KPM / Mitigacion</button>
+    <button class="tab-btn" data-tab="metrics">Metricas</button>
+    <button class="tab-btn" data-tab="logs">Logs</button>
+    <button class="tab-btn" data-tab="events">Eventos</button>
+  </nav>
+
+  <main>
+    <section id="tab-topology" class="tab-pane active">
+      <div id="domains"></div>
+    </section>
+
+    <section id="tab-bringup" class="tab-pane">
+      <div class="panel">
+        <h2>Bring-up completo (orden estricto)</h2>
+        <p class="hint">Ejecuta <code>reconnect_mobile_domain.yml</code>. Power-cycle apaga TODAS las VMs moviles primero.</p>
+        <label><input type="checkbox" id="opt-power-cycle" checked> power-cycle inicial</label>
+        <label><input type="checkbox" id="opt-skip-victim" checked> saltar ping a victim (--skip-tags victim)</label>
+        <button id="btn-bringup-full" class="btn-primary">Bring-up completo</button>
+        <button id="btn-bringup-cancel" class="btn-danger">Cancelar job actual</button>
+      </div>
+      <div class="panel">
+        <h2>Pasos individuales</h2>
+        <div id="bringup-steps" class="steps-grid"></div>
+      </div>
+      <div class="panel">
+        <h2>Consola Ansible</h2>
+        <div id="ansible-status" class="hint"></div>
+        <pre id="ansible-console" class="console"></pre>
+      </div>
+    </section>
+
+    <section id="tab-attacks" class="tab-pane">
+      <div class="panel">
+        <h2>Lanzar ataque</h2>
+        <div class="form-row">
+          <label>Dominio
+            <select id="atk-domain">
+              <option value="enterprise">Enterprise</option>
+              <option value="bgp">BGP / Peering</option>
+              <option value="broadband">Broadband (fixed)</option>
+              <option value="mobile">Mobile (5G/O-RAN)</option>
+            </select>
+          </label>
+          <label>Fuente
+            <select id="atk-source"></select>
+          </label>
+          <label>Tipo
+            <select id="atk-type">
+              <option value="SYN">SYN flood</option>
+              <option value="UDP">UDP flood</option>
+              <option value="ICMP">ICMP flood</option>
+            </select>
+          </label>
+          <label>Puerto destino
+            <input type="number" id="atk-port" value="443">
+          </label>
+          <label>IP victima
+            <input type="text" id="atk-target" value="10.55.0.100">
+          </label>
+          <button id="btn-atk-start" class="btn-primary">Iniciar</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Ataques activos</h2>
+        <table class="tbl"><thead><tr>
+          <th>Dominio</th><th>Fuente</th><th>Tipo</th><th>Target</th><th></th>
+        </tr></thead><tbody id="attacks-tbody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="tab-kpm" class="tab-pane">
+      <div class="panel">
+        <h2>Muestras KPM (bridge xApp, ric:8767)</h2>
+        <pre id="kpm-samples" class="console"></pre>
+      </div>
+      <div class="panel">
+        <h2>Eventos de deteccion / mitigacion</h2>
+        <pre id="kpm-events" class="console"></pre>
+      </div>
+    </section>
+
+    <section id="tab-metrics" class="tab-pane">
+      <div class="panel">
+        <label>Nodo
+          <select id="metrics-node"></select>
+        </label>
+      </div>
+      <div class="panel charts-grid">
+        <div><h3>CPU %</h3><canvas id="chart-cpu"></canvas></div>
+        <div><h3>Memoria %</h3><canvas id="chart-mem"></canvas></div>
+        <div><h3>Interfaces (bps)</h3><canvas id="chart-net"></canvas></div>
+      </div>
+    </section>
+
+    <section id="tab-logs" class="tab-pane">
+      <div class="panel">
+        <label>Nodo <select id="log-node"></select></label>
+        <label>Fuente <select id="log-source"></select></label>
+        <button id="btn-log-fetch" class="btn-primary">Cargar</button>
+      </div>
+      <pre id="log-output" class="console"></pre>
+    </section>
+
+    <section id="tab-events" class="tab-pane">
+      <pre id="events-output" class="console"></pre>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
