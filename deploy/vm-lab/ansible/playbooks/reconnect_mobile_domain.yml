@@ -366,8 +366,9 @@
     - name: Final summary
       ansible.builtin.debug:
         msg:
+          - "RC on DUs this run: e2sm_rc_enabled={{ rc_enabled | default(true) | bool | lower }}"
           - "E2 CONNECTED (e2mgr): {{ e2_count.stdout | trim }}/9"
           - "Bridge subscriptions: {{ subs.stdout | trim }}/5 ; actuator /status: OK"
-          - "KPM /kpm samples: {{ kpm_samples.stdout | trim }}{{ '  <-- WARNING: 0 samples, KPM not reaching the bridge (known flaky delivery); RAN itself is up. Detection loop will not fire until this is fixed.' if (kpm_samples.stdout | trim | int == 0) else '  (KPM pipeline OK)' }}"
+          - "KPM /kpm samples: {{ kpm_samples.stdout | trim }}{{ '  <-- WARNING: 0 samples, KPM not reaching the bridge. If this run had rc_enabled=true, re-run with -e rc_enabled=false to test the suspected RC-vs-KPM interaction (KPM last worked with RC off).' if (kpm_samples.stdout | trim | int == 0) else '  (KPM pipeline OK)' }}"
           - "Per-UE attach + victim reachability validated in the UE plays above."
           - "Mobile domain reconnection complete."
