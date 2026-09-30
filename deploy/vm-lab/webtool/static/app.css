@@ -24,7 +24,15 @@ main { padding: 16px 20px; }
 .node-card .name { font-weight: 600; }
 .node-card .ip { color: var(--muted); font-size: 12px; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
-.dot.on { background: var(--ok); } .dot.off { background: var(--bad); } .dot.unknown { background: var(--muted); }
+.dot.on { background: var(--ok); }
+.dot.off { background: var(--bad); }
+.dot.unknown { background: var(--muted); }
+.dot.warn { background: var(--warn); }
+.dot.unreachable { background: #d98c00; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11px; color: var(--muted); margin-bottom: 10px; align-items: center; }
+.legend .ring-attacking { border: 1px solid var(--bad); border-radius: 4px; padding: 1px 6px; }
+.legend .ring-target { border: 1px solid var(--warn); border-radius: 4px; padding: 1px 6px; }
+#topology-graph { height: 520px; background: #0a0c10; border: 1px solid var(--border); border-radius: 6px; }
 .checks { font-size: 11px; color: var(--muted); margin-top: 4px; white-space: pre-wrap; }
 .steps-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .steps-grid button { background: var(--border); color: var(--text); border: none; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; }

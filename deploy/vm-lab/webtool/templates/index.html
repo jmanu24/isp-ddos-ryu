@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
   <header>
@@ -26,20 +27,39 @@
 
   <main>
     <section id="tab-topology" class="tab-pane active">
+      <div class="panel">
+        <h2>Grafo de topologia</h2>
+        <div class="legend">
+          <span><span class="dot on"></span> encendida + saludable</span>
+          <span><span class="dot warn"></span> encendida, con problema/degradada</span>
+          <span><span class="dot unreachable"></span> encendida, SSH no responde (booteando)</span>
+          <span><span class="dot off"></span> apagada</span>
+          <span><span class="dot unknown"></span> estado desconocido</span>
+          <span class="ring-attacking">borde rojo = fuente de ataque activo</span>
+          <span class="ring-target">borde amarillo = objetivo (victim)</span>
+        </div>
+        <div id="topology-graph"></div>
+      </div>
       <div id="domains"></div>
     </section>
 
     <section id="tab-bringup" class="tab-pane">
       <div class="panel">
-        <h2>Bring-up completo (orden estricto)</h2>
-        <p class="hint">Ejecuta <code>reconnect_mobile_domain.yml</code>. Power-cycle apaga TODAS las VMs moviles primero.</p>
+        <h2>Power individual -- cualquier VM del laboratorio</h2>
+        <table class="tbl"><thead><tr>
+          <th>VM</th><th>Dominio</th><th>Power</th><th></th>
+        </tr></thead><tbody id="power-tbody"></tbody></table>
+      </div>
+      <div class="panel">
+        <h2>Bring-up completo del dominio movil (orden estricto)</h2>
+        <p class="hint">Ejecuta <code>reconnect_mobile_domain.yml</code>. Power-cycle apaga TODAS las VMs moviles primero. (Para otros dominios, usa el power individual de arriba -- no tienen un playbook de bring-up ordenado propio.)</p>
         <label><input type="checkbox" id="opt-power-cycle" checked> power-cycle inicial</label>
         <label><input type="checkbox" id="opt-skip-victim" checked> saltar ping a victim (--skip-tags victim)</label>
         <button id="btn-bringup-full" class="btn-primary">Bring-up completo</button>
         <button id="btn-bringup-cancel" class="btn-danger">Cancelar job actual</button>
       </div>
       <div class="panel">
-        <h2>Pasos individuales</h2>
+        <h2>Pasos individuales (dominio movil)</h2>
         <div id="bringup-steps" class="steps-grid"></div>
       </div>
       <div class="panel">
@@ -90,11 +110,14 @@
 
     <section id="tab-kpm" class="tab-pane">
       <div class="panel">
-        <h2>Muestras KPM (bridge xApp, ric:8767)</h2>
-        <pre id="kpm-samples" class="console"></pre>
+        <h2>KPM por UE (bridge xApp, ric:8767)</h2>
+        <table class="tbl"><thead><tr>
+          <th>UE</th><th>DU</th><th>IMSI</th><th>UEThpUl</th><th>UEThpDl</th>
+          <th>PrbUsedUl</th><th>PrbAvailUl</th><th>Actualizado</th>
+        </tr></thead><tbody id="kpm-tbody"></tbody></table>
       </div>
       <div class="panel">
-        <h2>Eventos de deteccion / mitigacion</h2>
+        <h2>Eventos de deteccion / mitigacion (rc_actuator_runner + /var/log/ryu-manager.log)</h2>
         <pre id="kpm-events" class="console"></pre>
       </div>
     </section>

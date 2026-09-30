@@ -14,7 +14,7 @@ from webtool.ssh_ops import run
 
 RIC_NODE = "ric"
 KPM_CONTAINER = "python_xapp_runner"
-ACTUATOR_CONTAINER = "rc_actuator"  # deploy/vm-lab commit 2a9c923: its own container
+ACTUATOR_CONTAINER = "rc_actuator_runner"  # deploy/vm-lab commit 2a9c923: its own container
 
 
 def poll_kpm_samples() -> List[dict]:

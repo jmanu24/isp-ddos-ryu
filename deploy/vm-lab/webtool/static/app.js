@@ -3,6 +3,50 @@ let topology = null;
 let latestState = null;
 const charts = {};
 
+// -------------------------------------------------------------- colors --
+const DOMAIN_COLORS = {
+  shared: { background: "#eeeeee", border: "#999999" },
+  enterprise: { background: "#dbe9ff", border: "#5b8def" },
+  mobile: { background: "#ffe6d5", border: "#e8823c" },
+  broadband: { background: "#dcf5df", border: "#4caf6b" },
+  bgp: { background: "#ead6fd", border: "#8e44ad" },
+};
+const OFF_COLOR = { background: "#2a2f3a", border: "#555b68" };
+const ATTACKING_BORDER = "#e0503c";
+const TARGET_BORDER = "#e0a72c";
+const DATA_NETWORKS = ["BB_ACCESS", "PEERING", "RAN", "ENT_LAN", "ENT_DC",
+  "BACKBONE_MOBILE", "BACKBONE_FIXED", "BACKBONE_PEERING"]; // MGMT excluded -- pure management, not the attack/data path
+
+let visNetwork = null;
+const visNodes = new vis.DataSet([]);
+const visEdges = new vis.DataSet([]);
+
+function ensureVisNetwork() {
+  if (visNetwork) return;
+  visNetwork = new vis.Network(
+    document.getElementById("topology-graph"),
+    { nodes: visNodes, edges: visEdges },
+    {
+      physics: { stabilization: true, barnesHut: { springLength: 110, avoidOverlap: 0.6 } },
+      layout: { improvedLayout: true },
+      interaction: { hover: true },
+      edges: { color: "#39404d", width: 1.2, smooth: false },
+      nodes: { font: { size: 12, color: "#e6e8eb" } },
+    }
+  );
+}
+
+function nodeVisualState(nodeName) {
+  const status = latestState && latestState.node_status ? latestState.node_status[nodeName] : null;
+  const power = status ? status.power : "unknown";
+  const checks = (status && status.checks) || {};
+  if (power === "poweredOff") return "off";
+  if (power !== "poweredOn") return "unknown";
+  if (checks.reachable === false) return "unreachable";
+  if (checks.healthy === false || checks.f1_setup_failed === true) return "warn";
+  return "on";
+}
+
 // ---------------------------------------------------------------- tabs --
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -24,6 +68,7 @@ socket.on("disconnect", () => {
 socket.on("state_update", (state) => {
   latestState = state;
   renderDomains();
+  renderPowerTable();
   renderAnsibleConsole();
   renderAttacks();
   renderKpm();
@@ -61,17 +106,75 @@ function renderDomains() {
       card.className = "node-card";
       card.innerHTML = `
         <div><span class="dot ${powerDot(power)}"></span><span class="name">${n.name}</span></div>
-        <div class="ip">${n.ip} -- ${n.role}</div>
+        <div class="ip">${n.ip || "(sin IP)"} -- ${n.role}</div>
         <div class="checks">${escapeHtml(JSON.stringify(checks))}</div>
       `;
       col.appendChild(card);
     }
     container.appendChild(col);
   }
+  renderTopologyGraph();
 }
 
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+// ---------------------------------------------------------- graph view --
+function renderTopologyGraph() {
+  if (!topology) return;
+  ensureVisNetwork();
+
+  const allNodes = Object.values(topology.domains).flat();
+  const attackingIds = new Set();
+  const targetIds = new Set();
+  for (const a of (latestState && latestState.active_attacks) || []) {
+    attackingIds.add(a.source);
+    const targetNode = allNodes.find(n => n.ip === a.target_ip);
+    if (targetNode) targetIds.add(targetNode.name);
+  }
+
+  const nodesData = [];
+  const edgesData = [];
+  const domainByName = {};
+  for (const [domain, nodes] of Object.entries(topology.domains)) {
+    for (const n of nodes) domainByName[n.name] = domain;
+  }
+
+  for (const n of allNodes) {
+    const vstate = nodeVisualState(n.name);
+    const domainColor = DOMAIN_COLORS[domainByName[n.name]] || DOMAIN_COLORS.shared;
+    const isAttacking = attackingIds.has(n.name);
+    const isTarget = targetIds.has(n.name);
+    let color = vstate === "off" ? OFF_COLOR : domainColor;
+    let borderColor = color.border;
+    let borderWidth = 1;
+    if (isAttacking) { borderColor = ATTACKING_BORDER; borderWidth = 3; }
+    else if (isTarget) { borderColor = TARGET_BORDER; borderWidth = 3; }
+    else if (vstate === "warn") { borderColor = "#e0a72c"; borderWidth = 2; }
+    else if (vstate === "unreachable") { borderColor = "#d98c00"; borderWidth = 2; }
+    nodesData.push({
+      id: n.name, label: `${n.name}\n${n.ip || ""}`, shape: "ellipse",
+      color: { background: color.background, border: borderColor },
+      borderWidth, opacity: vstate === "off" ? 0.45 : 1,
+    });
+  }
+
+  for (const netName of DATA_NETWORKS) {
+    const members = allNodes.filter(n => (n.interfaces || []).some(i => i.network === netName));
+    if (members.length < 2) continue;
+    const hubId = `net:${netName}`;
+    nodesData.push({
+      id: hubId, label: netName, shape: "box", color: { background: "#171a21", border: "#3a4152" },
+      font: { size: 10, color: "#8b93a1" }, margin: 6,
+    });
+    for (const m of members) edgesData.push({ from: hubId, to: m.name });
+  }
+
+  visNodes.clear();
+  visEdges.clear();
+  visNodes.add(nodesData);
+  visEdges.add(edgesData);
 }
 
 // ------------------------------------------------------------- bring-up --
@@ -104,6 +207,36 @@ document.getElementById("btn-bringup-full").addEventListener("click", async () =
 document.getElementById("btn-bringup-cancel").addEventListener("click", async () => {
   await fetch("/api/bringup/cancel", { method: "POST" });
 });
+
+// ---------------------------------------------------------- power table --
+// One row per VM in the WHOLE lab (all 4 domains + shared infra), not
+// just the mobile domain -- the ordered bring-up below only exists for
+// mobile (it drives reconnect_mobile_domain.yml); every other VM is
+// powered individually here via plain govc on/off.
+function renderPowerTable() {
+  if (!topology) return;
+  const tbody = document.getElementById("power-tbody");
+  tbody.innerHTML = "";
+  for (const [domain, nodes] of Object.entries(topology.domains)) {
+    for (const n of nodes) {
+      const status = latestState && latestState.node_status ? latestState.node_status[n.name] : null;
+      const power = status ? status.power : "unknown";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${n.name}</td><td>${domain}</td>
+        <td><span class="dot ${powerDot(power)}"></span>${power}</td><td></td>`;
+      const cell = tr.lastElementChild;
+      const onBtn = document.createElement("button");
+      onBtn.textContent = "Encender"; onBtn.className = "small";
+      onBtn.addEventListener("click", () => fetch(`/api/power/${n.name}/on`, { method: "POST" }));
+      const offBtn = document.createElement("button");
+      offBtn.textContent = "Apagar"; offBtn.className = "small";
+      offBtn.style.marginLeft = "4px";
+      offBtn.addEventListener("click", () => fetch(`/api/power/${n.name}/off`, { method: "POST" }));
+      cell.appendChild(onBtn); cell.appendChild(offBtn);
+      tbody.appendChild(tr);
+    }
+  }
+}
 
 function renderAnsibleConsole() {
   if (!latestState) return;
@@ -178,9 +311,31 @@ function renderAttacks() {
 }
 
 // ------------------------------------------------------------------ kpm --
+// gnb_du_id N maps directly onto UE netns "ueN" -- the KPM bridge's own
+// per-DU numbering already follows the 1:1 DU<->UE pairing this lab
+// bring-up uses (du->ue1, du2->ue2, ..., du5->ue5; see mobile-bringup-
+// order memory / inventory.py's UE_NETNS table).
 function renderKpm() {
   if (!latestState) return;
-  document.getElementById("kpm-samples").textContent = JSON.stringify(latestState.kpm_samples, null, 2);
+  const samples = latestState.kpm_samples || [];
+  const byUeNum = {};
+  for (const s of samples) {
+    if (s && s.gnb_du_id != null) byUeNum[s.gnb_du_id] = s;
+  }
+  const tbody = document.getElementById("kpm-tbody");
+  tbody.innerHTML = "";
+  const ueList = (topology && topology.ue_netns) || [1, 2, 3, 4, 5].map(i => ({ netns: `ue${i}`, du_host: "?" }));
+  for (const ue of ueList) {
+    const num = parseInt(ue.netns.replace("ue", ""), 10);
+    const s = byUeNum[num];
+    const m = (s && s.metrics) || {};
+    const updated = s && s.updated_at ? new Date(s.updated_at * 1000).toLocaleTimeString() : "--";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${ue.netns}</td><td>${ue.du_host}</td><td>${s ? s.imsi || "" : "sin dato"}</td>
+      <td>${m["DRB.UEThpUl"] ?? "--"}</td><td>${m["DRB.UEThpDl"] ?? "--"}</td>
+      <td>${m["RRU.PrbUsedUl"] ?? "--"}</td><td>${m["RRU.PrbAvailUl"] ?? "--"}</td><td>${updated}</td>`;
+    tbody.appendChild(tr);
+  }
   document.getElementById("kpm-events").textContent = (latestState.mitigation_events || [])
     .map(e => `${e.timestamp}  ${e.message}`).join("\n");
 }

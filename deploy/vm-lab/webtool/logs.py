@@ -10,27 +10,41 @@ from typing import List
 from webtool.ssh_ops import docker_logs, journalctl, run, tail_file
 
 # node -> list of {id, label, kind, target} log sources the UI can fetch.
+# `kind: journal` only works for units that let systemd own their
+# stdout/stderr -- ryu-manager and bng-subscriber-agent explicitly
+# redirect theirs to a plain file instead (`StandardOutput=append:...` in
+# their own .service templates), so `journalctl -u` on those shows only
+# systemd's own start/stop lines, never the actual application output.
+# Those two are `kind: file` here for that reason -- confirmed against
+# ryu-manager.service.j2 / bng-subscriber-agent.service.j2.
 LOG_SOURCES = {
     "core5g": [
         {"id": "open5gs", "label": "open5gs_5gc (docker)", "kind": "docker", "target": "open5gs_5gc"},
-        {"id": "ue-telemetry-api", "label": "ue-telemetry-api.service", "kind": "journal", "target": "ue-telemetry-api"},
+        {"id": "ue-telemetry-api", "label": "ue-telemetry-api.service (journal)", "kind": "journal", "target": "ue-telemetry-api"},
     ],
     "ric": [
         {"id": "compose", "label": "docker compose ps -a", "kind": "raw", "target": "cd ~/oran-sc-ric && sudo docker compose ps -a 2>&1"},
-        {"id": "xapp-runner", "label": "python_xapp_runner (docker)", "kind": "docker", "target": "python_xapp_runner"},
-        {"id": "rc_actuator", "label": "rc_actuator (docker)", "kind": "docker", "target": "rc_actuator"},
+        {"id": "xapp-runner", "label": "python_xapp_runner (docker, KPM bridge)", "kind": "docker", "target": "python_xapp_runner"},
+        {"id": "rc_actuator", "label": "rc_actuator_runner (docker, mitigacion)", "kind": "docker", "target": "rc_actuator_runner"},
+        {"id": "kpm-telemetry-api", "label": "kpm-telemetry-api.service (journal)", "kind": "journal", "target": "kpm-telemetry-api"},
     ],
     "ran": [{"id": "cu", "label": "/tmp/cu.log", "kind": "file", "target": "/tmp/cu.log"},
             {"id": "cu_stdout", "label": "/tmp/cu_stdout.log", "kind": "file", "target": "/tmp/cu_stdout.log"}],
     "cu2": [{"id": "cu", "label": "/tmp/cu.log", "kind": "file", "target": "/tmp/cu.log"},
             {"id": "cu_stdout", "label": "/tmp/cu_stdout.log", "kind": "file", "target": "/tmp/cu_stdout.log"}],
-    "bng": [{"id": "accel-ppp", "label": "accel-pppd.service", "kind": "journal", "target": "accel-pppd"},
-            {"id": "flow", "label": "flow.service (softflowd)", "kind": "journal", "target": "flow"}],
-    "br": [{"id": "bgpd", "label": "bgpd.service", "kind": "journal", "target": "bgpd"},
-           {"id": "nfcapd", "label": "nfcapd.service", "kind": "journal", "target": "nfcapd"}],
-    "peer-router": [{"id": "bird", "label": "bird.service", "kind": "journal", "target": "bird"}],
-    "orchestrator": [{"id": "ryu", "label": "ryu-manager.service", "kind": "journal", "target": "ryu-manager"},
-                      {"id": "exabgp", "label": "exabgp.service", "kind": "journal", "target": "exabgp"}],
+    "bng": [{"id": "accel-ppp", "label": "accel-pppd.service (journal)", "kind": "journal", "target": "accel-pppd"},
+            {"id": "flow", "label": "flow.service -- softflowd (journal)", "kind": "journal", "target": "flow"}],
+    "br": [{"id": "frr", "label": "frr.service -- bgpd/eBGP (journal)", "kind": "journal", "target": "frr"},
+           {"id": "flow", "label": "flow.service -- softflowd (journal)", "kind": "journal", "target": "flow"}],
+    "peer-router": [{"id": "bird", "label": "bird.service (journal)", "kind": "journal", "target": "bird"}],
+    "orchestrator": [
+        # THE orchestrator's own event log -- ryu-manager (ryu_controller_2.py:
+        # forwarding/telemetry/correlation/detection/orchestration/web) logs
+        # its DETECTION/MITIGATION events here, not the journal.
+        {"id": "ryu", "label": "/var/log/ryu-manager.log (eventos: deteccion/mitigacion)", "kind": "file", "target": "/var/log/ryu-manager.log"},
+        {"id": "exabgp", "label": "exabgp.service (journal)", "kind": "journal", "target": "exabgp"},
+        {"id": "nfcapd", "label": "nfcapd.service (journal)", "kind": "journal", "target": "nfcapd"},
+    ],
     "pe": [{"id": "ovs", "label": "ovs-vsctl show", "kind": "raw", "target": "ovs-vsctl show 2>&1"}],
 }
 for _du in ("du", "du2", "du3", "du4", "du5"):
@@ -47,7 +61,7 @@ for _i in range(1, 6):
         {"id": "syslog", "label": "/var/log/syslog (tail)", "kind": "file", "target": "/var/log/syslog"},
     ]
 LOG_SOURCES["suscriptor"] = [
-    {"id": "agent", "label": "bng_subscriber_agent (raw ps)", "kind": "raw", "target": "ps aux | grep bng_subscriber_agent | grep -v grep"},
+    {"id": "agent", "label": "/var/log/bng-subscriber-agent.log", "kind": "file", "target": "/var/log/bng-subscriber-agent.log"},
 ]
 LOG_SOURCES["victim"] = [
     {"id": "victim", "label": "victim server (raw ps)", "kind": "raw", "target": "ps aux | grep python3 | grep -v grep"},

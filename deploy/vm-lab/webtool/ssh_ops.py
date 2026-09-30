@@ -82,8 +82,11 @@ def kill_pid(node_name: str, pid: str, become: bool = False) -> SshResult:
     return run(node_name, f"kill -9 {shlex.quote(str(pid))} 2>/dev/null; true", timeout=10, become=become)
 
 
-def tail_file(node_name: str, path: str, lines: int = 200) -> SshResult:
-    return run(node_name, f"tail -n {int(lines)} {shlex.quote(path)} 2>&1", timeout=10)
+def tail_file(node_name: str, path: str, lines: int = 200, become: bool = True) -> SshResult:
+    # become=True by default -- most of the files this reads (/var/log/*,
+    # /tmp/*.log written by a root-launched srscu/srsdu/systemd-run) are
+    # root-owned, and `sudo -n tail` on a world-readable file is harmless.
+    return run(node_name, f"tail -n {int(lines)} {shlex.quote(path)} 2>&1", timeout=10, become=become)
 
 
 def journalctl(node_name: str, unit: str, lines: int = 200) -> SshResult:

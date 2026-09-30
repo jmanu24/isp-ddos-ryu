@@ -1,11 +1,12 @@
 """
-webtool/inventory.py -- static map of the 16-VM ESXi lab, derived by hand
-from ../topology.yaml + ../generated/ansible/inventory.ini (both already
-committed as this lab's own single sources of truth). Kept as a small
-static table rather than re-parsed live on every request: topology.yaml
-changes require re-running scripts/render_topology.py and a real
-redeploy anyway (see its own header comment -- "never hand-edit the
-generated files"), so the VM set is effectively fixed between deploys.
+webtool/inventory.py -- the 16(+2)-VM ESXi lab's node/network/domain map,
+combining ../topology.yaml (parsed live -- it IS this lab's single source
+of truth for VM names, roles and per-network interfaces) with a small
+static overlay for the 2 VMs that exist for real but were hot-added
+outside topology.yaml (cu2, ue2 -- see mobile-bringup-order memory: a 2nd
+CU + a 2nd UE-hosting VM added directly on ESXi, never folded back into
+topology.yaml/render_topology.py) and for domain grouping (topology.yaml
+has no "domain" concept, only `role:`).
 
 Domain grouping (for the UI's 4-domain layout):
   mobile      -- ric, core5g, the 2 CU hosts (ran=cu1, cu2), 5 DU hosts,
@@ -18,7 +19,10 @@ Domain grouping (for the UI's 4-domain layout):
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
+
+import yaml
 
 SSH_USER = "labadmin"
 SSH_PASSWORD = "srslab-temp"
@@ -31,55 +35,72 @@ ALT_CREDENTIALS = {
 
 VICTIM_IP = "10.55.0.100"
 
+VM_LAB_DIR = Path(__file__).resolve().parent.parent
+TOPOLOGY_YAML = VM_LAB_DIR / "topology.yaml"
+
+ROLE_TO_DOMAIN = {
+    "orchestrator": "shared", "pe_ovs": "shared", "victim": "shared",
+    "bng": "broadband", "suscriptor": "broadband",
+    "br": "bgp", "peer_router": "bgp",
+    "ric_flexric": "mobile", "core5g_open5gs": "mobile",
+    "ran_srsran": "mobile", "du_srsran": "mobile", "ue_srsue": "mobile",
+    "enterprise_site": "enterprise",
+}
+
+# cu2/ue2: real VMs, hot-added directly on ESXi, never folded back into
+# topology.yaml (see this module's own docstring + mobile-bringup-order
+# memory). Interfaces mirror their sibling (ran/ue) -- same 2 networks,
+# addresses confirmed via generated/ansible/inventory.ini (MGMT) and the
+# mobile-bringup-order memory's own bring-up table (RAN side is
+# functionally equivalent, exact last octet isn't load-bearing for the
+# topology graph this feeds).
+_EXTRA_VMS = {
+    "cu2": {"role": "ran_srsran", "interfaces": [("MGMT", "10.10.0.15"), ("RAN", "10.40.0.9")]},
+    "ue2": {"role": "ue_srsue", "interfaces": [("MGMT", "10.10.0.16"), ("RAN", "10.40.0.16")]},
+}
+
 
 @dataclass
 class UeNs:
     netns: str          # ue1..ue5
     host: str           # inventory hostname this netns lives on (ue|ue2)
     du_host: str         # paired DU inventory hostname
-    ip: Optional[str] = None  # 10.45.1.x once attached (informational only)
 
 
 @dataclass
 class Node:
-    name: str            # inventory hostname == govc VM name
-    role: str            # ansible role / inventory group
-    domain: str          # mobile|broadband|enterprise|bgp|shared
-    ip: str              # MGMT/ansible_host address
-    kind: str = "vm"     # vm -- reserved for future non-VM rows
-    govc_name: Optional[str] = None  # defaults to `name` when unset
+    name: str
+    role: str
+    domain: str
+    ip: str                                  # MGMT/ansible_host address
+    interfaces: List[Dict[str, Optional[str]]] = field(default_factory=list)  # [{network, ip}]
+    govc_name: Optional[str] = None
 
 
-NODES: List[Node] = [
-    Node("orchestrator", "orchestrator", "shared", "10.10.0.1"),
-    Node("pe", "pe_ovs", "shared", "10.10.0.7"),
-    Node("victim", "victim", "shared", "10.10.0.100"),
+def _load_topology():
+    with open(TOPOLOGY_YAML) as f:
+        return yaml.safe_load(f)
 
-    Node("bng", "bng", "broadband", "10.10.0.2"),
-    Node("suscriptor", "suscriptor", "broadband", "10.10.0.9"),
 
-    Node("br", "br", "bgp", "10.10.0.3"),
-    Node("peer-router", "peer_router", "bgp", "10.30.0.2"),
+def _build_nodes() -> List[Node]:
+    doc = _load_topology()
+    networks = doc.get("networks", {})
+    nodes = []
+    for vm in doc.get("vms", []):
+        role = vm["role"]
+        domain = ROLE_TO_DOMAIN.get(role, "shared")
+        ifaces = [{"network": i["network"], "ip": i.get("ip")} for i in vm.get("interfaces", [])]
+        mgmt_ip = next((i["ip"] for i in ifaces if i["network"] == "MGMT" and i.get("ip")), None)
+        nodes.append(Node(name=vm["name"], role=role, domain=domain, ip=mgmt_ip, interfaces=ifaces))
+    for name, extra in _EXTRA_VMS.items():
+        role = extra["role"]
+        ifaces = [{"network": net, "ip": ip} for net, ip in extra["interfaces"]]
+        mgmt_ip = next((i["ip"] for i in ifaces if i["network"] == "MGMT"), None)
+        nodes.append(Node(name=name, role=role, domain=ROLE_TO_DOMAIN.get(role, "shared"), ip=mgmt_ip, interfaces=ifaces))
+    return nodes, networks
 
-    Node("ric", "ric_flexric", "mobile", "10.10.0.4"),
-    Node("core5g", "core5g_open5gs", "mobile", "10.10.0.5"),
-    Node("ran", "ran_srsran", "mobile", "10.10.0.6"),   # cu1
-    Node("cu2", "ran_srsran", "mobile", "10.10.0.15"),
-    Node("du", "du_srsran", "mobile", "10.10.0.10"),    # du1
-    Node("du2", "du_srsran", "mobile", "10.10.0.11"),
-    Node("du3", "du_srsran", "mobile", "10.10.0.12"),
-    Node("du4", "du_srsran", "mobile", "10.10.0.13"),
-    Node("du5", "du_srsran", "mobile", "10.10.0.14"),
-    Node("ue", "ue_srsue", "mobile", "10.10.0.8"),      # hosts ue1/ue2/ue3
-    Node("ue2", "ue_srsue", "mobile", "10.10.0.16"),    # hosts ue4/ue5
 
-    Node("ent-site-1", "enterprise_site", "enterprise", "10.10.0.21"),
-    Node("ent-site-2", "enterprise_site", "enterprise", "10.10.0.22"),
-    Node("ent-site-3", "enterprise_site", "enterprise", "10.10.0.23"),
-    Node("ent-site-4", "enterprise_site", "enterprise", "10.10.0.24"),
-    Node("ent-site-5", "enterprise_site", "enterprise", "10.10.0.25"),
-]
-
+NODES, NETWORKS = _build_nodes()
 NODES_BY_NAME: Dict[str, Node] = {n.name: n for n in NODES}
 
 # Which VM each srsue netns actually runs on, and which DU it is paired
@@ -127,15 +148,20 @@ def credentials_for(node_name: str):
 
 
 def to_topology_dict() -> dict:
-    """JSON-serializable topology for the UI's graph view."""
+    """JSON-serializable topology for the UI's graph view -- nodes carry
+    their full interface list so the frontend can draw real per-network
+    edges (a hub node per VLAN, same idea as the mininet webtool's own
+    switch-hub graph), not a made-up star."""
     domains = {}
     for d in DOMAINS:
         domains[d] = [
-            {"name": n.name, "role": n.role, "ip": n.ip}
+            {"name": n.name, "role": n.role, "ip": n.ip, "interfaces": n.interfaces}
             for n in nodes_by_domain(d)
         ]
     return {
         "domains": domains,
+        "networks": {name: {"cidr": cfg.get("cidr"), "promiscuous": cfg.get("promiscuous", False)}
+                     for name, cfg in NETWORKS.items()},
         "ue_netns": [
             {"netns": u.netns, "host": u.host, "du_host": u.du_host}
             for u in UE_NETNS

@@ -40,7 +40,7 @@ Abrir `http://<control-node>:8070/`.
   broadband/mobile (mismo mecanismo que `simulation/bng_flood.py`, ya que
   hping3 no funciona sobre esas interfaces).
 - **KPM / Mitigacion**: polling del bridge xApp (`ric:8767/kpm`) y de los
-  logs del contenedor `rc_actuator` para eventos de deteccion/mitigacion.
+  logs del contenedor `rc_actuator_runner` para eventos de deteccion/mitigacion.
 - **Metricas**: CPU%, mem% y throughput por interfaz por VM, muestreado por
   SSH (sin agente), graficado en vivo con Chart.js.
 - **Logs**: visor on-demand de journalctl/docker logs/archivos por
