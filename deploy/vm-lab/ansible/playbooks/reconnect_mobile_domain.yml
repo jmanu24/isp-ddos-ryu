@@ -106,20 +106,23 @@
         sed -i '/- "8767:8767"/a\      - "8768:8768"' docker-compose.yml
       changed_when: false
 
-    - name: docker compose down && up (NOT just up -- consistent RMR mesh)
-      ansible.builtin.shell: >-
-        cd {{ ric_compose_dir }} && docker compose down && docker compose up -d
+    - name: docker compose down (clean slate for a consistent RMR mesh)
+      ansible.builtin.shell: cd {{ ric_compose_dir }} && docker compose down
       changed_when: true
 
-    - name: Wait for the 7 RIC containers
+    - name: Bring the 7 RIC containers up, re-running up -d until all 7 run
+      # A single `up` loses the e2mgr startup race (it exits 1 if it starts
+      # before dbaas/redis is ready -> only 6/7 come up). Re-running `up -d`
+      # restarts the exited one now that redis is ready; loop until all 7.
       ansible.builtin.shell: >-
         cd {{ ric_compose_dir }} &&
+        docker compose up -d >/dev/null 2>&1;
         docker compose ps --status running --format '{{ "{{" }}.Name{{ "}}" }}' | wc -l
       register: ric_up
       until: ric_up.stdout | trim | int >= 7
-      retries: 12
-      delay: 5
-      changed_when: false
+      retries: 15
+      delay: 6
+      changed_when: true
 
     - name: Confirm RIC_INDICATION route points ONLY at the bridge (4561), sctp/36421 + ports
       ansible.builtin.shell: |
