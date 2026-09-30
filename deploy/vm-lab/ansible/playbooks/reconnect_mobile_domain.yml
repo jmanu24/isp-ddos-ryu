@@ -99,27 +99,22 @@
       ansible.builtin.shell: systemctl stop near-rt-ric kpm-telemetry-api 2>/dev/null; true
       changed_when: false
 
-    - name: Ensure the RC actuator port (8768) is published next to the bridge (8767)
-      ansible.builtin.shell: >-
-        cd {{ ric_compose_dir }} &&
-        grep -q '8768:8768' docker-compose.yml ||
-        sed -i '/- "8767:8767"/a\      - "8768:8768"' docker-compose.yml
-      changed_when: false
-
     - name: docker compose down (clean slate for a consistent RMR mesh)
       ansible.builtin.shell: cd {{ ric_compose_dir }} && docker compose down
       changed_when: true
 
-    - name: Bring the 7 RIC containers up, re-running up -d until all 7 run
-      # A single `up` loses the e2mgr startup race (it exits 1 if it starts
-      # before dbaas/redis is ready -> only 6/7 come up). Re-running `up -d`
-      # restarts the exited one now that redis is ready; loop until all 7.
+    - name: Bring the 8 RIC containers up, re-running up -d until all run
+      # 8 now: the 7 core RIC containers + the dedicated rc_actuator_runner
+      # (its own IP 10.0.2.21, separate from the bridge's, so its RMR doesn't
+      # break KPM delivery). A single `up` loses the e2mgr startup race (it
+      # exits 1 if it starts before dbaas/redis is ready). Re-running `up -d`
+      # restarts any exited one now that redis is ready; loop until all up.
       ansible.builtin.shell: >-
         cd {{ ric_compose_dir }} &&
         docker compose up -d >/dev/null 2>&1;
         docker compose ps --status running --format '{{ "{{" }}.Name{{ "}}" }}' | wc -l
       register: ric_up
-      until: ric_up.stdout | trim | int >= 7
+      until: ric_up.stdout | trim | int >= 8
       retries: 15
       delay: 6
       changed_when: true
@@ -128,11 +123,12 @@
       ansible.builtin.shell: |
         docker exec ric_e2term grep -E '^rte\|12050\|' /opt/e2/dockerRouter.txt
         ss -lnp 2>/dev/null | grep -q ':36421' && echo sctp-ok
-        docker port python_xapp_runner | tr '\n' ' '
+        echo "bridge_ports=$(docker port python_xapp_runner | tr '\n' ' ')"
+        echo "actuator_ports=$(docker port rc_actuator_runner | tr '\n' ' ')"
       register: ric_chk
       changed_when: false
       failed_when: >-
-        '4561' not in ric_chk.stdout or ':4560' in ric_chk.stdout or ':4562' in ric_chk.stdout
+        '10.0.2.20:4561' not in ric_chk.stdout
         or 'sctp-ok' not in ric_chk.stdout
         or '8767' not in ric_chk.stdout or '8768' not in ric_chk.stdout
 
@@ -303,9 +299,11 @@
   vars:
     du_nodes: gnbd_001_001_00019b_1,gnbd_001_001_00019b_2,gnbd_001_001_00019b_3,gnbd_001_001_000192_4,gnbd_001_001_000192_5
   tasks:
-    - name: Kill any stale bridge/actuator inside the xApp container
+    - name: Kill any stale bridge (python_xapp_runner) and actuator (rc_actuator_runner)
       ansible.builtin.shell: >-
-        for p in $(docker top python_xapp_runner 2>/dev/null | grep -E 'kpm_bridge_xapp|rc_actuator_xapp' | awk '{print $2}');
+        for p in $(docker top python_xapp_runner 2>/dev/null | grep kpm_bridge_xapp | awk '{print $2}');
+        do kill -9 $p 2>/dev/null; done;
+        for p in $(docker top rc_actuator_runner 2>/dev/null | grep rc_actuator_xapp | awk '{print $2}');
         do kill -9 $p 2>/dev/null; done; true
       changed_when: false
 
@@ -316,23 +314,16 @@
         > /tmp/kpm_bridge.log 2>&1 < /dev/null &
       changed_when: true
 
-    - name: Launch the RC actuator (opt-in; OFF by default)
-      # IMPORTANT: the actuator's RMR listener (port 4560) sharing the
-      # python_xapp_runner container with the bridge (4561) BREAKS KPM
-      # indication delivery -- e2term then delivers RIC_INDICATION to the
-      # wrong RMR endpoint and the bridge stops receiving (confirmed: killing
-      # the actuator changed /kpm from 0 back toward non-zero; KPM worked end
-      # to end early in the project precisely because the actuator did not
-      # exist yet). So it is NOT launched by default. Enable with
-      # -e launch_actuator=true only once it runs in its OWN container/host,
-      # separate from the bridge's RMR. Mitigation (RC control) is on hold
-      # until that separation is done.
+    - name: Launch the RC actuator in its OWN container (rc_actuator_runner, 10.0.2.21)
+      # Now on a separate container/IP from the bridge, so its RMR (4560) no
+      # longer collides with the bridge's (4561) and KPM delivery is intact.
+      # Default ON; -e launch_actuator=false skips it (e.g. to isolate KPM).
       ansible.builtin.shell: >-
-        setsid nohup docker exec python_xapp_runner sh -c
+        setsid nohup docker exec rc_actuator_runner sh -c
         "cd /opt/xApps && exec python3 -u rc_actuator_xapp.py --api_port 8768 --rmr_port 4560"
         > /tmp/rc_actuator.log 2>&1 < /dev/null &
       changed_when: true
-      when: launch_actuator | default(false) | bool
+      when: launch_actuator | default(true) | bool
 
     - name: Wait for the bridge subscriptions
       ansible.builtin.shell: grep -c 'Successfully subscribed' /tmp/kpm_bridge.log || true
@@ -343,15 +334,15 @@
       changed_when: false
       failed_when: false
 
-    - name: Confirm the actuator answers /status
-      ansible.builtin.shell: docker exec python_xapp_runner curl -s -m4 http://localhost:8768/status || true
+    - name: Confirm the actuator answers /status (in its own container)
+      ansible.builtin.shell: docker exec rc_actuator_runner curl -s -m4 http://localhost:8768/status || true
       register: act_status
       until: "'enforced' in act_status.stdout"
       retries: 6
       delay: 3
       changed_when: false
       failed_when: "'enforced' not in act_status.stdout"
-      when: launch_actuator | default(false) | bool
+      when: launch_actuator | default(true) | bool
 
     - name: Brief UL burst from ue1 so KPM shows non-zero
       ansible.builtin.shell: >-
@@ -383,7 +374,7 @@
         msg:
           - "RC on DUs this run: e2sm_rc_enabled={{ rc_enabled | default(true) | bool | lower }}"
           - "E2 CONNECTED (e2mgr): {{ e2_count.stdout | trim }}/9"
-          - "Bridge subscriptions: {{ subs.stdout | trim }}/5 ; RC actuator: {{ 'launched (WARNING: co-located actuator is known to break KPM delivery)' if (launch_actuator | default(false) | bool) else 'NOT launched (default -- keeps KPM working; enable with -e launch_actuator=true only once it is in its own container)' }}"
-          - "KPM /kpm samples: {{ kpm_samples.stdout | trim }}{{ '  <-- WARNING: 0 samples, KPM not reaching the bridge. If this run had rc_enabled=true, re-run with -e rc_enabled=false to test the suspected RC-vs-KPM interaction (KPM last worked with RC off).' if (kpm_samples.stdout | trim | int == 0) else '  (KPM pipeline OK)' }}"
+          - "Bridge subscriptions: {{ subs.stdout | trim }}/5 ; RC actuator: {{ 'launched in its own container rc_actuator_runner (10.0.2.21)' if (launch_actuator | default(true) | bool) else 'NOT launched (-e launch_actuator=false)' }}"
+          - "KPM /kpm samples: {{ kpm_samples.stdout | trim }}{{ '  <-- WARNING: 0 samples, KPM not reaching the bridge -- investigate e2term/submgr delivery.' if (kpm_samples.stdout | trim | int == 0) else '  (KPM pipeline OK)' }}"
           - "Per-UE attach + victim reachability validated in the UE plays above."
           - "Mobile domain reconnection complete."
