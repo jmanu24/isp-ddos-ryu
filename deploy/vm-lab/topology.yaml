@@ -301,6 +301,19 @@ vms:
 
   - name: du
     role: du_srsran
+    # cu/ue_host: explicit CU-DU-UE pairing (item 6 fix) -- this used to
+    # be an unwritten assumption ("du pairs with ran/ue") that render_
+    # topology.py's own ran_ran_addr/ue_ran_addr group_vars baked in as
+    # single global values hardcoded to the VMs literally named
+    # `ran`/`ue`. That broke silently the moment du4/du5 were added
+    # paired with cu2/ue2 instead -- their own f1ap.cu_cp_addr and
+    # ru_sdr rx_port kept pointing at `ran`/`ue`'s addresses regardless.
+    # Spelling the pairing out here lets render_ansible_host_vars()
+    # compute each DU's own du_cu_addr/du_ue_host_addr from whichever
+    # VMs are actually named, instead of a clean rebuild silently
+    # reproducing the same bug.
+    cu: ran
+    ue_host: ue
     # Split off from `ran` (which keeps only srscu, CU-CP+CU-UP combined)
     # -- confirmed on a real run that a bad Send-Q backlog / RACH
     # instability under repeated UE reattach was NOT explained by
@@ -359,6 +372,11 @@ vms:
     vcpu: 8
     ram_mb: 8192
     disk_gb: 20
+    # du2/du3 pair with cu1 (`ran`), same as `du` -- only du4/du5 move to
+    # cu2 (see cu2's own comment above). ue_host: ue -- du2/du3's UE
+    # processes run on the existing `ue` VM.
+    cu: ran
+    ue_host: ue
     interfaces:
       - {network: MGMT, ip: "10.10.0.11"}
       - {network: RAN, ip: "10.40.0.5"}
@@ -369,6 +387,8 @@ vms:
     vcpu: 8
     ram_mb: 8192
     disk_gb: 20
+    cu: ran
+    ue_host: ue
     interfaces:
       - {network: MGMT, ip: "10.10.0.12"}
       - {network: RAN, ip: "10.40.0.6"}
@@ -379,6 +399,10 @@ vms:
     vcpu: 8
     ram_mb: 8192
     disk_gb: 20
+    # du4/du5 pair with cu2, and their UE processes run on ue2 -- NOT
+    # `ran`/`ue` (see cu2/ue2's own comments for why those VMs exist).
+    cu: cu2
+    ue_host: ue2
     interfaces:
       - {network: MGMT, ip: "10.10.0.13"}
       - {network: RAN, ip: "10.40.0.7"}
@@ -389,6 +413,8 @@ vms:
     vcpu: 8
     ram_mb: 8192
     disk_gb: 20
+    cu: cu2
+    ue_host: ue2
     interfaces:
       - {network: MGMT, ip: "10.10.0.14"}
       - {network: RAN, ip: "10.40.0.8"}

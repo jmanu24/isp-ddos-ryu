@@ -1368,7 +1368,25 @@ class OrchestrationController:
         if not self._active_mobile_blocks:
             return []
 
-        by_dst = {c.dst_ip: c for c in correlated}
+        # Keyed by (domain, dst_ip), NOT just dst_ip (item 3 fix,
+        # config/settings.py's DETECTION_CROSS_DOMAIN_CORRELATION=False /
+        # "isolated detection"): correlator.py's own isolated-mode bucket
+        # key is (domain, dst_ip), so correlate() can return SEVERAL
+        # CorrelatedEvents sharing the same dst_ip -- one per domain that
+        # happens to be under attack toward the same destination. A dict
+        # keyed on dst_ip alone collapses those into whichever one
+        # iteration happened to visit last, so a block's `c = by_dst.get
+        # (dst_ip)` lookup below could silently fetch a DIFFERENT
+        # domain's CorrelatedEvent (one with no events for this block's
+        # own domain/src_ip at all), making `still_present` see nothing
+        # and release the block prematurely while the real attacker is
+        # still flooding. Each CorrelatedEvent is registered once per
+        # domain in its own `domains` list -- in multidomain mode that
+        # list has every contributing domain and every one of them maps
+        # back to the SAME CorrelatedEvent, so this is a no-op there.
+        by_domain_dst = {
+            (domain, c.dst_ip): c for c in correlated for domain in c.domains
+        }
         unblock_actions: List[MitigationAction] = []
 
         for key in list(self._active_mobile_blocks):
@@ -1399,7 +1417,7 @@ class OrchestrationController:
                 if time.time() - started_at < original.duration:
                     continue
             else:
-                c = by_dst.get(dst_ip)
+                c = by_domain_dst.get((domain, dst_ip))
                 # Matches on src_ip alone, not protocol -- neither
                 # MobileNetworkAdapter nor BroadbandAdapter's collect()
                 # can produce more than one TelemetryEvent per source per

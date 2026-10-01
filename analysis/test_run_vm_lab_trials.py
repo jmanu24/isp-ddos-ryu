@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 
 from run_vm_lab_trials import (
-    DOMAINS, Lab, TrialResult, VECTORS, extract_result, mobile_preflight,
-    parse_ts, resolve_effective_vectors, run_trial, write_outputs,
+    DOMAINS, ENTERPRISE_MULTIDOMAIN_HOSTS, Lab, LabError, TrialResult, VECTORS,
+    extract_result, mobile_preflight, parse_ts, resolve_effective_vectors,
+    run_trial, source_matches, write_outputs,
 )
 
 
@@ -118,7 +119,7 @@ class TrialParsingTests(unittest.TestCase):
                 super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
                 self.healthchecks = 0
 
-            def healthcheck(self):
+            def healthcheck(self, domains=None):
                 self.healthchecks += 1
 
             def shell(self, *args, **kwargs):
@@ -245,6 +246,208 @@ class TrialParsingTests(unittest.TestCase):
             self.assertEqual(record["TCP_SYN_FLOOD_Td"], "1.0")
             self.assertEqual(record["TCP_SYN_FLOOD_Tm"], "0.2")
             self.assertEqual(record["TCP_SYN_FLOOD_Tr"], "4.0")
+
+
+    # --- item 1: set_detection_mode must always apply, never trust
+    # in-process state as a proxy for the real controller's state ---
+
+    def test_set_detection_mode_always_applies_even_if_unchanged_in_process(self):
+        class RecordingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+                self.restarts = 0
+                self.log = ""
+
+            def shell(self, host, command, **kwargs):
+                if "systemctl restart ryu-manager" in command:
+                    self.restarts += 1
+                    self.log += "STARTUP DETECTION_MODE=multidomain\n"
+                return ""
+
+            def healthy(self, host, command):
+                return True
+
+            def log_size(self):
+                return 0
+
+            def log_from(self, offset):
+                return self.log
+
+        lab = RecordingLab()
+        # self.detection_mode already equals "multidomain" (the __init__
+        # default) -- the OLD buggy code would see this and skip
+        # applying anything at all.
+        self.assertEqual(lab.detection_mode, "multidomain")
+        lab.set_detection_mode("multidomain")
+        self.assertEqual(lab.restarts, 1)
+
+    def test_set_detection_mode_verifies_against_the_controllers_own_log_line(self):
+        class StaleLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+
+            def shell(self, host, command, **kwargs):
+                return ""
+
+            def healthy(self, host, command):
+                return True
+
+            def log_size(self):
+                return 0
+
+            def log_from(self, offset):
+                # The restart "succeeded" (service active) but the
+                # controller's own startup log still reports the OLD
+                # mode -- must be treated as a failure, not silently
+                # accepted just because systemctl is-active passed.
+                return "STARTUP DETECTION_MODE=multidomain\n"
+
+        with self.assertRaises(LabError):
+            StaleLab().set_detection_mode("isolated")
+
+    # --- item 2: startup_healthcheck/healthcheck scope to --domains,
+    # and a mobile recovery exception must not crash the campaign ---
+
+    def test_startup_healthcheck_skips_mobile_when_not_selected(self):
+        class NoMobileLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+                self.reachable_hosts = []
+
+            def ensure_vm_reachable(self, host, vm_name):
+                self.reachable_hosts.append(host)
+
+            def shell(self, host, command, **kwargs):
+                return "active\nactive\nactive\n"
+
+            def healthy(self, host, command):
+                return True
+
+            def mobile_chain_healthy(self):
+                self.fail("mobile must not be checked when not in --domains")
+
+            def broadband_session_count(self):
+                return 8
+
+        lab = NoMobileLab()
+        lab.startup_healthcheck(("enterprise",))
+        self.assertNotIn("ran", lab.reachable_hosts)
+        self.assertNotIn("du", lab.reachable_hosts)
+        self.assertNotIn("ue", lab.reachable_hosts)
+
+    def test_startup_healthcheck_mobile_recovery_exception_is_captured(self):
+        class ExplodingRecoveryLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+
+            def ensure_vm_reachable(self, host, vm_name):
+                pass
+
+            def shell(self, host, command, **kwargs):
+                return "active\nactive\nactive\n"
+
+            def healthy(self, host, command):
+                return True
+
+            def mobile_chain_healthy(self):
+                return False  # never recovers
+
+            def playbook(self, *args, **kwargs):
+                raise RuntimeError("ansible-playbook exploded")
+
+            def broadband_session_count(self):
+                return 8
+
+        # Must NOT raise -- item 2 fix: this used to be unguarded and
+        # would crash the whole campaign over mobile's own flakiness.
+        ExplodingRecoveryLab().startup_healthcheck(("mobile",))
+
+    # --- item 4: a real TCP probe against the victim's service, not
+    # ICMP, and broadband now gets one too ---
+
+    def test_recovery_probes_use_tcp_not_icmp(self):
+        from run_vm_lab_trials import _RECOVERY_PROBE
+        for domain, (host, cmd) in _RECOVERY_PROBE.items():
+            self.assertNotIn("ping", cmd, f"{domain}'s recovery probe still uses ICMP ping")
+        self.assertIn("broadband", _RECOVERY_PROBE)
+
+    # --- item 7: NO_DETECTION is a valid experimental outcome, distinct
+    # from a real pipeline failure ---
+
+    def test_no_detection_when_attack_confirmed_but_never_detected(self):
+        row = TrialResult("run1", 1, "enterprise", "UDP_FLOOD", "10.70.0.11", "10.55.0.100",
+                          observed_pps=500.0)
+        extract_result("", row, 1000.0)
+        self.assertEqual(row.status, "NO_DETECTION")
+
+    def test_incomplete_when_attack_never_confirmed_and_never_detected(self):
+        # observed_pps is None (the before/after tx sample never
+        # confirmed real traffic) -- must stay INCOMPLETE, not be
+        # upgraded to a NO_DETECTION outcome a never-launched attack
+        # doesn't deserve.
+        row = TrialResult("run1", 1, "enterprise", "UDP_FLOOD", "10.70.0.11", "10.55.0.100",
+                          observed_pps=None)
+        extract_result("", row, 1000.0)
+        self.assertEqual(row.status, "INCOMPLETE")
+
+    def test_incomplete_when_detected_but_never_mitigated(self):
+        # A real pipeline-bug symptom (detected but the mitigation never
+        # followed) must stay INCOMPLETE and keep halting the campaign --
+        # NO_DETECTION must never mask this.
+        log = (
+            "2026-01-01 00:00:01 FlowStatsIDS [enterprise] DETECTION: "
+            "ATTACK_DETECTED UDP_FLOOD source=10.70.0.11 destination=10.55.0.100:53\n"
+        )
+        row = TrialResult("run1", 1, "enterprise", "UDP_FLOOD", "10.70.0.11", "10.55.0.100",
+                          observed_pps=500.0)
+        extract_result(log, row, 1000.0)
+        self.assertEqual(row.status, "INCOMPLETE")
+
+    # --- item 7: MULTIDOMAIN_FLOOD launches enterprise from all 5
+    # ent-site hosts, not just one (DIST_MIN_SOURCES=5 can never be
+    # crossed by one attacker per domain otherwise) ---
+
+    def test_multidomain_flood_launches_enterprise_from_all_five_sites(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.hosts = []
+
+            def shell(self, host, command, **kwargs):
+                self.hosts.append(host)
+                return ""
+
+        lab = CapturingLab()
+        lab.launch("enterprise", "MULTIDOMAIN_FLOOD", "run1", 20)
+        self.assertEqual(sorted(lab.hosts), sorted(ENTERPRISE_MULTIDOMAIN_HOSTS))
+
+    def test_isolated_enterprise_vector_still_uses_only_ent_site_1(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.hosts = []
+
+            def shell(self, host, command, **kwargs):
+                self.hosts.append(host)
+                return ""
+
+        lab = CapturingLab()
+        lab.launch("enterprise", "UDP_FLOOD", "run1", 20)
+        self.assertEqual(lab.hosts, ["ent-site-1"])
+
+    def test_source_matches_accepts_wildcard_for_enterprise(self):
+        self.assertTrue(source_matches("enterprise", "10.70.0.11", "*"))
+        self.assertTrue(source_matches("broadband", "", "*"))
+        self.assertFalse(source_matches("mobile", "10.45.1.2", "*"))
+
+    def test_multidomain_flood_enterprise_row_source_is_wildcard(self):
+        lab = Lab(Path("."), Path("inventory.ini"), dry_run=True)
+        rows = run_trial(lab, 1, "MULTIDOMAIN_FLOOD", ("enterprise", "peering"), 5, 10, 1,
+                         scenario_mode="multidomain")
+        enterprise_row = next(r for r in rows if r.domain == "enterprise")
+        peering_row = next(r for r in rows if r.domain == "peering")
+        self.assertEqual(enterprise_row.source, "")
+        self.assertNotEqual(peering_row.source, "")
 
 
 if __name__ == "__main__":

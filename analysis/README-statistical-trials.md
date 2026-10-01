@@ -137,6 +137,7 @@ Una corrida exitosa de Mobile demuestra que la cadena `ran(cu1)→du(du1)→ue1`
 
 ```bash
 python3 analysis/run_vm_lab_trials.py --repeatability-cycles 20 \
+  --domains mobile \
   --output-dir analysis/results/vm-lab-mobile-repeatability-20
 ```
 
@@ -164,19 +165,64 @@ Ni `INVALID` ni `INVALID_SCENARIO` detienen la campaña (a diferencia de un
 `ERROR`/`INCOMPLETE` real en un dominio que no es Mobile) -- se imprimen como
 advertencia y la campaña sigue con el siguiente trabajo. Ambos quedan fuera
 del conjunto de corridas ya completadas, así que `--resume` los vuelve a
-intentar como cualquier combinación todavía no resuelta en `OK`.
+intentar como cualquier combinación todavía no resuelta.
+
+El healthcheck de arranque (y el que corre antes de cada corrida) solo
+revisa las VMs/servicios de los dominios que `--domains` realmente
+seleccionó -- una campaña sin `mobile` nunca queda bloqueada, ni
+ralentizada, por la inestabilidad conocida de ese dominio.
+
+## `NO_DETECTION`: ausencia de detección como resultado válido
+
+Si el ataque se confirma realmente lanzado (`observed_pps > 0`, medido por
+`Lab.sample_tx_packets()`) pero nunca aparece una línea `ATTACK_DETECTED`
+dentro de `--event-timeout`, la fila queda `status=NO_DETECTION` -- un
+resultado experimental válido para una comparación de sensibilidad A/B
+(`--detection-mode isolated` vs. `multidomain`), no una falla del script.
+`NO_DETECTION`, igual que `INVALID`/`INVALID_SCENARIO`, no detiene la
+campaña y sí cuenta como corrida completada para `--resume`. Una detección
+que SÍ ocurrió pero cuya mitigación/recuperación nunca llegó sigue siendo
+`INCOMPLETE` (síntoma de un bug real del pipeline, como el de FLOWSPEC de
+peering encontrado en esta misma campaña) y sigue deteniendo la campaña.
+
+`MULTIDOMAIN_FLOOD` lanza ahora el ataque de enterprise desde los 5 hosts
+`ent-site-1..5` (no solo uno) -- un solo atacante por dominio nunca puede
+cruzar `config.settings.DIST_MIN_SOURCES` (5), así que antes este escenario
+no podía demostrar `MULTIDOMAIN_DISTRIBUTED_ATTACK` bajo ninguna selección
+de `--domains` (máximo 4 dominios = 4 fuentes). Con enterprise participando,
+la campaña sí puede alcanzar el umbral por sí sola.
+
+## Manifiesto de campaña (`--resume`)
+
+Cada `--output-dir` guarda un `campaign_manifest.json` con la condición
+experimental (`--domains`, `--vectors` efectivos, `--mode`,
+`--detection-mode`, `--attack-duration`, `--event-timeout`,
+`--repeatability-cycles`). `--resume` contra un directorio cuyo manifiesto
+no coincide con la invocación actual falla rápido en vez de mezclar
+condiciones distintas (p. ej. `isolated` y `multidomain`) en el mismo
+`trials_long.csv`/`trials_table.csv` sin forma de distinguir después cuál
+fila vino de cuál. Usar un `--output-dir` separado por condición.
 
 ## Trazabilidad por corrida
 
 Cada fila de `trials_long.csv` incluye, además de dominio/vector/corrida:
 
-- `code_version`: hash corto de git del checkout que generó esa fila (+ sufijo
-  `-dirty` si había cambios sin commitear).
+- `code_version`: `<hash runner>+controller=<hash orchestrator>` -- el
+  checkout que generó la corrida Y el checkout realmente desplegado en
+  `orchestrator` (`/opt/Tesis_Controller`), que pueden diferir entre sí
+  (+ sufijo `-dirty` en cualquiera de los dos si había cambios sin
+  commitear).
 - `detection_mode` / `scenario_mode`: los dos ejes A/B de esta corrida.
 - `observed_pps`, `traffic_recovered`: ver la sección de arriba.
-- `status`/`error`: incluye los nuevos `INVALID`/`INVALID_SCENARIO` además
-  de `OK`/`INCOMPLETE`/`ERROR`/`DRY_RUN` -- las corridas fallidas y las
-  inválidas se conservan en `trials.jsonl`, nunca se descartan.
+- `status`/`error`: incluye `INVALID`/`INVALID_SCENARIO`/`NO_DETECTION`
+  además de `OK`/`INCOMPLETE`/`ERROR`/`DRY_RUN` -- las corridas fallidas y
+  las inválidas se conservan en `trials.jsonl`, nunca se descartan.
+
+Una corrida cuyos eventos de log se completaron (`status=OK`) pero cuya
+sonda de recuperación post-mitigación falló (`traffic_recovered=False`,
+contra el servicio TCP real que la víctima expone -- no un ping ICMP) NO
+cuenta como terminada para `--resume`: se reintenta como cualquier otra
+combinación sin resolver.
 
 Para una comparación A/B honesta entre campañas (`--detection-mode isolated`
 vs. `multidomain`, o entre sesiones de distintos días), alternar o

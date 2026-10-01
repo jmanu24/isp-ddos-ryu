@@ -26,7 +26,11 @@ cu_cp:
   amf:
     addr: {{ core5g_ran_addr | default('10.40.0.1') }}
     port: 38412
-    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    # own_ran_addr, NOT ran_ran_addr -- see f1ap.bind_addr's own comment
+    # below (this is the same VM's own address, item 6 fix: cu2 shares
+    # this role/template with `ran` and needs ITS OWN address here, not
+    # the single global group_var hardcoded to `ran`).
+    bind_addr: {{ own_ran_addr | default(ran_ran_addr) | default('10.40.0.2') }}
     supported_tracking_areas:
       - tac: 7
         plmn_list:
@@ -36,12 +40,13 @@ cu_cp:
   inactivity_timer: 7200
   f1ap:
     # This VM's own real RAN-network address, NOT loopback -- CU (this
-    # VM, `ran`) and DU (the separate `du` VM) are two different VMs now.
-    # ran_ran_addr is already this VM's own address (also used for the
-    # AMF-facing bind_addr above), reused here rather than adding a new
-    # dedicated F1 address -- nothing else on this VM's RAN interface
-    # conflicts with F1AP's own port.
-    bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+    # VM) and DU (a separate VM) are two different VMs now. own_ran_addr
+    # (also used for the AMF-facing bind_addr above), NOT ran_ran_addr --
+    # the latter is a single group_var hardcoded to the VM literally
+    # named `ran`, which silently breaks on cu2 (item 6 fix: confirmed
+    # on a real run cu2 had no override here before this and would have
+    # bound F1AP to `ran`'s own address instead of its own).
+    bind_addr: {{ own_ran_addr | default(ran_ran_addr) | default('10.40.0.2') }}
 
 cu_up:
   # f1u IS nested under cu_up -- confirmed by reading srsRAN Project's own
@@ -71,7 +76,7 @@ cu_up:
   f1u:
     bind_port: 2153
     socket:
-      - bind_addr: {{ ran_ran_addr | default('10.40.0.2') }}
+      - bind_addr: {{ own_ran_addr | default(ran_ran_addr) | default('10.40.0.2') }}
 
 # Gives the CU-CP its OWN E2 agent (separate SCTP association from the
 # DU's own, confirmed via apps/cu/cu.cpp: create_e2_gateway_client()
@@ -113,7 +118,10 @@ e2:
   e2sm_rc_enabled: false
   addr: {{ ric_addr | default('10.10.0.4') }}
   port: 36421
-  bind_addr: {{ ran_mgmt_addr | default('10.10.0.6') }}
+  # own_mgmt_addr, NOT ran_mgmt_addr -- same item 6 fix as the RAN-side
+  # bind_addrs above: this is this VM's own E2 agent bind address, and
+  # ran_mgmt_addr is hardcoded to `ran` specifically.
+  bind_addr: {{ own_mgmt_addr | default(ran_mgmt_addr) | default('10.10.0.6') }}
 
 log:
   filename: /tmp/cu.log

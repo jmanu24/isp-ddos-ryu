@@ -52,15 +52,35 @@ TRIAL_MODES = ("isolated", "multidomain", "both")
 
 # Mobile's one representative attacker is ue1 (netns on host `ue`,
 # cu1=`ran` -> du1=`du` -> ue1 -- see mobile-bringup-order memory). The
-# other 4 UEs are left out of the trial design the same way enterprise
-# only uses ent-site-1 and broadband only uses `suscriptor`: one real
-# attacker per domain is the point, not exhaustive coverage.
+# other 4 UEs are left out of the trial design the same way broadband
+# only uses `suscriptor` (a single host managing several subscriber
+# sources) and peering only uses `peer-router`: one real attacker per
+# domain is the point for the ISOLATED vectors, not exhaustive coverage.
 HOST_BY_DOMAIN = {
     "enterprise": "ent-site-1",
     "broadband": "suscriptor",
     "mobile": "ue",
     "peering": "peer-router",
 }
+
+# Item 7 fix: MULTIDOMAIN_FLOOD launching exactly one attacker per
+# selected domain can NEVER cross settings.DIST_MIN_SOURCES (5) -- there
+# are only 4 domains total, so even selecting all of them gives 4
+# sources, always short of the 5 MULTIDOMAIN_DISTRIBUTED_ATTACK itself
+# requires (detection/engine.py). That means this scenario could never
+# actually demonstrate the hypothesis it exists to test, regardless of
+# which/how many --domains were picked -- it could still trigger OTHER
+# detections, but not the one named after it. All 5 ent-site-N hosts are
+# real, independent attack sources already used for exactly this reason
+# by the enterprise domain's own isolated DDoS scenario (see roles/
+# enterprise_site's own comment: "needed to cross DIST_MIN_SOURCES=5")
+# -- reusing all 5 here, ONLY for MULTIDOMAIN_FLOOD (isolated vectors
+# still use just ent-site-1, unchanged), lets enterprise alone satisfy
+# DIST_MIN_SOURCES whenever it's one of the selected domains, instead of
+# depending on how many OTHER domains happened to be picked too.
+ENTERPRISE_MULTIDOMAIN_HOSTS = (
+    "ent-site-1", "ent-site-2", "ent-site-3", "ent-site-4", "ent-site-5",
+)
 
 SOURCE_HINT = {
     "enterprise": "10.70.0.11",
@@ -221,25 +241,57 @@ class Lab:
         return self._run(argv, timeout=timeout)
 
     def code_version(self) -> str:
-        """Short git commit hash of THIS checkout at run time, recorded on
-        every TrialResult (item 6: traceability) -- `git describe` isn't
-        used (a dirty worktree during an active campaign is normal, not
-        worth failing over), just the commit + a dirty marker."""
+        """"<runner commit>+controller=<deployed commit>", recorded on
+        every TrialResult (item 6: traceability). Minor fix: this used to
+        report ONLY the runner process's own local checkout -- but the
+        actual detection/decision/mitigation code under test runs on
+        `orchestrator` (/opt/Tesis_Controller), a SEPARATE checkout this
+        script does not control or even necessarily share a filesystem
+        with. The two can legitimately differ (this analysis/ script and
+        the controller's own git pull happen independently), so a trial
+        run from an up-to-date runner against a stale orchestrator
+        checkout would otherwise silently claim the wrong code version.
+        `git describe`/a full status diff isn't used for either side (a
+        dirty worktree during an active campaign is normal, not worth
+        failing over), just each side's own commit + a dirty marker."""
         if self._code_version is not None:
             return self._code_version
+        self._code_version = f"{self._git_version(self.repo)}+controller={self._deployed_controller_version()}"
+        return self._code_version
+
+    @staticmethod
+    def _git_version(path) -> str:
         try:
             commit = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"], cwd=self.repo,
+                ["git", "rev-parse", "--short", "HEAD"], cwd=path,
                 text=True, capture_output=True, timeout=10, check=True,
             ).stdout.strip()
             dirty = subprocess.run(
-                ["git", "status", "--porcelain"], cwd=self.repo,
+                ["git", "status", "--porcelain"], cwd=path,
                 text=True, capture_output=True, timeout=10, check=True,
             ).stdout.strip()
-            self._code_version = commit + ("-dirty" if dirty else "")
+            return commit + ("-dirty" if dirty else "")
         except Exception:  # noqa: BLE001 -- never block a trial over this
-            self._code_version = "unknown"
-        return self._code_version
+            return "unknown"
+
+    def _deployed_controller_version(self) -> str:
+        if self.dry_run:
+            return "dry-run"
+        try:
+            out = self.shell(
+                "orchestrator",
+                "cd /opt/Tesis_Controller && git rev-parse --short HEAD && "
+                "git status --porcelain",
+                timeout=15,
+            )
+        except (LabError, subprocess.TimeoutExpired):
+            return "unknown"
+        lines = out.splitlines()
+        if not lines:
+            return "unknown"
+        commit = lines[0].strip()
+        dirty = any(line.strip() for line in lines[1:])
+        return commit + ("-dirty" if dirty else "") if commit else "unknown"
 
     def set_detection_mode(self, mode: str) -> None:
         """Switches "isolated" vs. "multidomain" detection (item 1) by
@@ -253,11 +305,25 @@ class Lab:
         Environment= is the one mechanism that actually overrides it.
         Deliberately does NOT touch anything else -- the attack side
         (sources/rates/duration/target/thresholds) is completely
-        untouched, so the same attack runs in both modes."""
+        untouched, so the same attack runs in both modes.
+
+        ALWAYS applies and restarts -- the early `if self.detection_mode
+        == mode: return` this used to have was wrong (item 1 bug): a
+        fresh Lab instance always assumes "multidomain" (its __init__
+        default), so a SECOND campaign process started with --detection-
+        mode isolated right after a FIRST one already left the real
+        controller in isolated mode would see self.detection_mode
+        default to "multidomain", skip applying anything, and silently
+        keep running (and labeling every TrialResult) against whatever
+        mode the controller actually happened to be left in -- in-
+        process state was never a reliable proxy for the real, separate
+        controller process's actual state. Verified instead by reading
+        the controller's own STARTUP/DETECTION_MODE log line emitted
+        fresh after THIS restart (ryu_controller_2.py), not just
+        `systemctl is-active` (active-but-still-the-old-mode would pass
+        that check)."""
         if mode not in ("isolated", "multidomain"):
             raise LabError(f"invalid detection mode: {mode}")
-        if self.detection_mode == mode:
-            return
         value = "false" if mode == "isolated" else "true"
         command = (
             "mkdir -p /run/systemd/system/ryu-manager.service.d && "
@@ -265,7 +331,9 @@ class Lab:
             "> /run/systemd/system/ryu-manager.service.d/99-detection-mode.conf && "
             "systemctl daemon-reload && systemctl restart ryu-manager"
         )
-        print(f"Switching detection mode: {self.detection_mode} -> {mode}", flush=True)
+        print(f"Switching detection mode: {self.detection_mode} -> {mode} (always applied, never skipped)",
+              flush=True)
+        offset = 0 if self.dry_run else self.log_size()
         self.shell("orchestrator", command, timeout=60)
         if self.dry_run:
             self.detection_mode = mode
@@ -273,10 +341,22 @@ class Lab:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             if self.healthy("orchestrator", "systemctl is-active ryu-manager"):
-                self.detection_mode = mode
-                return
+                log = self.log_from(offset)
+                m = re.search(r"DETECTION_MODE=(\w+)", log)
+                if m:
+                    if m.group(1) != mode:
+                        raise LabError(
+                            f"ryu-manager restarted but reported DETECTION_MODE={m.group(1)}, "
+                            f"expected {mode} -- the drop-in did not take effect as intended"
+                        )
+                    self.detection_mode = mode
+                    return
             time.sleep(3)
-        raise LabError(f"ryu-manager did not come back up after switching to detection mode {mode}")
+        raise LabError(
+            f"ryu-manager did not report DETECTION_MODE={mode} in its own startup log "
+            "after switching and restarting -- its own log line is the source of truth here, "
+            "not just the unit being active"
+        )
 
     # Per-domain command to dump the attack SOURCE's own interface
     # counters, used by sample_tx_packets() below to measure the actually
@@ -291,29 +371,34 @@ class Lab:
         "mobile": "ip netns exec ue1 cat /proc/net/dev",
     }
 
-    def sample_tx_packets(self, domain: str) -> Optional[int]:
+    def sample_tx_packets(self, domain: str, vector: str = "") -> Optional[int]:
         """Sum of tx_packets across every non-loopback interface on the
-        domain's attack source (its own netns for mobile). Two calls
+        domain's attack source(s) (its own netns for mobile; all 5
+        ent-site-N hosts for enterprise's own MULTIDOMAIN_FLOOD, matching
+        launch()'s own multi-host fan-out -- item 7 fix). Two calls
         bracketing the attack window, divided by elapsed wall time, give
         an observed pps -- see run_trial()'s own use of this."""
         cmd = self._RATE_PROBE_CMD.get(domain)
         if cmd is None or self.dry_run:
             return None
-        res = self.shell(HOST_BY_DOMAIN[domain], cmd, timeout=10, check=False)
+        hosts = (ENTERPRISE_MULTIDOMAIN_HOSTS if domain == "enterprise" and vector == "MULTIDOMAIN_FLOOD"
+                 else (HOST_BY_DOMAIN[domain],))
         total = 0
-        for line in res.splitlines():
-            if ":" not in line:
-                continue
-            iface, rest = line.split(":", 1)
-            if iface.strip() == "lo":
-                continue
-            fields = rest.split()
-            if len(fields) < 10:
-                continue
-            try:
-                total += int(fields[9])  # tx_packets, see /proc/net/dev's own column order
-            except ValueError:
-                continue
+        for host in hosts:
+            res = self.shell(host, cmd, timeout=10, check=False)
+            for line in res.splitlines():
+                if ":" not in line:
+                    continue
+                iface, rest = line.split(":", 1)
+                if iface.strip() == "lo":
+                    continue
+                fields = rest.split()
+                if len(fields) < 10:
+                    continue
+                try:
+                    total += int(fields[9])  # tx_packets, see /proc/net/dev's own column order
+                except ValueError:
+                    continue
         return total
 
     def healthy(self, host: str, command: str) -> bool:
@@ -428,8 +513,17 @@ class Lab:
         )
 
     def launch(self, domain: str, vector: str, run_id: str, duration: int) -> None:
-        host = HOST_BY_DOMAIN[domain]
         marker = self.marker_path(run_id, domain)
+        if domain == "enterprise" and vector == "MULTIDOMAIN_FLOOD":
+            # Item 7 fix -- see ENTERPRISE_MULTIDOMAIN_HOSTS's own
+            # comment: one attacker alone can never cross
+            # settings.DIST_MIN_SOURCES, so this scenario fans out to all
+            # 5 ent-site-N hosts instead of just HOST_BY_DOMAIN's one.
+            for site in ENTERPRISE_MULTIDOMAIN_HOSTS:
+                self.shell(site, self._hping_command(domain, vector, run_id, duration),
+                           background=True)
+            return
+        host = HOST_BY_DOMAIN[domain]
         if domain == "broadband":
             scenario = {
                 "TCP_SYN_FLOOD": "syn_flood",
@@ -450,16 +544,33 @@ class Lab:
             self.shell(host, self._hping_command(domain, vector, run_id, duration),
                        background=True)
 
-    def attack_start(self, domain: str, run_id: str) -> float:
+    def attack_start(self, domain: str, run_id: str, vector: str = "") -> float:
         if self.dry_run:
             return time.time()
-        out = self.shell(HOST_BY_DOMAIN[domain], f"cat {self.marker_path(run_id, domain)}")
-        matches = re.findall(r"(?m)^\s*(\d+\.\d+)\s*$", out)
-        if not matches:
+        # Item 7 fix: enterprise's MULTIDOMAIN_FLOOD writes a marker on
+        # each of its 5 hosts (launch()'s own fan-out) -- the earliest of
+        # the 5 is this trial's real attack-onset time, same idea as a
+        # single-host read for every other domain/vector.
+        hosts = (ENTERPRISE_MULTIDOMAIN_HOSTS if domain == "enterprise" and vector == "MULTIDOMAIN_FLOOD"
+                 else (HOST_BY_DOMAIN[domain],))
+        starts = []
+        for host in hosts:
+            out = self.shell(host, f"cat {self.marker_path(run_id, domain)}")
+            matches = re.findall(r"(?m)^\s*(\d+\.\d+)\s*$", out)
+            if matches:
+                starts.append(float(matches[-1]))
+        if not starts:
             raise LabError(f"missing attack start marker for {domain}")
-        return float(matches[-1])
+        return min(starts)
 
     def stop(self, domain: str) -> None:
+        if domain == "enterprise":
+            # Always all 5 (idempotent/harmless on a host that was never
+            # attacking) -- simpler than threading `vector` through
+            # cleanup()'s own domain-only signature just for this.
+            for site in ENTERPRISE_MULTIDOMAIN_HOSTS:
+                self.shell(site, "pkill -f '[h]ping3' || true", check=False)
+            return
         host = HOST_BY_DOMAIN[domain]
         if domain == "broadband":
             self.shell(host, "printf '%s\\n' baseline > /run/bng-agent/cmd", check=False)
@@ -499,13 +610,18 @@ class Lab:
         except Exception:  # noqa: BLE001
             return False
 
-    def healthcheck(self) -> None:
-        checks = (
-            ("orchestrator", "systemctl is-active ryu-manager nfcapd exabgp"),
-            ("br", "systemctl is-active softflowd-peering"),
-            ("bng", "systemctl is-active accel-pppd freeradius"),
-            ("suscriptor", "systemctl is-active bng-subscriber-agent"),
-        )
+    def healthcheck(self, domains: tuple = DOMAINS) -> None:
+        """`domains` (item 2 fix, same as startup_healthcheck) -- this is
+        also called once per trial in the main iteration loop, so an
+        Enterprise/Peering-only campaign must not be able to fail (or be
+        slowed down retrying) over `br`/`bng`/`suscriptor`, which only
+        the broadband/peering domains actually use."""
+        checks = [("orchestrator", "systemctl is-active ryu-manager nfcapd exabgp")]
+        if "peering" in domains:
+            checks.append(("br", "systemctl is-active softflowd-peering"))
+        if "broadband" in domains:
+            checks.append(("bng", "systemctl is-active accel-pppd freeradius"))
+            checks.append(("suscriptor", "systemctl is-active bng-subscriber-agent"))
         for host, command in checks:
             out = self.shell(host, command)
             if self.dry_run:
@@ -515,18 +631,34 @@ class Lab:
             if len(active) < expected:
                 raise LabError(f"health check failed on {host}: {out.strip()}")
 
-    def startup_healthcheck(self) -> None:
-        """Validate every domain and repair only the parts that are unhealthy."""
+    # Hosts each domain's startup healthcheck needs beyond the always-
+    # needed orchestrator/victim (item 2 fix: this used to be one fixed
+    # list checked regardless of --domains, so a Mobile-only VM outage
+    # could block/slow down an Enterprise-only or Peering-only campaign
+    # that never touches Mobile at all).
+    _DOMAIN_HOSTS = {
+        "enterprise": ("ent-site-1", "pe"),
+        "broadband": ("bng", "suscriptor"),
+        "mobile": ("ric", "core5g", "ran", "du", "ue"),
+        "peering": ("br", "peer-router"),
+    }
+
+    def startup_healthcheck(self, domains: tuple = DOMAINS) -> None:
+        """Validate the selected domains and repair only the parts that
+        are unhealthy. `domains` (item 2 fix) scopes BOTH which VMs are
+        checked for reachability and which domain-specific blocks below
+        run at all -- a campaign that never selected "mobile" must never
+        be blocked, slowed down, or failed by Mobile's own, separately
+        known flakiness."""
         if self.dry_run:
-            self.healthcheck()
+            self.healthcheck(domains)
             return
 
         print("\n=== startup healthcheck: VM availability ===", flush=True)
-        for host in (
-            "orchestrator", "victim", "ent-site-1", "pe", "bng", "suscriptor",
-            "ric", "core5g", "ran", "du", "ue",
-            "br", "peer-router",
-        ):
+        hosts = {"orchestrator", "victim"}
+        for domain in domains:
+            hosts.update(self._DOMAIN_HOSTS[domain])
+        for host in sorted(hosts):
             self.ensure_vm_reachable(host, host)
 
         print("\n=== startup healthcheck: shared services ===", flush=True)
@@ -535,88 +667,104 @@ class Lab:
         if not self.healthy("victim", f"ping -c 2 -W 2 {TARGET_IP}"):
             raise LabError("victim is not reachable at 10.55.0.100")
 
-        print("=== startup healthcheck: enterprise ===", flush=True)
-        enterprise_ok = self.healthy("ent-site-1", f"ping -c 2 -W 2 {TARGET_IP}")
-        if not enterprise_ok:
-            self.playbook("deploy/vm-lab/ansible/site.yml", limit="pe,ent-site-1", timeout=300)
-            self.shell("orchestrator", "systemctl restart ryu-manager", timeout=90)
-            time.sleep(5)
-            if not self.healthy("ent-site-1", f"ping -c 3 -W 3 {TARGET_IP}"):
-                raise LabError("enterprise recovery failed: ent-site-1 cannot reach victim")
-
-        print("=== startup healthcheck: broadband ===", flush=True)
-        broadband_services = (
-            self.healthy("bng", "systemctl is-active accel-pppd freeradius")
-            and self.healthy("suscriptor", "systemctl is-active bng-subscriber-agent")
-        )
-        broadband_sessions = broadband_services and self.broadband_session_count() == 8
-        if not broadband_sessions:
-            self.shell("bng", "systemctl restart freeradius accel-pppd", timeout=90)
-            self.shell("suscriptor", "systemctl restart bng-subscriber-agent", timeout=90)
-            self.wait_for_baseline(("broadband",), timeout=150)
-
-        print("=== startup healthcheck: mobile ===", flush=True)
-        if not self.mobile_chain_healthy():
-            for attempt in range(1, 4):
-                # Targeted recovery only (cu1/du1/ue1) -- reconnect_mobile_
-                # domain.yml also covers du2-5/ue2-5/cu2, which this
-                # single-attacker trial design doesn't touch, matching how
-                # enterprise/broadband recovery above is likewise scoped
-                # to just their one representative source. power_cycle is
-                # explicitly false: a full power-off/on of the whole
-                # mobile domain is a last resort the user runs by hand
-                # (see mobile-bringup-order memory), not something a
-                # statistical-trial retry loop should ever trigger.
-                self.playbook(
-                    "deploy/vm-lab/ansible/playbooks/reconnect_mobile_domain.yml",
-                    limit="ran,du,ue", tags="cu1,du1,ue1",
-                    extra_vars={"power_cycle": "false"}, timeout=360,
-                )
-                if self.mobile_chain_healthy():
-                    break
-            else:
-                # NOT a hard raise, deliberately -- the mobile domain's
-                # ZMQ RACH is known non-deterministic (mobile-bringup-
-                # order memory: real recovery sometimes needs a full
-                # power-cycle this targeted retry can't do). Printing and
-                # continuing lets the other 3 domains' trials still run;
-                # mobile's own trials will simply come back INCOMPLETE
-                # (extract_result already handles a missing detection).
-                print(
-                    "WARNING: mobile recovery did not succeed after 3 attempts "
-                    "(cu1/du1/ue1) -- continuing anyway, mobile trials may be "
-                    "INCOMPLETE. See mobile-bringup-order memory for a manual "
-                    "full power-cycle if this persists.",
-                    file=sys.stderr,
-                )
-
-        print("=== startup healthcheck: peering ===", flush=True)
-        peering_check = (
-            "systemctl is-active bird && "
-            "birdc show protocols | grep -qE 'br[[:space:]]+BGP.*Established' && "
-            f"ping -c 2 -W 2 {TARGET_IP}"
-        )
-        peering_ok = (
-            self.healthy("br", "systemctl is-active softflowd-peering")
-            and self.healthy("peer-router", peering_check)
-        )
-        if not peering_ok:
-            self.playbook(
-                "deploy/vm-lab/ansible/site.yml",
-                limit="br,peer-router,victim", timeout=300,
-            )
-            self.shell("orchestrator", "systemctl restart nfcapd exabgp ryu-manager", timeout=90)
-            for _ in range(12):
+        if "enterprise" in domains:
+            print("=== startup healthcheck: enterprise ===", flush=True)
+            enterprise_ok = self.healthy("ent-site-1", f"ping -c 2 -W 2 {TARGET_IP}")
+            if not enterprise_ok:
+                self.playbook("deploy/vm-lab/ansible/site.yml", limit="pe,ent-site-1", timeout=300)
+                self.shell("orchestrator", "systemctl restart ryu-manager", timeout=90)
                 time.sleep(5)
-                if self.healthy("peer-router", peering_check):
-                    break
-            else:
-                raise LabError(
-                    "peering recovery failed: BGP is not established or victim is unreachable"
-                )
+                if not self.healthy("ent-site-1", f"ping -c 3 -W 3 {TARGET_IP}"):
+                    raise LabError("enterprise recovery failed: ent-site-1 cannot reach victim")
 
-        self.healthcheck()
-        print("=== startup healthcheck: all domains healthy ===\n", flush=True)
+        if "broadband" in domains:
+            print("=== startup healthcheck: broadband ===", flush=True)
+            broadband_services = (
+                self.healthy("bng", "systemctl is-active accel-pppd freeradius")
+                and self.healthy("suscriptor", "systemctl is-active bng-subscriber-agent")
+            )
+            broadband_sessions = broadband_services and self.broadband_session_count() == 8
+            if not broadband_sessions:
+                self.shell("bng", "systemctl restart freeradius accel-pppd", timeout=90)
+                self.shell("suscriptor", "systemctl restart bng-subscriber-agent", timeout=90)
+                self.wait_for_baseline(("broadband",), timeout=150)
+
+        if "mobile" in domains:
+            print("=== startup healthcheck: mobile ===", flush=True)
+            if not self.mobile_chain_healthy():
+                for attempt in range(1, 4):
+                    # Targeted recovery only (cu1/du1/ue1) -- reconnect_mobile_
+                    # domain.yml also covers du2-5/ue2-5/cu2, which this
+                    # single-attacker trial design doesn't touch, matching how
+                    # enterprise/broadband recovery above is likewise scoped
+                    # to just their one representative source. power_cycle is
+                    # explicitly false: a full power-off/on of the whole
+                    # mobile domain is a last resort the user runs by hand
+                    # (see mobile-bringup-order memory), not something a
+                    # statistical-trial retry loop should ever trigger.
+                    #
+                    # Wrapped in try/except (item 2 bug fix): this call used
+                    # to be unguarded, so a LabError/timeout from the
+                    # playbook itself (not just "ran but didn't fix it")
+                    # propagated straight out of startup_healthcheck() and
+                    # crashed the whole campaign process before it even
+                    # started -- unlike mobile_preflight()'s own per-trial
+                    # recovery, which already caught exactly this.
+                    try:
+                        self.playbook(
+                            "deploy/vm-lab/ansible/playbooks/reconnect_mobile_domain.yml",
+                            limit="ran,du,ue", tags="cu1,du1,ue1",
+                            extra_vars={"power_cycle": "false"}, timeout=360,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"WARNING: mobile recovery attempt {attempt}/3 raised: {exc}",
+                              file=sys.stderr)
+                    if self.mobile_chain_healthy():
+                        break
+                else:
+                    # NOT a hard raise, deliberately -- the mobile domain's
+                    # ZMQ RACH is known non-deterministic (mobile-bringup-
+                    # order memory: real recovery sometimes needs a full
+                    # power-cycle this targeted retry can't do). Printing and
+                    # continuing lets the other domains' trials still run;
+                    # mobile's own trials will simply come back INCOMPLETE
+                    # (extract_result already handles a missing detection).
+                    print(
+                        "WARNING: mobile recovery did not succeed after 3 attempts "
+                        "(cu1/du1/ue1) -- continuing anyway, mobile trials may be "
+                        "INCOMPLETE. See mobile-bringup-order memory for a manual "
+                        "full power-cycle if this persists.",
+                        file=sys.stderr,
+                    )
+
+        if "peering" in domains:
+            print("=== startup healthcheck: peering ===", flush=True)
+            peering_check = (
+                "systemctl is-active bird && "
+                "birdc show protocols | grep -qE 'br[[:space:]]+BGP.*Established' && "
+                f"ping -c 2 -W 2 {TARGET_IP}"
+            )
+            peering_ok = (
+                self.healthy("br", "systemctl is-active softflowd-peering")
+                and self.healthy("peer-router", peering_check)
+            )
+            if not peering_ok:
+                self.playbook(
+                    "deploy/vm-lab/ansible/site.yml",
+                    limit="br,peer-router,victim", timeout=300,
+                )
+                self.shell("orchestrator", "systemctl restart nfcapd exabgp ryu-manager", timeout=90)
+                for _ in range(12):
+                    time.sleep(5)
+                    if self.healthy("peer-router", peering_check):
+                        break
+                else:
+                    raise LabError(
+                        "peering recovery failed: BGP is not established or victim is unreachable"
+                    )
+
+        self.healthcheck(domains)
+        print("=== startup healthcheck: selected domains healthy ===\n", flush=True)
 
     def broadband_session_count(self) -> int:
         out = self.shell("bng", "accel-cmd -p 2000 show sessions")
@@ -656,7 +804,14 @@ def canonical_domain(log_domain: str) -> str:
 
 def source_matches(domain: str, expected: str, observed: str) -> bool:
     if observed == "*":
-        return domain == "broadband"
+        # Item 7 fix: enterprise's MULTIDOMAIN_FLOOD now launches from
+        # ALL 5 ent-site-N hosts (ENTERPRISE_MULTIDOMAIN_HOSTS), the same
+        # multi-source shape broadband already had -- a detection could
+        # legitimately report an aggregate "*" source for either domain
+        # now. Isolated enterprise vectors (TCP/UDP/ICMP_FLOOD, single
+        # source) can never actually produce distinct_sources >=
+        # DIST_MIN_SOURCES on their own, so this is a no-op for them.
+        return domain in ("broadband", "enterprise")
     return not expected or observed == expected
 
 
@@ -694,8 +849,36 @@ def extract_result(log: str, result: TrialResult, attack_epoch: float) -> TrialR
     if mitigation is not None and recovery is not None:
         result.Tr_s = round(max(0.0, recovery - mitigation), 3)
     missing = [name for name, value in (("detection", detection), ("mitigation", mitigation), ("recovery", recovery)) if value is None]
-    result.status = "OK" if not missing else "INCOMPLETE"
-    result.error = "" if not missing else "missing " + ", ".join(missing)
+    if not missing:
+        result.status = "OK"
+        result.error = ""
+    elif (
+        detection is None and mitigation is None and recovery is None
+        and result.observed_pps is not None and result.observed_pps > 0
+    ):
+        # Item 7 fix: a genuine "the attack ran but nothing detected it"
+        # outcome is a VALID experimental result for an A/B sensitivity
+        # comparison (isolated vs. multidomain detection), not a script
+        # failure -- it used to come back as the same generic
+        # "INCOMPLETE" a real pipeline bug (e.g. detected-but-never-
+        # mitigated) produces, which main()'s own loop treats as fatal
+        # and aborts the whole campaign on. Distinguished here from that
+        # case by requiring INDEPENDENT confirmation the attack actually
+        # sent traffic (observed_pps, from Lab.sample_tx_packets()'s own
+        # before/after window) -- not just "no detection line appeared",
+        # which could equally mean the attack itself never launched. A
+        # detection that DID fire but whose mitigation/recovery never
+        # followed stays "INCOMPLETE" on purpose -- that is a real
+        # pipeline-bug symptom (e.g. the peering FLOWSPEC bug found
+        # earlier in this campaign) and must keep halting the campaign.
+        result.status = "NO_DETECTION"
+        result.error = (
+            f"attack confirmed (observed_pps={result.observed_pps}) but no "
+            "ATTACK_DETECTED logged within the event window"
+        )
+    else:
+        result.status = "INCOMPLETE"
+        result.error = "missing " + ", ".join(missing)
     return result
 
 
@@ -758,19 +941,60 @@ def wait_and_collect(lab: Lab, offset: int, results: list[TrialResult], starts: 
     return [extract_result(latest, row, starts[row.domain]) for row in results]
 
 
+def _tcp_recovery_probe_cmd(netns: str = "", device: str = "") -> str:
+    """Item 4 fix: a TCP connect to the victim's REAL listening service
+    (roles/victim's victim-http, port 80) instead of ICMP ping. A ping
+    reply only proves ICMP reachability -- it says nothing about whether
+    the TCP/UDP service the attack actually targeted (and the mitigation
+    actually blocked/throttled) is reachable again, and in principle the
+    victim could answer ICMP while port 80 stays unreachable (e.g. a
+    stale conntrack/NAT entry, or a block the mitigation scoped to the
+    wrong port). bash's /dev/tcp pseudo-device needs no extra package on
+    any of these hosts (confirmed Ubuntu 22.04 -- see enterprise_site/
+    peer_router/ue_srsue roles' own `apt` tasks; none of them install
+    curl/wget) and a bare TCP SYN/ACK/FIN is enough to prove the path
+    and the service are both up, without needing an HTTP client.
+    `device` (SO_BINDTODEVICE via a tiny inline python3, root required --
+    every lab.shell() call already runs with -b/become) sources the
+    probe out one specific interface -- needed for broadband, where the
+    host itself (`suscriptor`) has no single IP of its own; `netns` runs
+    it inside a mobile UE's network namespace instead."""
+    if device:
+        probe = (
+            "python3 -c \"import socket,sys\n"
+            "s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            f"s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b'{device}')\n"
+            "s.settimeout(3)\n"
+            "try:\n"
+            f"    s.connect(('{TARGET_IP}', 80))\n"
+            "except OSError:\n"
+            "    sys.exit(1)\n"
+            "finally:\n"
+            "    s.close()\n\""
+        )
+    else:
+        probe = f'timeout 3 bash -c "echo > /dev/tcp/{TARGET_IP}/80"'
+    return f"ip netns exec {netns} {probe}" if netns else probe
+
+
 # Legitimate-traffic recovery probe, from the SAME source the attack
 # used -- see check_traffic_recovery()'s own docstring (item 5: a Tr_s
 # timestamp only proves a MITIGATION->UNBLOCK pair was logged, not that
 # the legitimate source can actually reach the target again).
 _RECOVERY_PROBE = {
-    "enterprise": ("ent-site-1", f"ping -c 2 -W 2 {TARGET_IP}"),
-    "peering": ("peer-router", f"ping -c 2 -W 2 {TARGET_IP}"),
-    "mobile": ("ue", f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"),
-    # broadband has no single stable source IP to re-probe this way (its
-    # attack rides a macvlan session the subscriber-agent itself owns) --
-    # wait_for_baseline()'s own 8-active-session check already is that
-    # domain's recovery signal, via a different mechanism. Omitted here
-    # on purpose, not an oversight -- see check_traffic_recovery().
+    "enterprise": ("ent-site-1", _tcp_recovery_probe_cmd()),
+    "peering": ("peer-router", _tcp_recovery_probe_cmd()),
+    "mobile": ("ue", _tcp_recovery_probe_cmd(netns="ue1")),
+    # broadband (item 4 fix): previously had NO probe at all here --
+    # wait_for_baseline()'s 8-active-session count proves accel-ppp
+    # sessions exist, not that legitimate traffic actually passes
+    # through one. macvlan1 (subscriber #1) is always one of the
+    # attacking sources whenever bng_subscriber_agent.py launches any
+    # scenario (SubscriberPool.launch() iterates range(1, active_count+
+    # 1)), so it's a real, representative post-mitigation probe --
+    # bound to that interface specifically (suscriptor itself has no
+    # single stable own-IP the way the other domains' hosts do).
+    "broadband": ("suscriptor", _tcp_recovery_probe_cmd(device="macvlan1")),
 }
 
 
@@ -817,9 +1041,19 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
               scenario_mode: str = "") -> list[TrialResult]:
     run_id = f"i{iteration:03d}-{vector.lower()}-{uuid.uuid4().hex[:8]}"
     results = [
-        TrialResult(run_id, iteration, domain, vector, SOURCE_HINT.get(domain, ""), TARGET_IP,
-                   code_version=lab.code_version(), detection_mode=lab.detection_mode,
-                   scenario_mode=scenario_mode)
+        TrialResult(
+            run_id, iteration, domain, vector,
+            # "" (wildcard, matched via source_matches's own `not expected`
+            # branch), not SOURCE_HINT, for enterprise's MULTIDOMAIN_FLOOD
+            # (item 7 fix) -- it now launches from 5 distinct ent-site-N
+            # sources, not just the one SOURCE_HINT names, so pinning the
+            # expected source to a single IP would miss a detection
+            # reported against any of the other 4.
+            "" if (domain == "enterprise" and vector == "MULTIDOMAIN_FLOOD") else SOURCE_HINT.get(domain, ""),
+            TARGET_IP,
+            code_version=lab.code_version(), detection_mode=lab.detection_mode,
+            scenario_mode=scenario_mode,
+        )
         for domain in domains
     ]
 
@@ -849,7 +1083,16 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
     starts: dict[str, float] = {}
     tx_before: dict[str, Optional[int]] = {}
     try:
-        tx_before = {d: lab.sample_tx_packets(d) for d in domains}
+        # Real wall-clock bracket for observed_pps below (minor fix from
+        # the same review pass) -- NOT a hardcoded `attack_duration + 1`,
+        # which undercounts the actual window: tx_before is sampled here,
+        # BEFORE launch()'s own SSH round trips, and tx_after is sampled
+        # only after attack_duration's sleep on top of THAT -- the real
+        # elapsed time is measurably longer than attack_duration + 1 once
+        # launch/attack_start's own remote calls are accounted for, which
+        # a fixed constant silently ignored.
+        window_start = time.monotonic()
+        tx_before = {d: lab.sample_tx_packets(d, vector) for d in domains}
         # Async hping launches keep multidomain starts close together; broadband's
         # FIFO write is synchronous and takes only one local operation.
         # A multidomain trial is one sequential experiment, but its one source
@@ -863,7 +1106,7 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
             for future in concurrent.futures.as_completed(futures):
                 future.result()
         for domain in domains:
-            starts[domain] = lab.attack_start(domain, run_id)
+            starts[domain] = lab.attack_start(domain, run_id, vector)
         if lab.dry_run:
             for row in results:
                 row.attack_at = iso(starts[row.domain])
@@ -877,9 +1120,9 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
         # the flood by then) keeps this a clean before/after pair instead
         # of racing lab.stop()'s own kill in the `finally` below.
         time.sleep(attack_duration + 1)
-        elapsed = attack_duration + 1
+        elapsed = time.monotonic() - window_start
         for domain in domains:
-            after = lab.sample_tx_packets(domain)
+            after = lab.sample_tx_packets(domain, vector)
             before = tx_before.get(domain)
             row = next(r for r in results if r.domain == domain)
             if before is not None and after is not None and after >= before:
@@ -905,7 +1148,9 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
 
 
 def run_mobile_repeatability(lab: Lab, cycles: int, attack_duration: int,
-                             event_timeout: int, poll: int, vector: str = "UDP_FLOOD") -> list[TrialResult]:
+                             event_timeout: int, poll: int, checkpoint: Path,
+                             out_dir: Path, previous: list[TrialResult],
+                             vector: str = "UDP_FLOOD") -> list[TrialResult]:
     """Item 3 -- a single successful run only demonstrates the ran(cu1)->
     du(du1)->ue1 chain's connect->attack->detect->mitigate->release->
     recover cycle WORKS; it says nothing about whether it's STABLE
@@ -947,6 +1192,15 @@ def run_mobile_repeatability(lab: Lab, cycles: int, attack_duration: int,
         )
         rows = run_trial(lab, cycle, vector, ("mobile",), attack_duration, event_timeout, poll,
                          scenario_mode="repeatability")
+        # Minor fix (same review pass): save EACH cycle as it completes,
+        # not just the whole batch at the very end -- a crash/Ctrl-C
+        # partway through cycle 20/30 used to lose every cycle completed
+        # so far instead of leaving a resumable checkpoint, unlike the
+        # main iteration loop's own per-job append_checkpoint/
+        # write_outputs.
+        append_checkpoint(checkpoint, rows)
+        previous.extend(rows)
+        write_outputs(out_dir, previous)
         all_rows.extend(rows)
         row = rows[0]
         print(
@@ -1057,7 +1311,66 @@ def main() -> int:
     previous = load_checkpoint(checkpoint) if args.resume else []
     if checkpoint.exists() and not args.resume:
         parser.error(f"{checkpoint} already exists; use --resume or a different --output-dir")
-    completed = {(r.iteration, r.domain, r.vector) for r in previous if r.status == "OK"}
+
+    # Item 5 fix: a campaign manifest recording the experimental CONDITION
+    # this --output-dir was started under -- --resume used to accept ANY
+    # later invocation against the same directory, regardless of whether
+    # --mode/--detection-mode/--domains/--vectors/--attack-duration/
+    # --event-timeout actually matched the original run. A/B comparisons
+    # (isolated vs. multidomain detection, or scenario mode) need those
+    # to stay fixed within one directory's results -- silently mixing
+    # them would make trials_long.csv/trials_table.csv average across
+    # two different conditions without any way to tell which rows came
+    # from which. Iterations/seed/cooldown/poll are deliberately EXCLUDED
+    # -- those are allowed to differ across a resume (e.g. extending a
+    # campaign to more iterations), they don't change what's being
+    # measured.
+    manifest_path = out_dir / "campaign_manifest.json"
+    conditions = {
+        "domains": sorted(args.domains),
+        "vectors": sorted(args.vectors),
+        "mode": args.mode,
+        "detection_mode": args.detection_mode,
+        "attack_duration": args.attack_duration,
+        "event_timeout": args.event_timeout,
+        "repeatability_cycles": args.repeatability_cycles,
+    }
+    if args.resume and manifest_path.exists():
+        recorded = json.loads(manifest_path.read_text())
+        if recorded != conditions:
+            parser.error(
+                f"{manifest_path} was recorded under a different experimental condition "
+                "than this invocation -- --resume must not silently mix conditions in one "
+                f"--output-dir (use a different --output-dir per condition):\n"
+                f"  recorded:  {json.dumps(recorded, sort_keys=True)}\n"
+                f"  requested: {json.dumps(conditions, sort_keys=True)}"
+            )
+    elif args.resume and previous and not manifest_path.exists():
+        parser.error(
+            f"{checkpoint} has existing results but no {manifest_path.name} (pre-dates this "
+            "check) -- its original --mode/--detection-mode/--domains/--vectors/"
+            "--attack-duration/--event-timeout cannot be verified against this invocation. "
+            f"Confirm by hand they match, then create {manifest_path} with: "
+            f"{json.dumps(conditions, sort_keys=True)}"
+        )
+    manifest_path.write_text(json.dumps(conditions, indent=2, sort_keys=True) + "\n")
+
+    # Item 5 fix: the completed-run key now also carries detection_mode/
+    # scenario_mode, not just (iteration, domain, vector) -- defense in
+    # depth alongside the manifest check above (the manifest stops a
+    # whole directory from mixing conditions; this stops a single stale
+    # row from ever being mismatched against the wrong condition's
+    # membership test). Item 4 fix: traffic_recovered is not False --
+    # a row whose logged events all completed (status=="OK"/
+    # "NO_DETECTION") but whose post-mitigation probe FAILED must not be
+    # treated as done; --resume should retry it like any other
+    # unfinished row, not silently accept a run that never actually
+    # confirmed real recovery.
+    completed = {
+        (r.iteration, r.domain, r.vector, r.detection_mode, r.scenario_mode)
+        for r in previous
+        if r.status in ("OK", "NO_DETECTION") and r.traffic_recovered is not False
+    }
     lab = Lab(repo, inventory, args.dry_run)
     rng = random.Random(args.seed)
 
@@ -1070,19 +1383,24 @@ def main() -> int:
     lab.set_detection_mode(args.detection_mode)
     print(f"Detection mode: {args.detection_mode}", flush=True)
 
-    lab.startup_healthcheck()
+    lab.startup_healthcheck(tuple(args.domains))
     lab.cleanup()
     lab.wait_for_baseline(args.domains)
 
     if args.repeatability_cycles:
+        # Per-cycle checkpointing now happens INSIDE run_mobile_
+        # repeatability itself (minor fix) -- previous/checkpoint/out_dir
+        # are passed in rather than saved once at the end here.
         rows = run_mobile_repeatability(lab, args.repeatability_cycles, args.attack_duration,
-                                        args.event_timeout, args.poll)
-        append_checkpoint(checkpoint, rows)
-        previous.extend(rows)
-        write_outputs(out_dir, previous)
+                                        args.event_timeout, args.poll, checkpoint, out_dir, previous)
         lab.cleanup()
         print(f"\nCompleted. Results: {out_dir / 'trials_table.csv'}")
-        return 0
+        # Minor fix: reflect failed cycles in the exit code -- this used
+        # to always `return 0` even if every cycle came back INCOMPLETE/
+        # ERROR, silently reporting a broken campaign as a success to
+        # any script/CI checking $?.
+        failed_cycles = [r for r in rows if r.status not in ("OK", "DRY_RUN")]
+        return 2 if failed_cycles else 0
 
     for iteration in range(1, args.iterations + 1):
         jobs: list[tuple[str, tuple[str, ...]]] = []
@@ -1092,18 +1410,19 @@ def main() -> int:
                 if len(domains) < 2:
                     print("Skipping MULTIDOMAIN_FLOOD: at least two domains are required", file=sys.stderr)
                     continue
-                if all((iteration, d, vector) in completed for d in domains):
+                if all((iteration, d, vector, args.detection_mode, args.mode) in completed
+                       for d in domains):
                     continue
                 jobs.append((vector, domains))
             else:
                 for domain in args.domains:
-                    if (iteration, domain, vector) not in completed:
+                    if (iteration, domain, vector, args.detection_mode, args.mode) not in completed:
                         jobs.append((vector, (domain,)))
         rng.shuffle(jobs)
 
         for vector, domains in jobs:
             print(f"\n=== iteration={iteration} vector={vector} domains={','.join(domains)} ===", flush=True)
-            lab.healthcheck()
+            lab.healthcheck(domains)
             lab.cleanup()
             lab.wait_for_baseline(domains)
             rows = run_trial(lab, iteration, vector, domains, args.attack_duration,
@@ -1120,7 +1439,17 @@ def main() -> int:
             invalid = [r for r in rows if r.status in ("INVALID", "INVALID_SCENARIO")]
             for r in invalid:
                 print(f"  {r.status}: {r.domain}/{r.vector} -- {r.error}", file=sys.stderr)
-            failed = [r for r in rows if r.status not in ("OK", "DRY_RUN", "INVALID", "INVALID_SCENARIO")]
+            # NO_DETECTION (item 7 fix): a confirmed-attack/no-detection
+            # row is a valid recorded outcome for an A/B sensitivity
+            # comparison, not a script failure -- see extract_result()'s
+            # own docstring for the detection/mitigation distinction that
+            # keeps a REAL pipeline bug (detected but never mitigated)
+            # still landing in `failed` below.
+            no_detection = [r for r in rows if r.status == "NO_DETECTION"]
+            for r in no_detection:
+                print(f"  NO_DETECTION: {r.domain}/{r.vector} -- {r.error}", file=sys.stderr)
+            failed = [r for r in rows if r.status not in
+                     ("OK", "DRY_RUN", "INVALID", "INVALID_SCENARIO", "NO_DETECTION")]
             if failed:
                 print("Trial incomplete; checkpoint saved. Fix the cause and rerun with --resume.", file=sys.stderr)
                 return 2
