@@ -1,6 +1,5 @@
-# topology.yaml -- single source of truth for the 16-VM ESXi lab
-# (docs/thesis-revision-plan.md SS4.1.1-4.1.2's "topologia con limites de VM,
-# interfaces y puntos de medicion reales").
+# topology.yaml -- single source of truth for the 23-VM ESXi lab
+# ("topologia con limites de VM, interfaces y puntos de medicion reales").
 #
 # Every other file under deploy/vm-lab/ is DERIVED from this one:
 #   - scripts/render_topology.py reads it to generate per-VM cloud-init

@@ -6,7 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from run_vm_lab_trials import DOMAINS, Lab, TrialResult, extract_result, parse_ts, write_outputs
+from run_vm_lab_trials import (
+    DOMAINS, Lab, TrialResult, VECTORS, extract_result, parse_ts,
+    resolve_effective_vectors, write_outputs,
+)
 
 
 class TrialParsingTests(unittest.TestCase):
@@ -145,6 +148,29 @@ class TrialParsingTests(unittest.TestCase):
             result = extract_result(log, row, attack)
             self.assertEqual(result.status, "OK", (domain, result.error))
             self.assertEqual((result.Td_s, result.Tm_s, result.Tr_s), (1.125, 0.125, 3.25))
+
+    def test_mode_isolated_drops_multidomain_flood(self):
+        effective = resolve_effective_vectors("isolated", VECTORS, DOMAINS, self.fail)
+        self.assertEqual(effective, ("TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD"))
+
+    def test_mode_multidomain_keeps_only_multidomain_flood(self):
+        effective = resolve_effective_vectors("multidomain", VECTORS, DOMAINS, self.fail)
+        self.assertEqual(effective, ("MULTIDOMAIN_FLOOD",))
+
+    def test_mode_multidomain_requires_two_domains(self):
+        errors = []
+        resolve_effective_vectors("multidomain", VECTORS, ("enterprise",), errors.append)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("at least 2", errors[0])
+
+    def test_mode_isolated_requires_a_non_multidomain_vector(self):
+        errors = []
+        resolve_effective_vectors("isolated", ("MULTIDOMAIN_FLOOD",), DOMAINS, errors.append)
+        self.assertEqual(len(errors), 1)
+
+    def test_mode_both_is_unchanged_previous_behavior(self):
+        effective = resolve_effective_vectors("both", VECTORS, DOMAINS, self.fail)
+        self.assertEqual(effective, VECTORS)
 
     def test_writes_expected_wide_columns(self):
         row = TrialResult("test", 1, "enterprise", "TCP_SYN_FLOOD", "10.70.0.11", "10.55.0.100",

@@ -35,6 +35,21 @@ DOMAINS = ("enterprise", "broadband", "mobile", "peering")
 VECTORS = ("TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "MULTIDOMAIN_FLOOD")
 TARGET_IP = "10.55.0.100"
 
+# Campaign mode -- decided and validated ONCE, before the statistical
+# campaign starts (main(), via resolve_effective_vectors() below), not
+# discovered mid-run. Before this, "isolated" vs. "multidomain" was only
+# an implicit side effect of whichever vectors happened to be passed in
+# --vectors (MULTIDOMAIN_FLOOD mixed in as just another vector value) --
+# a run with 1 domain and MULTIDOMAIN_FLOOD in --vectors would silently
+# print "Skipping MULTIDOMAIN_FLOOD" per iteration instead of failing
+# fast at startup.
+#   isolated     -- one domain per trial (TCP/UDP/ICMP_FLOOD only)
+#   multidomain  -- MULTIDOMAIN_FLOOD only, one real attacker per domain,
+#                   all domains firing concurrently (needs >=2 --domains)
+#   both         -- every vector in --vectors, mixed (previous behavior,
+#                   still the default so existing invocations don't change)
+TRIAL_MODES = ("isolated", "multidomain", "both")
+
 # Mobile's one representative attacker is ue1 (netns on host `ue`,
 # cu1=`ran` -> du1=`du` -> ue1 -- see mobile-bringup-order memory). The
 # other 4 UEs are left out of the trial design the same way enterprise
@@ -674,6 +689,26 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
     return parsed
 
 
+def resolve_effective_vectors(mode: str, vectors: tuple[str, ...], domains: tuple[str, ...],
+                              error) -> tuple[str, ...]:
+    """Resolves --mode + --vectors into the actual vector set the campaign
+    runs, failing fast (via `error`, expected to raise/exit) on a
+    combination that can't produce any trials -- BEFORE startup_healthcheck()
+    or any VM is touched, not discovered mid-run."""
+    if mode == "isolated":
+        effective = tuple(v for v in vectors if v != "MULTIDOMAIN_FLOOD")
+        if not effective:
+            error("--mode isolated needs at least one non-MULTIDOMAIN_FLOOD vector in --vectors")
+        return effective
+    if mode == "multidomain":
+        if "MULTIDOMAIN_FLOOD" not in vectors:
+            error("--mode multidomain requires MULTIDOMAIN_FLOOD in --vectors")
+        if len(domains) < 2:
+            error("--mode multidomain requires at least 2 --domains")
+        return ("MULTIDOMAIN_FLOOD",)
+    return tuple(vectors)  # "both" -- previous behavior, unchanged
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iterations", type=int, default=30,
@@ -683,6 +718,10 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=Path("analysis/results/vm-lab"))
     parser.add_argument("--domains", nargs="+", choices=DOMAINS, default=list(DOMAINS))
     parser.add_argument("--vectors", nargs="+", choices=VECTORS, default=list(VECTORS))
+    parser.add_argument("--mode", choices=TRIAL_MODES, default="both",
+                        help="isolated: TCP/UDP/ICMP_FLOOD only, one domain per trial. "
+                             "multidomain: MULTIDOMAIN_FLOOD only, needs >=2 --domains. "
+                             "both (default): run --vectors as given, unchanged behavior.")
     parser.add_argument("--attack-duration", type=int, default=20)
     parser.add_argument("--event-timeout", type=int, default=150,
                         help="seconds allowed for detection, mitigation and recovery")
@@ -694,6 +733,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.iterations < 2:
         parser.error("--iterations must be at least 2; use 30 for the thesis dataset")
+    args.vectors = resolve_effective_vectors(args.mode, tuple(args.vectors), tuple(args.domains),
+                                             parser.error)
+    print(f"Mode: {args.mode} -- effective vectors: {', '.join(args.vectors)}", flush=True)
 
     repo = Path(__file__).resolve().parents[1]
     if args.inventory.is_absolute():

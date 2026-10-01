@@ -1,6 +1,6 @@
 # VM Lab webtool
 
-Panel web para gestionar el laboratorio distribuido de 16 VMs (`deploy/vm-lab`),
+Panel web para gestionar el laboratorio distribuido de 23 VMs (`deploy/vm-lab`),
 equivalente al webtool del laboratorio Mininet (`webtool/` en la raiz del repo)
 pero para VMs reales sobre ESXi. Proceso y puerto totalmente separados del
 webtool de Mininet (puerto **8070**, no 5050) -- no comparten codigo.
@@ -8,7 +8,7 @@ webtool de Mininet (puerto **8070**, no 5050) -- no comparten codigo.
 ## Requisitos
 
 Corre en el control node (esta VM, `isp-ddos-ryu`), que ya tiene:
-- `sshpass` + `ssh` con acceso a las 16 VMs (credenciales en `webtool/inventory.py`)
+- `sshpass` + `ssh` con acceso a las 23 VMs (credenciales en `webtool/inventory.py`)
 - `govc` + `../.govc.env` (power on/off/estado)
 - `ansible-playbook` + `../ansible/` (bring-up orquestado)
 

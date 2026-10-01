@@ -3,13 +3,11 @@
 validate_peering_effect.py -- the formal end-to-end test case for the
 BGP Peering domain's basic single-source SYN/DoS scenario
 (docs/peering-plan.md §5, punto 6; one of the "24 combinaciones
-basicas" cuatro-dominios x tres-vectores x DoS/DDoS matrix in
-docs/thesis-revision-plan.md §4.3-4.4.3). Confirms the FlowSpec
-mitigation has a REAL effect on traffic, not just that an nftables
-rule exists, and reports all four formal timing metrics from
-docs/thesis-revision-plan.md §4.5-4.6's table: Tiempo de deteccion
-(Td), Tiempo de despacho (Tm), Tiempo de aplicacion, Tiempo hasta
-efecto.
+basicas" cuatro-dominios x tres-vectores x DoS/DDoS matrix). Confirms
+the FlowSpec mitigation has a REAL effect on traffic, not just that an
+nftables rule exists, and reports all four formal timing metrics:
+Tiempo de deteccion (Td), Tiempo de despacho (Tm), Tiempo de
+aplicacion, Tiempo hasta efecto.
 
 Unlike validate_peering.py (which drives mitigation/peering_backend.py's
 announce()/withdraw() directly, bypassing detection entirely), this
@@ -113,9 +111,9 @@ LEAK_WINDOW_START_S = 35.0
 LEAK_WINDOW_END_S = 60.0
 FINE_POLL_INTERVAL_S = 0.2
 # Minimum gap with zero reply-direction records to count as a genuine,
-# persistent traffic reduction for Tefecto (docs/thesis-revision-plan.md
-# §4.5-4.6's "Tiempo hasta efecto": "primera reduccion que cumple
-# criterio persistente menos inicio del ataque"). Comfortably above the
+# persistent traffic reduction for Tefecto ("Tiempo hasta efecto":
+# "primera reduccion que cumple criterio persistente menos inicio del
+# ataque"). Comfortably above the
 # ~2-3s spacing normal continuous traffic produces under softflowd's
 # general=1/maxlife=2 timeouts (see webtool/peering_ops.py), comfortably
 # below the ~45s mark of the known, unresolved leak (docs/peering-plan.md
@@ -207,8 +205,7 @@ def _decode_nfcapd_dir(capture_dir: str, nfdump_bin: str):
 
 def _t_apply(discard_ts, rule_transitions):
     """
-    Tiempo de aplicacion (docs/thesis-revision-plan.md §4.5-4.6):
-    "instalacion comprobada menos envio". `discard_ts` is when the
+    Tiempo de aplicacion: "instalacion comprobada menos envio". `discard_ts` is when the
     controller decided+sent the announcement (BGP_FLOWSPEC_DISCARD in
     its own log); the first RULE_PRESENT transition at or after that is
     the earliest confirmed installation this script observed. Bounded
@@ -223,9 +220,8 @@ def _t_apply(discard_ts, rule_transitions):
 
 def _t_efecto(attack_start, replies):
     """
-    Tiempo hasta efecto (docs/thesis-revision-plan.md §4.5-4.6):
-    "primera reduccion que cumple criterio persistente menos inicio del
-    ataque". Walks the reply-direction timeline in order and returns the
+    Tiempo hasta efecto: "primera reduccion que cumple criterio
+    persistente menos inicio del ataque". Walks the reply-direction timeline in order and returns the
     timestamp where the first gap of at least EFFECT_GAP_THRESHOLD_S
     with zero reply records begins, provided at least one reply was
     already seen before it (confirming there was real traffic to reduce
@@ -405,7 +401,7 @@ def main() -> bool:
             for ts, sa, da, td, ipkt, ibyt, fname in replies_inside:
                 print(f"      {ts}  {sa} -> {da}  td={td:.3f}s ipkt={ipkt} ibyt={ibyt}  ({fname})")
 
-        print("\n=== 6. Metricas formales de tiempo (docs/thesis-revision-plan.md §4.5-4.6) ===")
+        print("\n=== 6. Metricas formales de tiempo ===")
         # Reuses analysis/parse_timing_stats.py's own generic, per-domain
         # computation against the exact same two log files this run just
         # produced -- Td (ataque->deteccion) and Tm (deteccion->mitigacion,

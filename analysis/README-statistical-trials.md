@@ -14,6 +14,32 @@ exactamente un origen por dominio y el mismo destino, protocolo y puerto.
 Broadband siempre utiliza una sola sesión atacante; las otras siete sesiones
 permanecen en baseline.
 
+## Modo de campaña: `--mode {isolated,multidomain,both}`
+
+Antes de arrancar la campaña hay que decidir explícitamente qué se va a medir:
+
+- **`isolated`** (recomendado para la matriz básica de 4 dominios × 3 vectores):
+  solo TCP/UDP/ICMP_FLOOD, un dominio por corrida. Si `MULTIDOMAIN_FLOOD` queda
+  en `--vectors`, se descarta.
+- **`multidomain`** (recomendado para el escenario de ataque coordinado):
+  solo `MULTIDOMAIN_FLOOD`, exige `--domains` con al menos 2 dominios.
+- **`both`** (default, comportamiento previo sin cambios): corre exactamente
+  los `--vectors` indicados, mezclando ambos tipos en la misma campaña.
+
+La validación es inmediata (antes de tocar cualquier VM): una combinación
+imposible (p. ej. `--mode multidomain` con un solo dominio) termina con error
+en el arranque, no a mitad de la campaña con un "Skipping..." silencioso.
+
+```bash
+# Matriz básica, aislada, los 4 dominios
+python3 analysis/run_vm_lab_trials.py --mode isolated --iterations 30 \
+  --output-dir analysis/results/vm-lab-isolated-30
+
+# Escenario multidominio, los 4 dominios atacando a la vez
+python3 analysis/run_vm_lab_trials.py --mode multidomain --iterations 30 \
+  --output-dir analysis/results/vm-lab-multidomain-30
+```
+
 ## Tamaño de muestra
 
 El valor predeterminado es **30 corridas independientes por combinación**.
@@ -64,6 +90,19 @@ Archivos generados:
 
 El orden de las combinaciones se aleatoriza de forma reproducible para reducir
 el sesgo por deriva temporal. Antes de cada prueba se comprueban los servicios,
-se detienen generadores residuales y se exigen ocho sesiones IPoE activas. Una
+se detienen generadores residuales y se exigen ocho sesiones IPoE activas
+(Broadband) y la cadena cu1→du1→ue1 saludable (Mobile, señales de
+E2/F1/RRC/ping real, igual que `deploy/vm-lab/webtool/status_checks.py`). Una
 prueba no se considera válida hasta observar detección, mitigación y
 recuperación.
+
+**Mobile es el único dominio cuya recuperación automática no es un gate
+duro**: el RACH ZMQ de srsRAN es conocido por su no-determinismo (ver memoria
+`mobile-bringup-order`), y a veces la única recuperación real es un
+power-cycle completo que este script no ejecuta por sí solo. Si cu1/du1/ue1
+no se recuperan tras 3 intentos (`reconnect_mobile_domain.yml --tags
+cu1,du1,ue1`), el script imprime una advertencia y continúa con los otros tres
+dominios en vez de abortar toda la campaña; las corridas de Mobile en esa
+ventana quedarán `INCOMPLETE` en `trials_long.csv` y deben repetirse después
+de un bring-up manual (`ansible-playbook playbooks/reconnect_mobile_domain.yml`
+desde `deploy/vm-lab/ansible/`).

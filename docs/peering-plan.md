@@ -24,8 +24,8 @@ ya resueltas para este dominio:
 
 El soporte de traducir una ruta BGP FlowSpec recibida en una regla real de `nftables`/`iptables`
 es una característica relativamente reciente y menos madura que el BGP básico — exactamente
-el tipo de capacidad que `thesis-revision-plan.md` exige comprobar en el build desplegado,
-no asumir de la documentación general. Se probaron dos rutas.
+el tipo de capacidad que hay que comprobar en el build desplegado, no asumir de la
+documentación general. Se probaron dos rutas.
 
 ### 2.1. FRR — FAIL, causa raíz confirmada y documentada
 
@@ -297,7 +297,7 @@ flowchart LR
 5. Actualizar los 3 puntos de código existente (§4) y el webtool. **Hecho** salvo
    `webtool/static/app.js` (sin cambios necesarios, ver nota en §4).
 6. Escenario de ataque end-to-end contra el dominio peering (uno de los "24 casos básicos"
-   de la matriz de `thesis-revision-plan.md`), con medición de Td/Tdispatch/Tapply/Tefecto.
+   de la matriz de pruebas), con medición de Td/Tdispatch/Tapply/Tefecto.
 
 ## 6. Criterio de salida de la fase (igual al de `implementation-design.md` §6)
 

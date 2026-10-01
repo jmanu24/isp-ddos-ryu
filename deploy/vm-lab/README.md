@@ -1,4 +1,4 @@
-# VM lab -- 23-VM ESXi topology (docs/thesis-revision-plan.md §4.1.1-4.1.2)
+# VM lab -- 23-VM ESXi topology
 
 Automates standing up the "topología con límites de VM, interfaces y
 puntos de medición reales" the thesis review asked for: 4 domains

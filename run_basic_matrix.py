@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
 run_basic_matrix.py -- automates the "24 combinaciones basicas" test
-matrix from docs/thesis-revision-plan.md SS4.3-4.4.3: cuatro dominios
-(enterprise, mobile, broadband, bgp) x tres vectores (SYN, UDP, ICMP) x
-DoS/DDoS.
+matrix: cuatro dominios (enterprise, mobile, broadband, bgp) x tres
+vectores (SYN, UDP, ICMP) x DoS/DDoS.
 
 Drives webtool/orchestrator.py's Orchestrator directly (the same class
 webtool/app.py's Flask routes use), the same pattern

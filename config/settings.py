@@ -3,14 +3,13 @@ import os
 # Number of OVS switches (and therefore real enterprise/mobile/broadband
 # hosts, one of each per switch) topologies/star_topology.py's
 # build_topology() creates. Was a hardcoded default of 4 -- raised so
-# enterprise's own DDoS cell (docs/thesis-revision-plan.md's 24-scenario
-# matrix, 4 domains x 3 vectors x DoS/DDoS) can actually cross
-# DIST_MIN_SOURCES (below): enterprise attacks are real, unspoofed
-# per-host traffic (webtool/enterprise_ops.py), one distinct source IP
-# per switch, so 4 switches structurally capped enterprise at 4 distinct
-# sources -- one short of the distributed-detection threshold, a gap
-# docs/thesis-revision-plan.md's own review already flagged ("cuatro
-# fuentes frente a un umbral de cinco... no valida esa capacidad").
+# enterprise's own DDoS cell (the 24-scenario matrix, 4 domains x 3
+# vectors x DoS/DDoS) can actually cross DIST_MIN_SOURCES (below):
+# enterprise attacks are real, unspoofed per-host traffic
+# (webtool/enterprise_ops.py), one distinct source IP per switch, so 4
+# switches structurally capped enterprise at 4 distinct sources -- one
+# short of the distributed-detection threshold ("cuatro fuentes frente a
+# un umbral de cinco... no valida esa capacidad").
 # mobile/broadband don't need this (mobile spoofs extra sources per gNB
 # via count_per_gnb, broadband uses dedicated multi-session BNGBlaster
 # scenarios), but they get a free 5th real host too since they're built

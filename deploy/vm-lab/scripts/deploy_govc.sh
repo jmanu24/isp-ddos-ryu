@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# deploy_govc.sh -- provisions the 16 VMs from their golden templates
+# deploy_govc.sh -- provisions the VMs from their golden templates
 # directly on a standalone ESXi host (no vCenter), sizing each per
 # ../topology.yaml (via generated/govc/vms.csv, see
 # scripts/render_topology.py) and injecting its per-VM cloud-init

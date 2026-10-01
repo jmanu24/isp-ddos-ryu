@@ -1,7 +1,7 @@
 """
 webtool/metrics.py -- per-VM CPU%, mem% and per-interface throughput,
 sampled over SSH with plain /proc reads (no agent to install on any of
-the 16 VMs). CPU/throughput both need two samples a fixed interval
+the 23 VMs). CPU/throughput both need two samples a fixed interval
 apart, so each call here takes 2 sightly-cheap SSH round trips ~1s apart
 per node -- acceptable at the dashboard's own ~10s poll cadence, run in
 parallel across nodes by the caller (app.py's polling loop), not here.
