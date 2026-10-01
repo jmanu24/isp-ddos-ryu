@@ -431,6 +431,11 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.correlator.ingest(all_events)
         correlated = self.correlator.correlate()
 
+        # Keep telemetry and forwarding while isolated capacity probes run.
+        if settings.LAB_CALIBRATION_MODE:
+            self.orchestrator.validate(correlated, [])
+            return
+
         # Release blocks whose flow volume has died down — driven by the
         # drop rules' own counters (sampled in flow_stats_reply_handler),
         # not by `correlated`, since a blocked flow's packets never reach

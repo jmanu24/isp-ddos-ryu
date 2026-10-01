@@ -1,5 +1,8 @@
 import os
 
+# Temporary lab measurement mode; normal detection is the default.
+LAB_CALIBRATION_MODE = os.getenv("LAB_CALIBRATION_MODE", "false").lower() == "true"
+
 # Number of OVS switches (and therefore real enterprise/mobile/broadband
 # hosts, one of each per switch) topologies/star_topology.py's
 # build_topology() creates. Was a hardcoded default of 4 -- raised so

@@ -285,6 +285,7 @@ The seed, BENIGN_V1 profiles, reusable `benign_plan.json`, SHA-256 `plan_hash`
 and five-second ground truth windows are preserved.
 
 Credentials and experiment output belong under `.runtime/benign-lab/`, outside
-the versioned tool. Set the four domain capacities in `config/lab.connected.yaml`
-before running a scientific baseline. The connected pilot report records
+the versioned tool. The four domain capacities in `config/lab.connected.yaml` were measured
+experimentally; see `tools/benign-lab/docs/CAPACITY_CALIBRATION.md` and its
+raw `CAPACITY_MEASUREMENTS.json` report before interpreting a baseline. The connected pilot report records
 successful connectivity and observed payload shortfalls; it is not a baseline.

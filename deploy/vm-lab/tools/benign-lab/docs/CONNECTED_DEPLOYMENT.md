@@ -1,69 +1,95 @@
 # Operación conectada — 1 de octubre de 2026
 
-Esta actualización reemplaza los requisitos de Python y los estados pendientes del informe de inspección anterior. BENIGN_V1, perfiles, semillas, plan_hash y ground truth de 5 s siguen conservados.
+Esta guía describe el estado actual y reemplaza los pendientes de los informes
+de inspección anteriores. BENIGN_V1, perfiles, semillas, planes reutilizables,
+plan_hash SHA-256 y ground truth de 5 s permanecen conservados.
 
-## Estado actual
+## Acceso y servicios
 
-- ent-site-2…5 encendidas mediante govc; cinco sitios accesibles por SSH y receptores habilitados.
-- Fixed ampliado a diez macvlans y diez sesiones IPoE activas en accel-pppd/FreeRADIUS, incluida macvlan3 anteriormente sin sesión. Se modificaron el generador de inventario, la variable generada, el límite del agente y la configuración persistente de suscriptor.
-- El agente Fixed mantiene DHCP y rutas por origen con `--no-baseline`: no inicia su generador TCP_SYN low_and_slow anterior. Los escenarios de ataque siguen disponibles por el mecanismo existente; no deben iniciarse durante B0.
-- Victim tiene una ruta persistente `10.20.0.0/24 via 10.92.0.2 dev eth1`. Conserva las IPs de abonado y devuelve respuestas por BNG en lugar de gestión. La misma ruta se agregó al rol Ansible victim.
-- Peering mantiene victim por BR (10.30.0.1). Su reloj se corrigió con systemd-timesyncd y una ruta /32 al servidor NTP usado por control (185.125.190.58), vía control 10.30.0.3. Sólo NTP usa esa ruta de gestión.
+Panel: `http://192.168.18.154:8780`, con BENIGN_API_TOKEN. El token y las
+credenciales SSH están en `.runtime/benign-lab/`, fuera de Git. La unidad
+`benign-lab-web.service` escucha exclusivamente en la IP de gestión indicada;
+BENIGN_ALLOWED_HOSTS incluye esa dirección y los hosts locales.
 
-## Versiones y pruebas
+Aplicación: `/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab`.
+Configuración activa: `config/lab.connected.yaml`. El servicio corre como ubuntu.
+Para un túnel alternativo:
 
-Control node: Python 3.8.10 en un venv propio. Agentes Ubuntu: Python 3.10.12. Victim Alpine: Python 3.14.7. Se sustituyó asyncio.timeout/timeout_at por deadlines compatibles, se usan Optional/Dict/List en modelos de la API y timeouts de asyncio en Python 3.8. `requirements.lock` contiene las versiones resueltas en el controlador. Suite: 22 pruebas aprobadas en Python 3.8/Linux, incluyendo agentes reales, cancelación y API.
-
-El piloto conjunto prueba 21 contextos: cinco UE, diez IPs Fixed, cinco sitios y un generador Peering. TCP, HTTP y UDP en ambos sentidos; Enterprise también usa receptores intersite. Resultados y límites volumétricos: `CONNECTED_PILOT.json`. Resultado final: 126 eventos ejecutados, 149000 de 151200 bytes programados. Seis transferencias quedaron por debajo del volumen; la corrida se marca completed_with_errors y el panel muestra advertencias/shortfall_bytes. Es un piloto de conectividad de baja carga, no la corrida científica BENIGN_V1 de 600 s ni una calibración de capacidades.
-
-## Ubicación y servicios
-
-Aplicación en control: `/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab`.
-
-- Configuración: `config/lab.connected.yaml`.
-- Controlador systemd: `benign-lab-web.service`, usuario ubuntu, escucha 127.0.0.1:8780.
-- Agentes en VMs: `/opt/benign-lab/agent.py`.
-- Receptores Ubuntu: `benign-lab-receiver.service` en cinco sitios.
-- Receptor Alpine: OpenRC `benign-lab-receiver` en victim.
-- Datos, env y credenciales: `/home/ubuntu/isp-ddos-ryu/.runtime/benign-lab`, excluido de Git y del ZIP. Archivos de credenciales 0600 y directorio 0700.
-
-Las conexiones a workers se originan en control. Las VMs Ubuntu usan labadmin. **Victim Alpine conserva el acceso root existente** para el receptor; no se creó labadmin ni se cambiaron sus credenciales. La contraseña no aparece en YAML, argv, planes ni exportaciones. ssh_bridge.py usa sshpass -e con variable de entorno o JSON protegido para el modo de salto. Las claves de host se registraron desde la red del controlador.
-
-## Acceso al panel
-
-Se abrió un túnel en el equipo de esta sesión: `http://127.0.0.1:8780`. Desde otro equipo:
-
-```bash
-ssh -N -L 8780:127.0.0.1:8780 ubuntu@192.168.18.154
+```sh
+ssh -N -L 8780:192.168.18.154:8780 ubuntu@192.168.18.154
 ```
 
-Abrir esa dirección. El servicio sigue en loopback; no se expuso un panel sin token a la LAN.
+Todas las conexiones a workers se originan en control. Las VMs Ubuntu usan
+labadmin; victim Alpine conserva el acceso root existente. Las credenciales
+se pasan por entorno a sshpass y no se incluyen en planes ni informes.
+Agentes: `/opt/benign-lab/agent.py`. Receptores en los cinco sitios Enterprise
+mediante systemd y en victim mediante OpenRC.
 
-## Ejecución y parámetros pendientes
+## Dominios conectados
 
-Completar `capacity_mbps` de los cuatro dominios después de calibrarlos. Son los únicos campos de mapeo pendientes en la API. No se inventaron capacidades a partir de la velocidad de las vNICs. El piloto usa una capacidad de referencia sólo para expresar tasas pequeñas; no cambia la configuración principal.
+- Mobile: cinco namespaces ue1…ue5, distribuidos entre ue y ue2.
+- Fixed: diez macvlans con diez sesiones IPoE activas en accel-ppp/FreeRADIUS.
+  El agente usa `--no-baseline` para mantener DHCP/rutas sin iniciar el anterior
+  generador automático TCP_SYN. Las IPs actuales se reconciliaron al aplicar
+  las capacidades; pueden cambiar tras nuevas renovaciones.
+- Enterprise: cinco sitios accesibles; ent-site-2…5 se encendieron mediante govc.
+- Peering: generador agregado por peer-router, tráfico a victim vía BR.
 
-```bash
+Victim tiene la ruta persistente `10.20.0.0/24 via 10.92.0.2 dev eth1`, también
+incluida en Ansible. Peering tiene el reloj sincronizado y una ruta exclusiva
+para NTP vía gestión; el tráfico del experimento conserva su ruta por BR.
+
+## Capacidades experimentales aplicadas
+
+| Dominio | Mediana UL Mbps | Mediana DL Mbps | Referencia Mbps |
+|---|---:|---:|---:|
+| Mobile | 4.44 | 16.36 | 4.44 |
+| Fixed | 441.31 | 416.10 | 416.10 |
+| Enterprise | 696.72 | 708.59 | 696.72 |
+| Peering | 200.86 | 479.59 | 200.86 |
+
+36 rondas con una única versión del medidor, dos conexiones por origen,
+10 s por ronda y 2 s de calentamiento excluidos. Tres repeticiones por sentido,
+ampliadas a cinco cuando la variación inicial fue grande. La referencia es el
+menor de las medianas UL/DL. Se midió payload TCP efectivamente recibido.
+
+`CAPACITY_CALIBRATION.md` contiene el procedimiento reproducible y
+`CAPACITY_MEASUREMENTS.json` todos los datos, rutas, hash del medidor y errores.
+Son referencias de rendimiento útil con estas VMs y generadores, no la
+velocidad física ni una garantía de máximos simultáneos. Enterprise se midió
+con reglas temporales del plano de datos limitadas al puerto de calibración.
+Mobile registró un reinicio TCP en una conexión de bajada; sus bytes recibidos
+y el periodo sin entrega forman parte de la medición. La subida no tuvo errores.
+
+El controlador DDoS intervino en pruebas diagnósticas previas, por lo que se
+excluyeron de la campaña final. Durante ésta se usó LAB_CALIBRATION_MODE con
+telemetría/encaminamiento y sin detección/actuación, con restauración automática
+y temporizador de respaldo. La detección normal quedó restaurada, las reglas
+temporales se retiraron y la API muestra cero parámetros de mapeo pendientes.
+
+## Versiones, validación y experimentos
+
+Control: Python 3.8.10 con entorno propio y `requirements.lock`. Workers Ubuntu:
+Python 3.10.12. Victim: Python 3.14.7. Se aprobaron 23 pruebas de la herramienta,
+incluyendo el medidor en ambos sentidos, y una prueba del modo de calibración
+del controlador. Su configuración predeterminada mantiene la detección activa.
+
+El piloto de conectividad anterior está en `CONNECTED_PILOT.json`: 126 eventos,
+149000 de 151200 bytes y seis transferencias cortas. Ese piloto no fue un
+baseline científico. Tampoco la calibración ejecutó BENIGN_V1 de 600 s.
+
+Para la campaña científica, materializar un nuevo plan con las capacidades
+aplicadas y reutilizar exactamente su JSON en B0 y B0+ataque. Los planes
+guardados conservan sus capacidades y hash originales. Comprobar antes de
+cada campaña leases, sesiones, tasa entregada y falsos positivos del detector;
+las capacidades aisladas no certifican el comportamiento conjunto.
+
+```sh
 cd /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab
 .venv/bin/benign-lab inspect-mapping --lab config/lab.connected.yaml
 ```
 
-Después de completar capacidades: generar/importar un plan en el panel, validar mapeo e iniciar Laboratorio a velocidad 1. Reutilizar el mismo plan en B0 y B0+attack. Reconfirmar leases DHCP y sesiones antes de la campaña; las IPs del YAML son el snapshot observado. Las métricas son payload; UDP UL confirma envío local. Certificar entrega y recorrido con capturas/contadores externos.
-
-Para ejecutar el controlador desde otro equipo manteniendo el salto, definir en cada nodo `control_node: ubuntu@192.168.18.154`, `control_identity_file`, `bridge_path` a ssh_bridge.py desplegado y `credentials_file` al archivo protegido en control. El despliegue actual ya corre dentro de control.
-
-## Recuperación
-
-Respaldos Fixed en `.codex-backups/fixed10-*` y archivos `.before-fixed10` en suscriptor. Victim conserva `.before-benign-route`. No se hicieron commits ni se enviaron cambios al repositorio remoto. Restaurar sólo piezas necesarias y comprobar sesiones/rutas. Secretos/runtime excluidos de Git.
-
-
-
-## Direct dashboard access
-
-The deployed systemd unit listens on `192.168.18.154:8780`. Open
-`http://192.168.18.154:8780` from a host that can reach the controller.
-This binding persists across service and controller restarts.
-SSH tunnels must forward to remote `192.168.18.154:8780`.
-
-Direct API access requires `BENIGN_ALLOWED_HOSTS=192.168.18.154,localhost,127.0.0.1,::1`.
-The deployed environment and versioned service unit include this explicit list.
+Datos, credenciales y respaldos están excluidos de Git. Las copias previas de
+la configuración de calibración se conservan en `.codex-backups/benign-capacity`
+y `.runtime/benign-lab/lab.before-calibration.yaml`. Los cambios del proyecto
+se versionan en el repositorio del nodo control.

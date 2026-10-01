@@ -1,0 +1,6793 @@
+{
+  "timestamp": "2026-10-01T22:57:30.013020+00:00",
+  "method": "TCP aggregate delivered payload goodput, 10s rounds / 2s discarded warmup, victim 10.55.0.100, sequential domains, UL/DL separate",
+  "scope": "Achievable end-to-end goodput with these VM generators, not physical link capacity",
+  "rounds": [
+    {
+      "domain": "enterprise",
+      "direction": "ul",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 697.277312,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 64010468,
+              "seconds": 8.0,
+              "mbps": 64.010468,
+              "cpu_seconds": 1.107304022,
+              "error": null,
+              "observed_seconds": 10.073086561998934
+            },
+            {
+              "bytes": 75068260,
+              "seconds": 8.0,
+              "mbps": 75.06826,
+              "cpu_seconds": 1.101481079,
+              "error": null,
+              "observed_seconds": 10.038532479011337
+            }
+          ],
+          "mbps": 139.078728,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 62605704,
+              "seconds": 8.0,
+              "mbps": 62.605704,
+              "cpu_seconds": 1.239788579,
+              "error": null,
+              "observed_seconds": 10.033525858998473
+            },
+            {
+              "bytes": 71237216,
+              "seconds": 8.0,
+              "mbps": 71.237216,
+              "cpu_seconds": 1.2379599469999998,
+              "error": null,
+              "observed_seconds": 10.026402059000247
+            }
+          ],
+          "mbps": 133.84292,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 71294752,
+              "seconds": 8.0,
+              "mbps": 71.294752,
+              "cpu_seconds": 1.315278721,
+              "error": null,
+              "observed_seconds": 10.028034708000632
+            },
+            {
+              "bytes": 87560456,
+              "seconds": 8.0,
+              "mbps": 87.560456,
+              "cpu_seconds": 1.311587556,
+              "error": null,
+              "observed_seconds": 10.032033125000453
+            }
+          ],
+          "mbps": 158.855208,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 71613028,
+              "seconds": 8.0,
+              "mbps": 71.613028,
+              "cpu_seconds": 1.1302406260000002,
+              "error": null,
+              "observed_seconds": 10.007788626000547
+            },
+            {
+              "bytes": 73045316,
+              "seconds": 8.0,
+              "mbps": 73.045316,
+              "cpu_seconds": 1.129619051,
+              "error": null,
+              "observed_seconds": 10.012307134998991
+            }
+          ],
+          "mbps": 144.658344,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 57806536,
+              "seconds": 8.0,
+              "mbps": 57.806536,
+              "cpu_seconds": 0.9321996810000001,
+              "error": null,
+              "observed_seconds": 12.975393608998274
+            },
+            {
+              "bytes": 63035576,
+              "seconds": 8.0,
+              "mbps": 63.035576,
+              "cpu_seconds": 0.9295600929999999,
+              "error": null,
+              "observed_seconds": 12.988910714000667
+            }
+          ],
+          "mbps": 120.842112,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "enterprise",
+      "direction": "ul",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 765.9151599999999,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 63350260,
+              "seconds": 8.0,
+              "mbps": 63.35026,
+              "cpu_seconds": 1.212859347,
+              "error": null,
+              "observed_seconds": 10.03636231800192
+            },
+            {
+              "bytes": 66532108,
+              "seconds": 8.0,
+              "mbps": 66.532108,
+              "cpu_seconds": 1.209793018,
+              "error": null,
+              "observed_seconds": 10.035071039004833
+            }
+          ],
+          "mbps": 129.88236799999999,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 77283576,
+              "seconds": 8.0,
+              "mbps": 77.283576,
+              "cpu_seconds": 1.1392767430000001,
+              "error": null,
+              "observed_seconds": 10.009997549001127
+            },
+            {
+              "bytes": 58208436,
+              "seconds": 8.0,
+              "mbps": 58.208436,
+              "cpu_seconds": 1.138227372,
+              "error": null,
+              "observed_seconds": 10.014119763000053
+            }
+          ],
+          "mbps": 135.492012,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 84273748,
+              "seconds": 8.0,
+              "mbps": 84.273748,
+              "cpu_seconds": 1.491518838,
+              "error": null,
+              "observed_seconds": 10.014709523999045
+            },
+            {
+              "bytes": 94962056,
+              "seconds": 8.0,
+              "mbps": 94.962056,
+              "cpu_seconds": 1.486765612,
+              "error": null,
+              "observed_seconds": 10.014951271001337
+            }
+          ],
+          "mbps": 179.235804,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 68280992,
+              "seconds": 8.0,
+              "mbps": 68.280992,
+              "cpu_seconds": 1.313425832,
+              "error": null,
+              "observed_seconds": 10.016845089998242
+            },
+            {
+              "bytes": 95690080,
+              "seconds": 8.0,
+              "mbps": 95.69008,
+              "cpu_seconds": 1.308863357,
+              "error": null,
+              "observed_seconds": 10.01185739200082
+            }
+          ],
+          "mbps": 163.971072,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 67896092,
+              "seconds": 8.0,
+              "mbps": 67.896092,
+              "cpu_seconds": 1.0675938040000001,
+              "error": null,
+              "observed_seconds": 10.01831972600121
+            },
+            {
+              "bytes": 89437812,
+              "seconds": 8.0,
+              "mbps": 89.437812,
+              "cpu_seconds": 1.060551222,
+              "error": null,
+              "observed_seconds": 10.008082894997642
+            }
+          ],
+          "mbps": 157.333904,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "enterprise",
+      "direction": "ul",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 584.6343,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 31301304,
+              "seconds": 8.0,
+              "mbps": 31.301304,
+              "cpu_seconds": 0.796035669,
+              "error": null,
+              "observed_seconds": 10.050994844001252
+            },
+            {
+              "bytes": 28794940,
+              "seconds": 8.0,
+              "mbps": 28.79494,
+              "cpu_seconds": 0.794130492,
+              "error": null,
+              "observed_seconds": 10.067261770003824
+            }
+          ],
+          "mbps": 60.096244,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 58057244,
+              "seconds": 8.0,
+              "mbps": 58.057244,
+              "cpu_seconds": 1.223178852,
+              "error": null,
+              "observed_seconds": 10.031264797999029
+            },
+            {
+              "bytes": 59391060,
+              "seconds": 8.0,
+              "mbps": 59.39106,
+              "cpu_seconds": 1.219978655,
+              "error": null,
+              "observed_seconds": 10.028605062001589
+            }
+          ],
+          "mbps": 117.44830400000001,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 54786884,
+              "seconds": 8.0,
+              "mbps": 54.786884,
+              "cpu_seconds": 1.332826504,
+              "error": null,
+              "observed_seconds": 10.03566491500169
+            },
+            {
+              "bytes": 56178424,
+              "seconds": 8.0,
+              "mbps": 56.178424,
+              "cpu_seconds": 1.332041639,
+              "error": null,
+              "observed_seconds": 10.059063052001875
+            }
+          ],
+          "mbps": 110.965308,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 60446028,
+              "seconds": 8.0,
+              "mbps": 60.446028,
+              "cpu_seconds": 1.256587728,
+              "error": null,
+              "observed_seconds": 10.072494453001127
+            },
+            {
+              "bytes": 52220800,
+              "seconds": 8.0,
+              "mbps": 52.2208,
+              "cpu_seconds": 1.265245509,
+              "error": null,
+              "observed_seconds": 10.09837431899723
+            }
+          ],
+          "mbps": 112.666828,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 96457308,
+              "seconds": 8.0,
+              "mbps": 96.457308,
+              "cpu_seconds": 1.092276044,
+              "error": null,
+              "observed_seconds": 10.00770761700187
+            },
+            {
+              "bytes": 87000308,
+              "seconds": 8.0,
+              "mbps": 87.000308,
+              "cpu_seconds": 1.089304826,
+              "error": null,
+              "observed_seconds": 10.007062681001116
+            }
+          ],
+          "mbps": 183.457616,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "enterprise",
+      "direction": "ul",
+      "repeat": 4,
+      "streams_per_source": 2,
+      "mbps": 559.562492,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 57325824,
+              "seconds": 8.0,
+              "mbps": 57.325824,
+              "cpu_seconds": 1.144977793,
+              "error": null,
+              "observed_seconds": 10.06166970799677
+            },
+            {
+              "bytes": 45287556,
+              "seconds": 8.0,
+              "mbps": 45.287556,
+              "cpu_seconds": 1.1426855910000002,
+              "error": null,
+              "observed_seconds": 10.056041076008114
+            }
+          ],
+          "mbps": 102.61338,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 34945004,
+              "seconds": 8.0,
+              "mbps": 34.945004,
+              "cpu_seconds": 0.8088315609999999,
+              "error": null,
+              "observed_seconds": 10.080205450001813
+            },
+            {
+              "bytes": 39131636,
+              "seconds": 8.0,
+              "mbps": 39.131636,
+              "cpu_seconds": 0.8033668609999999,
+              "error": null,
+              "observed_seconds": 10.073966560001281
+            }
+          ],
+          "mbps": 74.07664,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 43110760,
+              "seconds": 8.0,
+              "mbps": 43.11076,
+              "cpu_seconds": 0.8619738200000001,
+              "error": null,
+              "observed_seconds": 10.033178865000082
+            },
+            {
+              "bytes": 43179136,
+              "seconds": 8.0,
+              "mbps": 43.179136,
+              "cpu_seconds": 0.8615304490000001,
+              "error": null,
+              "observed_seconds": 10.03798192999966
+            }
+          ],
+          "mbps": 86.289896,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 51803128,
+              "seconds": 8.0,
+              "mbps": 51.803128,
+              "cpu_seconds": 1.2327706410000001,
+              "error": null,
+              "observed_seconds": 10.02130548799687
+            },
+            {
+              "bytes": 59500160,
+              "seconds": 8.0,
+              "mbps": 59.50016,
+              "cpu_seconds": 1.23673999,
+              "error": null,
+              "observed_seconds": 10.044966724002734
+            }
+          ],
+          "mbps": 111.30328800000001,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 92429020,
+              "seconds": 8.0,
+              "mbps": 92.42902,
+              "cpu_seconds": 1.025293428,
+              "error": null,
+              "observed_seconds": 10.017075654999644
+            },
+            {
+              "bytes": 92850268,
+              "seconds": 8.0,
+              "mbps": 92.850268,
+              "cpu_seconds": 1.026304633,
+              "error": null,
+              "observed_seconds": 10.033422409000195
+            }
+          ],
+          "mbps": 185.279288,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "enterprise",
+      "direction": "ul",
+      "repeat": 5,
+      "streams_per_source": 2,
+      "mbps": 696.71716,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 49014776,
+              "seconds": 8.0,
+              "mbps": 49.014776,
+              "cpu_seconds": 0.876689773,
+              "error": null,
+              "observed_seconds": 10.060361848009052
+            },
+            {
+              "bytes": 64397136,
+              "seconds": 8.0,
+              "mbps": 64.397136,
+              "cpu_seconds": 0.872264716,
+              "error": null,
+              "observed_seconds": 10.026578245990095
+            }
+          ],
+          "mbps": 113.411912,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 75262860,
+              "seconds": 8.0,
+              "mbps": 75.26286,
+              "cpu_seconds": 1.164774172,
+              "error": null,
+              "observed_seconds": 10.030442479997873
+            },
+            {
+              "bytes": 71204980,
+              "seconds": 8.0,
+              "mbps": 71.20498,
+              "cpu_seconds": 1.168384778,
+              "error": null,
+              "observed_seconds": 10.035711294000066
+            }
+          ],
+          "mbps": 146.46784000000002,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 52930936,
+              "seconds": 8.0,
+              "mbps": 52.930936,
+              "cpu_seconds": 0.9333318820000001,
+              "error": null,
+              "observed_seconds": 10.01250477099893
+            },
+            {
+              "bytes": 62340880,
+              "seconds": 8.0,
+              "mbps": 62.34088,
+              "cpu_seconds": 0.93034628,
+              "error": null,
+              "observed_seconds": 10.06833683700097
+            }
+          ],
+          "mbps": 115.271816,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 76971668,
+              "seconds": 8.0,
+              "mbps": 76.971668,
+              "cpu_seconds": 1.118527892,
+              "error": null,
+              "observed_seconds": 10.040854766000848
+            },
+            {
+              "bytes": 71313356,
+              "seconds": 8.0,
+              "mbps": 71.313356,
+              "cpu_seconds": 1.1184728979999998,
+              "error": null,
+              "observed_seconds": 10.03745489299763
+            }
+          ],
+          "mbps": 148.285024,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 68350120,
+              "seconds": 8.0,
+              "mbps": 68.35012,
+              "cpu_seconds": 0.7832452750000001,
+              "error": null,
+              "observed_seconds": 10.02146433100279
+            },
+            {
+              "bytes": 104930448,
+              "seconds": 8.0,
+              "mbps": 104.930448,
+              "cpu_seconds": 0.7826076780000001,
+              "error": null,
+              "observed_seconds": 10.020334106997325
+            }
+          ],
+          "mbps": 173.28056800000002,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "enterprise",
+      "direction": "dl",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 697.380712,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 63541872,
+              "seconds": 8,
+              "mbps": 63.541872,
+              "cpu_seconds": 1.539399557,
+              "error": null,
+              "observed_seconds": 10.009236718993634
+            },
+            {
+              "bytes": 69271552,
+              "seconds": 8,
+              "mbps": 69.271552,
+              "cpu_seconds": 1.537122011,
+              "error": null,
+              "observed_seconds": 10.008262967006885
+            }
+          ],
+          "mbps": 132.813424,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 60519832,
+              "seconds": 8,
+              "mbps": 60.519832,
+              "cpu_seconds": 1.521451667,
+              "error": null,
+              "observed_seconds": 10.028878150998935
+            },
+            {
+              "bytes": 67544248,
+              "seconds": 8,
+              "mbps": 67.544248,
+              "cpu_seconds": 1.519406287,
+              "error": null,
+              "observed_seconds": 10.016793096001493
+            }
+          ],
+          "mbps": 128.06408,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 70385248,
+              "seconds": 8,
+              "mbps": 70.385248,
+              "cpu_seconds": 1.471245018,
+              "error": null,
+              "observed_seconds": 10.007970667000336
+            },
+            {
+              "bytes": 74659160,
+              "seconds": 8,
+              "mbps": 74.65916,
+              "cpu_seconds": 1.46936689,
+              "error": null,
+              "observed_seconds": 9.99642424099875
+            }
+          ],
+          "mbps": 145.044408,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 63265192,
+              "seconds": 8,
+              "mbps": 63.265192,
+              "cpu_seconds": 1.5192996029999999,
+              "error": null,
+              "observed_seconds": 9.997035571999731
+            },
+            {
+              "bytes": 61882016,
+              "seconds": 8,
+              "mbps": 61.882016,
+              "cpu_seconds": 1.515838946,
+              "error": null,
+              "observed_seconds": 9.9969041559998
+            }
+          ],
+          "mbps": 125.147208,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 83565160,
+              "seconds": 8,
+              "mbps": 83.56516,
+              "cpu_seconds": 1.341890329,
+              "error": null,
+              "observed_seconds": 10.006773088000045
+            },
+            {
+              "bytes": 82746432,
+              "seconds": 8,
+              "mbps": 82.746432,
+              "cpu_seconds": 1.3386853939999999,
+              "error": null,
+              "observed_seconds": 10.013074721999146
+            }
+          ],
+          "mbps": 166.31159200000002,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "enterprise",
+      "direction": "dl",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 826.1082240000001,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 82959672,
+              "seconds": 8,
+              "mbps": 82.959672,
+              "cpu_seconds": 1.7787519340000002,
+              "error": null,
+              "observed_seconds": 10.026536745004705
+            },
+            {
+              "bytes": 75170588,
+              "seconds": 8,
+              "mbps": 75.170588,
+              "cpu_seconds": 1.77728983,
+              "error": null,
+              "observed_seconds": 10.021440078999149
+            }
+          ],
+          "mbps": 158.13026,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 80563548,
+              "seconds": 8,
+              "mbps": 80.563548,
+              "cpu_seconds": 1.733471652,
+              "error": null,
+              "observed_seconds": 10.005474847999722
+            },
+            {
+              "bytes": 80519592,
+              "seconds": 8,
+              "mbps": 80.519592,
+              "cpu_seconds": 1.731175009,
+              "error": null,
+              "observed_seconds": 10.004684867999458
+            }
+          ],
+          "mbps": 161.08314000000001,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 83029752,
+              "seconds": 8,
+              "mbps": 83.029752,
+              "cpu_seconds": 1.850690448,
+              "error": null,
+              "observed_seconds": 10.031050350000442
+            },
+            {
+              "bytes": 74963888,
+              "seconds": 8,
+              "mbps": 74.963888,
+              "cpu_seconds": 1.848485542,
+              "error": null,
+              "observed_seconds": 10.054579190000368
+            }
+          ],
+          "mbps": 157.99364,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 79076808,
+              "seconds": 8,
+              "mbps": 79.076808,
+              "cpu_seconds": 1.757388624,
+              "error": null,
+              "observed_seconds": 10.014708011000039
+            },
+            {
+              "bytes": 69310352,
+              "seconds": 8,
+              "mbps": 69.310352,
+              "cpu_seconds": 1.75289024,
+              "error": null,
+              "observed_seconds": 10.008467550000205
+            }
+          ],
+          "mbps": 148.38716,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 101702368,
+              "seconds": 8,
+              "mbps": 101.702368,
+              "cpu_seconds": 1.4715650230000001,
+              "error": null,
+              "observed_seconds": 10.010547993002547
+            },
+            {
+              "bytes": 98811656,
+              "seconds": 8,
+              "mbps": 98.811656,
+              "cpu_seconds": 1.470715679,
+              "error": null,
+              "observed_seconds": 10.018040678001853
+            }
+          ],
+          "mbps": 200.514024,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "enterprise",
+      "direction": "dl",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 708.586832,
+      "sources": [
+        {
+          "source": "10.70.0.11",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 66368372,
+              "seconds": 8,
+              "mbps": 66.368372,
+              "cpu_seconds": 1.617118815,
+              "error": null,
+              "observed_seconds": 10.030024761988898
+            },
+            {
+              "bytes": 68205280,
+              "seconds": 8,
+              "mbps": 68.20528,
+              "cpu_seconds": 1.611211296,
+              "error": null,
+              "observed_seconds": 10.01128210000752
+            }
+          ],
+          "mbps": 134.57365199999998,
+          "node": "ent-site-1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.11",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.12",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 67964984,
+              "seconds": 8,
+              "mbps": 67.964984,
+              "cpu_seconds": 1.6004719520000001,
+              "error": null,
+              "observed_seconds": 10.03540686300039
+            },
+            {
+              "bytes": 71674204,
+              "seconds": 8,
+              "mbps": 71.674204,
+              "cpu_seconds": 1.595457862,
+              "error": null,
+              "observed_seconds": 10.030473857001198
+            }
+          ],
+          "mbps": 139.639188,
+          "node": "ent-site-2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.12",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.13",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 67152428,
+              "seconds": 8,
+              "mbps": 67.152428,
+              "cpu_seconds": 1.487156893,
+              "error": null,
+              "observed_seconds": 10.025699595000333
+            },
+            {
+              "bytes": 64374368,
+              "seconds": 8,
+              "mbps": 64.374368,
+              "cpu_seconds": 1.4844670629999999,
+              "error": null,
+              "observed_seconds": 10.018101432000549
+            }
+          ],
+          "mbps": 131.526796,
+          "node": "ent-site-3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.13",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.14",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 69193144,
+              "seconds": 8,
+              "mbps": 69.193144,
+              "cpu_seconds": 1.6335808809999999,
+              "error": null,
+              "observed_seconds": 10.016236564999417
+            },
+            {
+              "bytes": 69291552,
+              "seconds": 8,
+              "mbps": 69.291552,
+              "cpu_seconds": 1.631550496,
+              "error": null,
+              "observed_seconds": 10.019542411999282
+            }
+          ],
+          "mbps": 138.48469599999999,
+          "node": "ent-site-4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.14",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.70.0.15",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 79538524,
+              "seconds": 8,
+              "mbps": 79.538524,
+              "cpu_seconds": 1.44003119,
+              "error": null,
+              "observed_seconds": 9.999728921997303
+            },
+            {
+              "bytes": 84823976,
+              "seconds": 8,
+              "mbps": 84.823976,
+              "cpu_seconds": 1.4371478919999998,
+              "error": null,
+              "observed_seconds": 9.998472880000918
+            }
+          ],
+          "mbps": 164.3625,
+          "node": "ent-site-5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.70.0.15",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "ul",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 259.56632,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 127926076,
+              "seconds": 8.0,
+              "mbps": 127.926076,
+              "cpu_seconds": 2.207164929,
+              "error": null,
+              "observed_seconds": 10.023101120998035
+            },
+            {
+              "bytes": 131640244,
+              "seconds": 8.0,
+              "mbps": 131.640244,
+              "cpu_seconds": 2.2063064490000004,
+              "error": null,
+              "observed_seconds": 10.035788831999525
+            }
+          ],
+          "mbps": 259.56632,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "ul",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 182.51776,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 92733636,
+              "seconds": 8.0,
+              "mbps": 92.733636,
+              "cpu_seconds": 1.7238886390000001,
+              "error": null,
+              "observed_seconds": 10.03192764800042
+            },
+            {
+              "bytes": 89784124,
+              "seconds": 8.0,
+              "mbps": 89.784124,
+              "cpu_seconds": 1.722070622,
+              "error": null,
+              "observed_seconds": 10.030594677009503
+            }
+          ],
+          "mbps": 182.51776,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "ul",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 194.052292,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 100401152,
+              "seconds": 8.0,
+              "mbps": 100.401152,
+              "cpu_seconds": 2.0084891,
+              "error": null,
+              "observed_seconds": 11.467513537005289
+            },
+            {
+              "bytes": 93651140,
+              "seconds": 8.0,
+              "mbps": 93.65114,
+              "cpu_seconds": 2.0039880190000003,
+              "error": null,
+              "observed_seconds": 11.39737454400165
+            }
+          ],
+          "mbps": 194.052292,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "ul",
+      "repeat": 4,
+      "streams_per_source": 2,
+      "mbps": 200.862096,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 95921140,
+              "seconds": 8.0,
+              "mbps": 95.92114,
+              "cpu_seconds": 2.109689946,
+              "error": null,
+              "observed_seconds": 10.018649567005923
+            },
+            {
+              "bytes": 104940956,
+              "seconds": 8.0,
+              "mbps": 104.940956,
+              "cpu_seconds": 2.1052122150000003,
+              "error": null,
+              "observed_seconds": 10.01332972299133
+            }
+          ],
+          "mbps": 200.862096,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "ul",
+      "repeat": 5,
+      "streams_per_source": 2,
+      "mbps": 339.203044,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 169005660,
+              "seconds": 8.0,
+              "mbps": 169.00566,
+              "cpu_seconds": 2.4510699970000003,
+              "error": null,
+              "observed_seconds": 10.011854323005537
+            },
+            {
+              "bytes": 170197384,
+              "seconds": 8.0,
+              "mbps": 170.197384,
+              "cpu_seconds": 2.45112144,
+              "error": null,
+              "observed_seconds": 10.0124685960036
+            }
+          ],
+          "mbps": 339.203044,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "dl",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 479.590072,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 241828232,
+              "seconds": 8,
+              "mbps": 241.828232,
+              "cpu_seconds": 2.917239456,
+              "error": null,
+              "observed_seconds": 10.001748866998241
+            },
+            {
+              "bytes": 237761840,
+              "seconds": 8,
+              "mbps": 237.76184,
+              "cpu_seconds": 2.914259334,
+              "error": null,
+              "observed_seconds": 10.006956785000511
+            }
+          ],
+          "mbps": 479.590072,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "dl",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 547.5550559999999,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 278791724,
+              "seconds": 8,
+              "mbps": 278.791724,
+              "cpu_seconds": 3.723565763,
+              "error": null,
+              "observed_seconds": 9.995440009006415
+            },
+            {
+              "bytes": 268763332,
+              "seconds": 8,
+              "mbps": 268.763332,
+              "cpu_seconds": 3.7181492769999998,
+              "error": null,
+              "observed_seconds": 9.995463598999777
+            }
+          ],
+          "mbps": 547.5550559999999,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "dl",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 290.84066,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 146669372,
+              "seconds": 8,
+              "mbps": 146.669372,
+              "cpu_seconds": 2.512534682,
+              "error": null,
+              "observed_seconds": 10.003080566006247
+            },
+            {
+              "bytes": 144171288,
+              "seconds": 8,
+              "mbps": 144.171288,
+              "cpu_seconds": 2.507793812,
+              "error": null,
+              "observed_seconds": 10.00174033199437
+            }
+          ],
+          "mbps": 290.84066,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "dl",
+      "repeat": 4,
+      "streams_per_source": 2,
+      "mbps": 496.30689600000005,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 248053760,
+              "seconds": 8,
+              "mbps": 248.05376,
+              "cpu_seconds": 3.468994273,
+              "error": null,
+              "observed_seconds": 10.009037255003932
+            },
+            {
+              "bytes": 248253136,
+              "seconds": 8,
+              "mbps": 248.253136,
+              "cpu_seconds": 3.465017254,
+              "error": null,
+              "observed_seconds": 9.999396020008135
+            }
+          ],
+          "mbps": 496.30689600000005,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "peering",
+      "direction": "dl",
+      "repeat": 5,
+      "streams_per_source": 2,
+      "mbps": 320.241756,
+      "sources": [
+        {
+          "source": "10.30.0.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 158563856,
+              "seconds": 8,
+              "mbps": 158.563856,
+              "cpu_seconds": 3.0347650049999997,
+              "error": null,
+              "observed_seconds": 10.001745113011566
+            },
+            {
+              "bytes": 161677900,
+              "seconds": 8,
+              "mbps": 161.6779,
+              "cpu_seconds": 3.03210099,
+              "error": null,
+              "observed_seconds": 10.002208737001638
+            }
+          ],
+          "mbps": 320.241756,
+          "node": "peer-flow*",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.30.0.2",
+              "gateway": "10.30.0.1",
+              "dev": "ens160",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "ul",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 3.345396,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 324324,
+              "seconds": 8.0,
+              "mbps": 0.324324,
+              "cpu_seconds": 0.025797609,
+              "error": null,
+              "observed_seconds": 13.672464518007473
+            },
+            {
+              "bytes": 331452,
+              "seconds": 8.0,
+              "mbps": 0.331452,
+              "cpu_seconds": 0.023255512999999978,
+              "error": null,
+              "observed_seconds": 13.890809952004929
+            }
+          ],
+          "mbps": 0.655776,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 344508,
+              "seconds": 8.0,
+              "mbps": 0.344508,
+              "cpu_seconds": 0.031401996000000015,
+              "error": null,
+              "observed_seconds": 13.548352610989241
+            },
+            {
+              "bytes": 274428,
+              "seconds": 8.0,
+              "mbps": 0.274428,
+              "cpu_seconds": 0.028760285999999996,
+              "error": null,
+              "observed_seconds": 14.502839577995474
+            }
+          ],
+          "mbps": 0.6189359999999999,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 263736,
+              "seconds": 8.0,
+              "mbps": 0.263736,
+              "cpu_seconds": 0.02739470500000002,
+              "error": null,
+              "observed_seconds": 14.122921658999985
+            },
+            {
+              "bytes": 352836,
+              "seconds": 8.0,
+              "mbps": 0.352836,
+              "cpu_seconds": 0.02192940800000001,
+              "error": null,
+              "observed_seconds": 12.981454170003417
+            }
+          ],
+          "mbps": 0.616572,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 397980,
+              "seconds": 8.0,
+              "mbps": 0.39798,
+              "cpu_seconds": 0.025955590999999972,
+              "error": null,
+              "observed_seconds": 12.212758383000619
+            },
+            {
+              "bytes": 351648,
+              "seconds": 8.0,
+              "mbps": 0.351648,
+              "cpu_seconds": 0.02064975899999999,
+              "error": null,
+              "observed_seconds": 12.209393953991821
+            }
+          ],
+          "mbps": 0.749628,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 324324,
+              "seconds": 8.0,
+              "mbps": 0.324324,
+              "cpu_seconds": 0.021165615,
+              "error": null,
+              "observed_seconds": 13.002628863992868
+            },
+            {
+              "bytes": 380160,
+              "seconds": 8.0,
+              "mbps": 0.38016,
+              "cpu_seconds": 0.018504378000000044,
+              "error": null,
+              "observed_seconds": 13.369290022004861
+            }
+          ],
+          "mbps": 0.704484,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "ul",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 6.1671439999999995,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 683272,
+              "seconds": 8.0,
+              "mbps": 0.683272,
+              "cpu_seconds": 0.03327169199999999,
+              "error": null,
+              "observed_seconds": 11.621491194993723
+            },
+            {
+              "bytes": 777124,
+              "seconds": 8.0,
+              "mbps": 0.777124,
+              "cpu_seconds": 0.02642053700000002,
+              "error": null,
+              "observed_seconds": 11.589548907999415
+            }
+          ],
+          "mbps": 1.460396,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 597344,
+              "seconds": 8.0,
+              "mbps": 0.597344,
+              "cpu_seconds": 0.025922752999999993,
+              "error": null,
+              "observed_seconds": 11.785163245003787
+            },
+            {
+              "bytes": 648428,
+              "seconds": 8.0,
+              "mbps": 0.648428,
+              "cpu_seconds": 0.024616652000000017,
+              "error": null,
+              "observed_seconds": 11.794167722997372
+            }
+          ],
+          "mbps": 1.245772,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 525096,
+              "seconds": 8.0,
+              "mbps": 0.525096,
+              "cpu_seconds": 0.027229978999999987,
+              "error": null,
+              "observed_seconds": 11.789545726001961
+            },
+            {
+              "bytes": 530620,
+              "seconds": 8.0,
+              "mbps": 0.53062,
+              "cpu_seconds": 0.022909740999999983,
+              "error": null,
+              "observed_seconds": 11.404285709999385
+            }
+          ],
+          "mbps": 1.0557159999999999,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 707828,
+              "seconds": 8.0,
+              "mbps": 0.707828,
+              "cpu_seconds": 0.025979972000000018,
+              "error": null,
+              "observed_seconds": 11.57452395799919
+            },
+            {
+              "bytes": 517968,
+              "seconds": 8.0,
+              "mbps": 0.517968,
+              "cpu_seconds": 0.017465602999999996,
+              "error": null,
+              "observed_seconds": 11.573964670009445
+            }
+          ],
+          "mbps": 1.2257959999999999,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 707828,
+              "seconds": 8.0,
+              "mbps": 0.707828,
+              "cpu_seconds": 0.025993027000000002,
+              "error": null,
+              "observed_seconds": 11.168735908999224
+            },
+            {
+              "bytes": 471636,
+              "seconds": 8.0,
+              "mbps": 0.471636,
+              "cpu_seconds": 0.020637481000000013,
+              "error": null,
+              "observed_seconds": 14.50649000100384
+            }
+          ],
+          "mbps": 1.179464,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "ul",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 4.9897,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 401544,
+              "seconds": 8.0,
+              "mbps": 0.401544,
+              "cpu_seconds": 0.029883406,
+              "error": null,
+              "observed_seconds": 13.419555601998582
+            },
+            {
+              "bytes": 354024,
+              "seconds": 8.0,
+              "mbps": 0.354024,
+              "cpu_seconds": 0.028832124999999986,
+              "error": null,
+              "observed_seconds": 13.645789073008928
+            }
+          ],
+          "mbps": 0.755568,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 597148,
+              "seconds": 8.0,
+              "mbps": 0.597148,
+              "cpu_seconds": 0.03819304500000001,
+              "error": null,
+              "observed_seconds": 12.472028463991592
+            },
+            {
+              "bytes": 614196,
+              "seconds": 8.0,
+              "mbps": 0.614196,
+              "cpu_seconds": 0.03397556600000001,
+              "error": null,
+              "observed_seconds": 12.53523886500625
+            }
+          ],
+          "mbps": 1.211344,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 662684,
+              "seconds": 8.0,
+              "mbps": 0.662684,
+              "cpu_seconds": 0.03268567,
+              "error": null,
+              "observed_seconds": 11.926438646987663
+            },
+            {
+              "bytes": 428868,
+              "seconds": 8.0,
+              "mbps": 0.428868,
+              "cpu_seconds": 0.029959493999999975,
+              "error": null,
+              "observed_seconds": 12.17840327101294
+            }
+          ],
+          "mbps": 1.091552,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 256608,
+              "seconds": 8.0,
+              "mbps": 0.256608,
+              "cpu_seconds": 0.026710359000000017,
+              "error": null,
+              "observed_seconds": 12.889479995996226
+            },
+            {
+              "bytes": 491024,
+              "seconds": 8.0,
+              "mbps": 0.491024,
+              "cpu_seconds": 0.018544338999999993,
+              "error": null,
+              "observed_seconds": 12.27810159198998
+            }
+          ],
+          "mbps": 0.7476320000000001,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 635360,
+              "seconds": 8.0,
+              "mbps": 0.63536,
+              "cpu_seconds": 0.023961389,
+              "error": null,
+              "observed_seconds": 12.224131472001318
+            },
+            {
+              "bytes": 548244,
+              "seconds": 8.0,
+              "mbps": 0.548244,
+              "cpu_seconds": 0.021857125000000005,
+              "error": null,
+              "observed_seconds": 12.254635392993805
+            }
+          ],
+          "mbps": 1.1836039999999999,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "ul",
+      "repeat": 4,
+      "streams_per_source": 2,
+      "mbps": 4.4414560000000005,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 455384,
+              "seconds": 8.0,
+              "mbps": 0.455384,
+              "cpu_seconds": 0.03756931999999999,
+              "error": null,
+              "observed_seconds": 11.457630085991696
+            },
+            {
+              "bytes": 554796,
+              "seconds": 8.0,
+              "mbps": 0.554796,
+              "cpu_seconds": 0.03682191699999998,
+              "error": null,
+              "observed_seconds": 11.913694684990332
+            }
+          ],
+          "mbps": 1.01018,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 611208,
+              "seconds": 8.0,
+              "mbps": 0.611208,
+              "cpu_seconds": 0.036294593000000014,
+              "error": null,
+              "observed_seconds": 11.430258591994061
+            },
+            {
+              "bytes": 421740,
+              "seconds": 8.0,
+              "mbps": 0.42174,
+              "cpu_seconds": 0.03179647200000002,
+              "error": null,
+              "observed_seconds": 12.03006897198793
+            }
+          ],
+          "mbps": 1.032948,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 465880,
+              "seconds": 8.0,
+              "mbps": 0.46588,
+              "cpu_seconds": 0.031756335,
+              "error": null,
+              "observed_seconds": 12.221531413990306
+            },
+            {
+              "bytes": 149688,
+              "seconds": 8.0,
+              "mbps": 0.149688,
+              "cpu_seconds": 0.028916760000000014,
+              "error": null,
+              "observed_seconds": 13.113728105003247
+            }
+          ],
+          "mbps": 0.615568,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 658924,
+              "seconds": 8.0,
+              "mbps": 0.658924,
+              "cpu_seconds": 0.02273010799999997,
+              "error": null,
+              "observed_seconds": 11.194692852994194
+            },
+            {
+              "bytes": 509652,
+              "seconds": 8.0,
+              "mbps": 0.509652,
+              "cpu_seconds": 0.01771534800000002,
+              "error": null,
+              "observed_seconds": 11.292997313998058
+            }
+          ],
+          "mbps": 1.1685759999999998,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 239976,
+              "seconds": 8.0,
+              "mbps": 0.239976,
+              "cpu_seconds": 0.022693082000000003,
+              "error": null,
+              "observed_seconds": 13.24588620600116
+            },
+            {
+              "bytes": 374208,
+              "seconds": 8.0,
+              "mbps": 0.374208,
+              "cpu_seconds": 0.017488751999999996,
+              "error": null,
+              "observed_seconds": 12.761705249999068
+            }
+          ],
+          "mbps": 0.614184,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "ul",
+      "repeat": 5,
+      "streams_per_source": 2,
+      "mbps": 4.178308,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 128304,
+              "seconds": 8.0,
+              "mbps": 0.128304,
+              "cpu_seconds": 0.028955063000000003,
+              "error": null,
+              "observed_seconds": 13.412889746992732
+            },
+            {
+              "bytes": 606652,
+              "seconds": 8.0,
+              "mbps": 0.606652,
+              "cpu_seconds": 0.024584518,
+              "error": null,
+              "observed_seconds": 11.556841954006813
+            }
+          ],
+          "mbps": 0.7349559999999999,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 519928,
+              "seconds": 8.0,
+              "mbps": 0.519928,
+              "cpu_seconds": 0.03325610699999998,
+              "error": null,
+              "observed_seconds": 12.423512148001464
+            },
+            {
+              "bytes": 407472,
+              "seconds": 8.0,
+              "mbps": 0.407472,
+              "cpu_seconds": 0.028408023000000004,
+              "error": null,
+              "observed_seconds": 11.954203006011085
+            }
+          ],
+          "mbps": 0.9274,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 498348,
+              "seconds": 8.0,
+              "mbps": 0.498348,
+              "cpu_seconds": 0.03791286299999999,
+              "error": null,
+              "observed_seconds": 11.74541849900561
+            },
+            {
+              "bytes": 397980,
+              "seconds": 8.0,
+              "mbps": 0.39798,
+              "cpu_seconds": 0.03392299100000001,
+              "error": null,
+              "observed_seconds": 11.887462486993172
+            }
+          ],
+          "mbps": 0.896328,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 348084,
+              "seconds": 8.0,
+              "mbps": 0.348084,
+              "cpu_seconds": 0.030525298000000006,
+              "error": null,
+              "observed_seconds": 12.47816904100182
+            },
+            {
+              "bytes": 413424,
+              "seconds": 8.0,
+              "mbps": 0.413424,
+              "cpu_seconds": 0.026383320999999987,
+              "error": null,
+              "observed_seconds": 12.833517699007643
+            }
+          ],
+          "mbps": 0.7615080000000001,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 377784,
+              "seconds": 8.0,
+              "mbps": 0.377784,
+              "cpu_seconds": 0.022224356,
+              "error": null,
+              "observed_seconds": 12.28386948799016
+            },
+            {
+              "bytes": 480332,
+              "seconds": 8.0,
+              "mbps": 0.480332,
+              "cpu_seconds": 0.015514499999999987,
+              "error": null,
+              "observed_seconds": 11.77775527499034
+            }
+          ],
+          "mbps": 0.858116,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "dl",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 16.362180000000002,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 942084,
+              "seconds": 8,
+              "mbps": 0.942084,
+              "cpu_seconds": 0.130199689,
+              "error": null,
+              "observed_seconds": 10.82572272598918
+            },
+            {
+              "bytes": 870804,
+              "seconds": 8,
+              "mbps": 0.870804,
+              "cpu_seconds": 0.129322632,
+              "error": null,
+              "observed_seconds": 10.859330285995384
+            }
+          ],
+          "mbps": 1.812888,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 2600044,
+              "seconds": 8,
+              "mbps": 2.600044,
+              "cpu_seconds": 0.25089247299999995,
+              "error": null,
+              "observed_seconds": 10.482976546001737
+            },
+            {
+              "bytes": 1468368,
+              "seconds": 8,
+              "mbps": 1.468368,
+              "cpu_seconds": 0.244063554,
+              "error": null,
+              "observed_seconds": 10.442272094995133
+            }
+          ],
+          "mbps": 4.068412,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 2579148,
+              "seconds": 8,
+              "mbps": 2.579148,
+              "cpu_seconds": 0.198902152,
+              "error": null,
+              "observed_seconds": 10.52801037899917
+            },
+            {
+              "bytes": 1170168,
+              "seconds": 8,
+              "mbps": 1.170168,
+              "cpu_seconds": 0.19666910099999999,
+              "error": null,
+              "observed_seconds": 10.396700629004044
+            }
+          ],
+          "mbps": 3.7493160000000003,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 2012828,
+              "seconds": 8,
+              "mbps": 2.012828,
+              "cpu_seconds": 0.14985141500000002,
+              "error": null,
+              "observed_seconds": 10.501240493002115
+            },
+            {
+              "bytes": 1422036,
+              "seconds": 8,
+              "mbps": 1.422036,
+              "cpu_seconds": 0.14535753099999998,
+              "error": null,
+              "observed_seconds": 10.518035002009128
+            }
+          ],
+          "mbps": 3.434864,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1596672,
+              "seconds": 8,
+              "mbps": 1.596672,
+              "cpu_seconds": 0.13140326900000002,
+              "error": null,
+              "observed_seconds": 10.442540866002673
+            },
+            {
+              "bytes": 1700028,
+              "seconds": 8,
+              "mbps": 1.700028,
+              "cpu_seconds": 0.130208611,
+              "error": null,
+              "observed_seconds": 10.37465046098805
+            }
+          ],
+          "mbps": 3.2967000000000004,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "dl",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 12.797775999999999,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 636768,
+              "seconds": 8,
+              "mbps": 0.636768,
+              "cpu_seconds": 0.14165592500000002,
+              "error": null,
+              "observed_seconds": 10.803721846998087
+            },
+            {
+              "bytes": 1361448,
+              "seconds": 8,
+              "mbps": 1.361448,
+              "cpu_seconds": 0.130902454,
+              "error": null,
+              "observed_seconds": 10.485770910003339
+            }
+          ],
+          "mbps": 1.998216,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 814968,
+              "seconds": 8,
+              "mbps": 0.814968,
+              "cpu_seconds": 0.16373105000000002,
+              "error": null,
+              "observed_seconds": 10.593950320995646
+            },
+            {
+              "bytes": 1176120,
+              "seconds": 8,
+              "mbps": 1.17612,
+              "cpu_seconds": 0.162094042,
+              "error": null,
+              "observed_seconds": 10.722833842999535
+            }
+          ],
+          "mbps": 1.991088,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1578852,
+              "seconds": 8,
+              "mbps": 1.578852,
+              "cpu_seconds": 0.22160470000000002,
+              "error": null,
+              "observed_seconds": 10.44618186999287
+            },
+            {
+              "bytes": 1196316,
+              "seconds": 8,
+              "mbps": 1.196316,
+              "cpu_seconds": 0.217437679,
+              "error": null,
+              "observed_seconds": 10.469589030006318
+            }
+          ],
+          "mbps": 2.775168,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1729276,
+              "seconds": 8,
+              "mbps": 1.729276,
+              "cpu_seconds": 0.153368063,
+              "error": null,
+              "observed_seconds": 10.716707696992671
+            },
+            {
+              "bytes": 1505196,
+              "seconds": 8,
+              "mbps": 1.505196,
+              "cpu_seconds": 0.14506315200000003,
+              "error": null,
+              "observed_seconds": 10.576721014003851
+            }
+          ],
+          "mbps": 3.2344720000000002,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1363188,
+              "seconds": 8,
+              "mbps": 1.363188,
+              "cpu_seconds": 0.11946174,
+              "error": null,
+              "observed_seconds": 10.405527829992934
+            },
+            {
+              "bytes": 1435644,
+              "seconds": 8,
+              "mbps": 1.435644,
+              "cpu_seconds": 0.112859373,
+              "error": null,
+              "observed_seconds": 10.333829570998205
+            }
+          ],
+          "mbps": 2.798832,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "dl",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 19.798344,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1616868,
+              "seconds": 8,
+              "mbps": 1.616868,
+              "cpu_seconds": 0.204906636,
+              "error": null,
+              "observed_seconds": 10.682562646994484
+            },
+            {
+              "bytes": 1887316,
+              "seconds": 8,
+              "mbps": 1.887316,
+              "cpu_seconds": 0.200368786,
+              "error": null,
+              "observed_seconds": 10.663733416004106
+            }
+          ],
+          "mbps": 3.504184,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1757052,
+              "seconds": 8,
+              "mbps": 1.757052,
+              "cpu_seconds": 0.23984378999999997,
+              "error": null,
+              "observed_seconds": 10.717063186995802
+            },
+            {
+              "bytes": 2247660,
+              "seconds": 8,
+              "mbps": 2.24766,
+              "cpu_seconds": 0.23096443,
+              "error": null,
+              "observed_seconds": 10.679680735003785
+            }
+          ],
+          "mbps": 4.0047120000000005,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 2118132,
+              "seconds": 8,
+              "mbps": 2.118132,
+              "cpu_seconds": 0.28844530199999996,
+              "error": null,
+              "observed_seconds": 10.604571146992384
+            },
+            {
+              "bytes": 2055572,
+              "seconds": 8,
+              "mbps": 2.055572,
+              "cpu_seconds": 0.279944769,
+              "error": null,
+              "observed_seconds": 10.473627414001385
+            }
+          ],
+          "mbps": 4.173704000000001,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1713096,
+              "seconds": 8,
+              "mbps": 1.713096,
+              "cpu_seconds": 0.200693223,
+              "error": null,
+              "observed_seconds": 10.50851354500628
+            },
+            {
+              "bytes": 2784672,
+              "seconds": 8,
+              "mbps": 2.784672,
+              "cpu_seconds": 0.196267014,
+              "error": null,
+              "observed_seconds": 10.495468390989117
+            }
+          ],
+          "mbps": 4.497768,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1468368,
+              "seconds": 8,
+              "mbps": 1.468368,
+              "cpu_seconds": 0.17790495,
+              "error": null,
+              "observed_seconds": 10.580257182999048
+            },
+            {
+              "bytes": 2149608,
+              "seconds": 8,
+              "mbps": 2.149608,
+              "cpu_seconds": 0.17164594800000002,
+              "error": null,
+              "observed_seconds": 10.54284362900944
+            }
+          ],
+          "mbps": 3.617976,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "dl",
+      "repeat": 4,
+      "streams_per_source": 2,
+      "mbps": 14.063976,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 924460,
+              "seconds": 8,
+              "mbps": 0.92446,
+              "cpu_seconds": 0.23886994399999997,
+              "error": null,
+              "observed_seconds": 14.545629067986738
+            },
+            {
+              "bytes": 2612560,
+              "seconds": 8,
+              "mbps": 2.61256,
+              "cpu_seconds": 0.233039137,
+              "error": null,
+              "observed_seconds": 10.894166990998201
+            }
+          ],
+          "mbps": 3.53702,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 953964,
+              "seconds": 8,
+              "mbps": 0.953964,
+              "cpu_seconds": 0.160832124,
+              "error": null,
+              "observed_seconds": 11.095276289997855
+            },
+            {
+              "bytes": 1047816,
+              "seconds": 8,
+              "mbps": 1.047816,
+              "cpu_seconds": 0.15974532200000002,
+              "error": null,
+              "observed_seconds": 11.489236330002313
+            }
+          ],
+          "mbps": 2.00178,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1018116,
+              "seconds": 8,
+              "mbps": 1.018116,
+              "cpu_seconds": 0.155781377,
+              "error": null,
+              "observed_seconds": 11.251813998998841
+            },
+            {
+              "bytes": 1177308,
+              "seconds": 8,
+              "mbps": 1.177308,
+              "cpu_seconds": 0.14905454299999998,
+              "error": null,
+              "observed_seconds": 10.991077849001158
+            }
+          ],
+          "mbps": 2.195424,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 945648,
+              "seconds": 8,
+              "mbps": 0.945648,
+              "cpu_seconds": 0.133966813,
+              "error": null,
+              "observed_seconds": 15.864569516008487
+            },
+            {
+              "bytes": 2047256,
+              "seconds": 8,
+              "mbps": 2.047256,
+              "cpu_seconds": 0.12955325500000003,
+              "error": null,
+              "observed_seconds": 10.475399910006672
+            }
+          ],
+          "mbps": 2.9929040000000002,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1884168,
+              "seconds": 8,
+              "mbps": 1.884168,
+              "cpu_seconds": 0.15738470899999998,
+              "error": null,
+              "observed_seconds": 10.242721496993909
+            },
+            {
+              "bytes": 1452680,
+              "seconds": 8,
+              "mbps": 1.45268,
+              "cpu_seconds": 0.15665308199999997,
+              "error": null,
+              "observed_seconds": 15.043437242988148
+            }
+          ],
+          "mbps": 3.336848,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "mobile",
+      "direction": "dl",
+      "repeat": 5,
+      "streams_per_source": 2,
+      "mbps": 18.527516,
+      "sources": [
+        {
+          "source": "10.45.1.2",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 2125688,
+              "seconds": 8,
+              "mbps": 2.125688,
+              "cpu_seconds": 0.225984633,
+              "error": null,
+              "observed_seconds": 10.458249488001456
+            },
+            {
+              "bytes": 1619428,
+              "seconds": 8,
+              "mbps": 1.619428,
+              "cpu_seconds": 0.221711819,
+              "error": null,
+              "observed_seconds": 10.436381736988551
+            }
+          ],
+          "mbps": 3.745116,
+          "node": "ue1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.2",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.4",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1783752,
+              "seconds": 8,
+              "mbps": 1.783752,
+              "cpu_seconds": 0.19412176100000003,
+              "error": null,
+              "observed_seconds": 10.432798456007731
+            },
+            {
+              "bytes": 1436476,
+              "seconds": 8,
+              "mbps": 1.436476,
+              "cpu_seconds": 0.18974158000000002,
+              "error": null,
+              "observed_seconds": 10.39833503900445
+            }
+          ],
+          "mbps": 3.220228,
+          "node": "ue2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.4",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.5",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 2201880,
+              "seconds": 8,
+              "mbps": 2.20188,
+              "cpu_seconds": 0.220320737,
+              "error": null,
+              "observed_seconds": 10.223049018008169
+            },
+            {
+              "bytes": 1645564,
+              "seconds": 8,
+              "mbps": 1.645564,
+              "cpu_seconds": 0.21634501699999997,
+              "error": null,
+              "observed_seconds": 10.37404725101078
+            }
+          ],
+          "mbps": 3.8474440000000003,
+          "node": "ue3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.5",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.6",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 1810512,
+              "seconds": 8,
+              "mbps": 1.810512,
+              "cpu_seconds": 0.13485993100000002,
+              "error": null,
+              "observed_seconds": 10.511442955001257
+            },
+            {
+              "bytes": 1552716,
+              "seconds": 8,
+              "mbps": 1.552716,
+              "cpu_seconds": 0.13149649100000002,
+              "error": null,
+              "observed_seconds": 10.538950627000304
+            }
+          ],
+          "mbps": 3.363228,
+          "node": "ue4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.6",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.45.1.7",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 986788,
+              "seconds": 8,
+              "mbps": 0.986788,
+              "cpu_seconds": 0.090372899,
+              "error": "ConnectionResetError(104, 'Connection reset by peer')",
+              "observed_seconds": 5.491847540994058
+            },
+            {
+              "bytes": 3364712,
+              "seconds": 8,
+              "mbps": 3.364712,
+              "cpu_seconds": 0.159391397,
+              "error": null,
+              "observed_seconds": 10.298913503997028
+            }
+          ],
+          "mbps": 4.3515,
+          "node": "ue5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.45.1.7",
+              "dev": "tun_srsue",
+              "flags": [],
+              "uid": 0,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "ul",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 277.68022800000006,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 15425112,
+              "seconds": 8.0,
+              "mbps": 15.425112,
+              "cpu_seconds": 0.28649927399999997,
+              "error": null,
+              "observed_seconds": 10.425759069999913
+            },
+            {
+              "bytes": 14006492,
+              "seconds": 8.0,
+              "mbps": 14.006492,
+              "cpu_seconds": 0.284979948,
+              "error": null,
+              "observed_seconds": 10.491020740999375
+            }
+          ],
+          "mbps": 29.431604,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 11647712,
+              "seconds": 8.0,
+              "mbps": 11.647712,
+              "cpu_seconds": 0.266214752,
+              "error": null,
+              "observed_seconds": 13.921394584001973
+            },
+            {
+              "bytes": 18571576,
+              "seconds": 8.0,
+              "mbps": 18.571576,
+              "cpu_seconds": 0.2581929,
+              "error": null,
+              "observed_seconds": 10.251955903993803
+            }
+          ],
+          "mbps": 30.219288,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 39756200,
+              "seconds": 8.0,
+              "mbps": 39.7562,
+              "cpu_seconds": 0.40555948500000005,
+              "error": null,
+              "observed_seconds": 10.016239112999756
+            },
+            {
+              "bytes": 36901080,
+              "seconds": 8.0,
+              "mbps": 36.90108,
+              "cpu_seconds": 0.402802125,
+              "error": null,
+              "observed_seconds": 10.009734389997902
+            }
+          ],
+          "mbps": 76.65728,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 106920,
+              "seconds": 8.0,
+              "mbps": 0.10692,
+              "cpu_seconds": 0.11398583099999998,
+              "error": null,
+              "observed_seconds": 18.694529036001768
+            },
+            {
+              "bytes": 106920,
+              "seconds": 8.0,
+              "mbps": 0.10692,
+              "cpu_seconds": 0.10528796200000001,
+              "error": null,
+              "observed_seconds": 17.41557686300075
+            }
+          ],
+          "mbps": 0.21384,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 20445652,
+              "seconds": 8.0,
+              "mbps": 20.445652,
+              "cpu_seconds": 0.266852388,
+              "error": null,
+              "observed_seconds": 10.015729113001726
+            },
+            {
+              "bytes": 11769156,
+              "seconds": 8.0,
+              "mbps": 11.769156,
+              "cpu_seconds": 0.26814414099999995,
+              "error": null,
+              "observed_seconds": 10.036214798004949
+            }
+          ],
+          "mbps": 32.214808,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 15450600,
+              "seconds": 8.0,
+              "mbps": 15.4506,
+              "cpu_seconds": 0.282947724,
+              "error": null,
+              "observed_seconds": 10.08041112900537
+            },
+            {
+              "bytes": 17465620,
+              "seconds": 8.0,
+              "mbps": 17.46562,
+              "cpu_seconds": 0.277019067,
+              "error": null,
+              "observed_seconds": 10.026804446009919
+            }
+          ],
+          "mbps": 32.91622,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 90288,
+              "seconds": 8.0,
+              "mbps": 0.090288,
+              "cpu_seconds": 0.11039568599999999,
+              "error": null,
+              "observed_seconds": 10.104867533998913
+            },
+            {
+              "bytes": 62964,
+              "seconds": 8.0,
+              "mbps": 0.062964,
+              "cpu_seconds": 0.10005347,
+              "error": null,
+              "observed_seconds": 18.404814084002282
+            }
+          ],
+          "mbps": 0.153252,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 17381004,
+              "seconds": 8.0,
+              "mbps": 17.381004,
+              "cpu_seconds": 0.235131785,
+              "error": null,
+              "observed_seconds": 10.022663572002784
+            },
+            {
+              "bytes": 16603144,
+              "seconds": 8.0,
+              "mbps": 16.603144,
+              "cpu_seconds": 0.228007599,
+              "error": null,
+              "observed_seconds": 10.020683561000624
+            }
+          ],
+          "mbps": 33.984148000000005,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 17569392,
+              "seconds": 8.0,
+              "mbps": 17.569392,
+              "cpu_seconds": 0.343841895,
+              "error": null,
+              "observed_seconds": 10.247284690005472
+            },
+            {
+              "bytes": 24110120,
+              "seconds": 8.0,
+              "mbps": 24.11012,
+              "cpu_seconds": 0.3446810659999999,
+              "error": null,
+              "observed_seconds": 10.260824584998772
+            }
+          ],
+          "mbps": 41.679512,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 40392,
+              "seconds": 8.0,
+              "mbps": 0.040392,
+              "cpu_seconds": 0.10641682699999999,
+              "error": null,
+              "observed_seconds": 18.872518160002073
+            },
+            {
+              "bytes": 169884,
+              "seconds": 8.0,
+              "mbps": 0.169884,
+              "cpu_seconds": 0.09749818500000001,
+              "error": null,
+              "observed_seconds": 10.106239635002567
+            }
+          ],
+          "mbps": 0.21027600000000002,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "ul",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 425.071996,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 34264796,
+              "seconds": 8.0,
+              "mbps": 34.264796,
+              "cpu_seconds": 0.402397166,
+              "error": null,
+              "observed_seconds": 10.06885167901055
+            },
+            {
+              "bytes": 25011960,
+              "seconds": 8.0,
+              "mbps": 25.01196,
+              "cpu_seconds": 0.39983957400000003,
+              "error": null,
+              "observed_seconds": 10.062894835995394
+            }
+          ],
+          "mbps": 59.27675599999999,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 16848264,
+              "seconds": 8.0,
+              "mbps": 16.848264,
+              "cpu_seconds": 0.244093206,
+              "error": null,
+              "observed_seconds": 10.273566829011543
+            },
+            {
+              "bytes": 18374720,
+              "seconds": 8.0,
+              "mbps": 18.37472,
+              "cpu_seconds": 0.240064429,
+              "error": null,
+              "observed_seconds": 10.222287790005794
+            }
+          ],
+          "mbps": 35.222984,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 15413980,
+              "seconds": 8.0,
+              "mbps": 15.41398,
+              "cpu_seconds": 0.21966467500000003,
+              "error": null,
+              "observed_seconds": 10.650505939993309
+            },
+            {
+              "bytes": 9239596,
+              "seconds": 8.0,
+              "mbps": 9.239596,
+              "cpu_seconds": 0.21820101099999997,
+              "error": null,
+              "observed_seconds": 10.718547890006448
+            }
+          ],
+          "mbps": 24.653576,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 28196452,
+              "seconds": 8.0,
+              "mbps": 28.196452,
+              "cpu_seconds": 0.317605267,
+              "error": null,
+              "observed_seconds": 10.062776344988379
+            },
+            {
+              "bytes": 25542812,
+              "seconds": 8.0,
+              "mbps": 25.542812,
+              "cpu_seconds": 0.312608649,
+              "error": null,
+              "observed_seconds": 10.05425166299392
+            }
+          ],
+          "mbps": 53.739264000000006,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 13981728,
+              "seconds": 8.0,
+              "mbps": 13.981728,
+              "cpu_seconds": 0.22645745499999997,
+              "error": null,
+              "observed_seconds": 12.080747601998155
+            },
+            {
+              "bytes": 15206788,
+              "seconds": 8.0,
+              "mbps": 15.206788,
+              "cpu_seconds": 0.22223369600000004,
+              "error": null,
+              "observed_seconds": 10.043487746996107
+            }
+          ],
+          "mbps": 29.188516,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 22576768,
+              "seconds": 8.0,
+              "mbps": 22.576768,
+              "cpu_seconds": 0.29829222,
+              "error": null,
+              "observed_seconds": 10.022561464007595
+            },
+            {
+              "bytes": 27195456,
+              "seconds": 8.0,
+              "mbps": 27.195456,
+              "cpu_seconds": 0.29747160899999997,
+              "error": null,
+              "observed_seconds": 10.024118642992107
+            }
+          ],
+          "mbps": 49.772224,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 13572224,
+              "seconds": 8.0,
+              "mbps": 13.572224,
+              "cpu_seconds": 0.27546141,
+              "error": null,
+              "observed_seconds": 10.032122721997439
+            },
+            {
+              "bytes": 28902760,
+              "seconds": 8.0,
+              "mbps": 28.90276,
+              "cpu_seconds": 0.275331612,
+              "error": null,
+              "observed_seconds": 10.022689279998303
+            }
+          ],
+          "mbps": 42.474984,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 22885708,
+              "seconds": 8.0,
+              "mbps": 22.885708,
+              "cpu_seconds": 0.23521429600000004,
+              "error": null,
+              "observed_seconds": 11.661833498990745
+            },
+            {
+              "bytes": 10927820,
+              "seconds": 8.0,
+              "mbps": 10.92782,
+              "cpu_seconds": 0.231688246,
+              "error": null,
+              "observed_seconds": 10.453296109000803
+            }
+          ],
+          "mbps": 33.813528000000005,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 22702648,
+              "seconds": 8.0,
+              "mbps": 22.702648,
+              "cpu_seconds": 0.290849644,
+              "error": null,
+              "observed_seconds": 10.022801956001786
+            },
+            {
+              "bytes": 31535688,
+              "seconds": 8.0,
+              "mbps": 31.535688,
+              "cpu_seconds": 0.291165625,
+              "error": null,
+              "observed_seconds": 10.019446727004834
+            }
+          ],
+          "mbps": 54.238336000000004,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 20893188,
+              "seconds": 8.0,
+              "mbps": 20.893188,
+              "cpu_seconds": 0.251774298,
+              "error": null,
+              "observed_seconds": 10.016603506999672
+            },
+            {
+              "bytes": 21798640,
+              "seconds": 8.0,
+              "mbps": 21.79864,
+              "cpu_seconds": 0.251566885,
+              "error": null,
+              "observed_seconds": 10.024477978004143
+            }
+          ],
+          "mbps": 42.691828,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "ul",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 441.308924,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 24336368,
+              "seconds": 8.0,
+              "mbps": 24.336368,
+              "cpu_seconds": 0.31244118,
+              "error": null,
+              "observed_seconds": 10.065958443010459
+            },
+            {
+              "bytes": 17912204,
+              "seconds": 8.0,
+              "mbps": 17.912204,
+              "cpu_seconds": 0.31211971099999997,
+              "error": null,
+              "observed_seconds": 10.167721908001113
+            }
+          ],
+          "mbps": 42.248571999999996,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 29348752,
+              "seconds": 8.0,
+              "mbps": 29.348752,
+              "cpu_seconds": 0.325287028,
+              "error": null,
+              "observed_seconds": 10.069411737000337
+            },
+            {
+              "bytes": 26761824,
+              "seconds": 8.0,
+              "mbps": 26.761824,
+              "cpu_seconds": 0.323532645,
+              "error": null,
+              "observed_seconds": 10.054845596998348
+            }
+          ],
+          "mbps": 56.110576,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 23580700,
+              "seconds": 8.0,
+              "mbps": 23.5807,
+              "cpu_seconds": 0.36158955699999995,
+              "error": null,
+              "observed_seconds": 10.104617384000449
+            },
+            {
+              "bytes": 32289444,
+              "seconds": 8.0,
+              "mbps": 32.289444,
+              "cpu_seconds": 0.35733821899999996,
+              "error": null,
+              "observed_seconds": 10.088208198998473
+            }
+          ],
+          "mbps": 55.870144,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 25246376,
+              "seconds": 8.0,
+              "mbps": 25.246376,
+              "cpu_seconds": 0.271341236,
+              "error": null,
+              "observed_seconds": 10.110368531997665
+            },
+            {
+              "bytes": 12709224,
+              "seconds": 8.0,
+              "mbps": 12.709224,
+              "cpu_seconds": 0.27010877,
+              "error": null,
+              "observed_seconds": 10.107656891006627
+            }
+          ],
+          "mbps": 37.955600000000004,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 13070376,
+              "seconds": 8.0,
+              "mbps": 13.070376,
+              "cpu_seconds": 0.22747126699999998,
+              "error": null,
+              "observed_seconds": 10.111622947995784
+            },
+            {
+              "bytes": 14100548,
+              "seconds": 8.0,
+              "mbps": 14.100548,
+              "cpu_seconds": 0.222637031,
+              "error": null,
+              "observed_seconds": 10.08458090700151
+            }
+          ],
+          "mbps": 27.170924,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 25692500,
+              "seconds": 8.0,
+              "mbps": 25.6925,
+              "cpu_seconds": 0.29306950899999995,
+              "error": null,
+              "observed_seconds": 10.065820717005408
+            },
+            {
+              "bytes": 22193900,
+              "seconds": 8.0,
+              "mbps": 22.1939,
+              "cpu_seconds": 0.289181493,
+              "error": null,
+              "observed_seconds": 10.06473248299153
+            }
+          ],
+          "mbps": 47.886399999999995,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 30459592,
+              "seconds": 8.0,
+              "mbps": 30.459592,
+              "cpu_seconds": 0.309856928,
+              "error": null,
+              "observed_seconds": 10.076315422993503
+            },
+            {
+              "bytes": 22759572,
+              "seconds": 8.0,
+              "mbps": 22.759572,
+              "cpu_seconds": 0.30769036699999996,
+              "error": null,
+              "observed_seconds": 10.070492846993147
+            }
+          ],
+          "mbps": 53.219164,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 18834200,
+              "seconds": 8.0,
+              "mbps": 18.8342,
+              "cpu_seconds": 0.256494409,
+              "error": null,
+              "observed_seconds": 10.090418728010263
+            },
+            {
+              "bytes": 12344508,
+              "seconds": 8.0,
+              "mbps": 12.344508,
+              "cpu_seconds": 0.254974439,
+              "error": null,
+              "observed_seconds": 10.122230712004239
+            }
+          ],
+          "mbps": 31.178708,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 19963212,
+              "seconds": 8.0,
+              "mbps": 19.963212,
+              "cpu_seconds": 0.30310402,
+              "error": null,
+              "observed_seconds": 10.094690924990573
+            },
+            {
+              "bytes": 27037036,
+              "seconds": 8.0,
+              "mbps": 27.037036,
+              "cpu_seconds": 0.294058384,
+              "error": null,
+              "observed_seconds": 10.073082504997728
+            }
+          ],
+          "mbps": 47.000248,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 23237880,
+              "seconds": 8.0,
+              "mbps": 23.23788,
+              "cpu_seconds": 0.283151007,
+              "error": null,
+              "observed_seconds": 10.076943879990722
+            },
+            {
+              "bytes": 19430708,
+              "seconds": 8.0,
+              "mbps": 19.430708,
+              "cpu_seconds": 0.278875952,
+              "error": null,
+              "observed_seconds": 10.088085598006728
+            }
+          ],
+          "mbps": 42.668588,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "ul",
+      "repeat": 4,
+      "streams_per_source": 2,
+      "mbps": 549.4470879999999,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 22559656,
+              "seconds": 8.0,
+              "mbps": 22.559656,
+              "cpu_seconds": 0.289505604,
+              "error": null,
+              "observed_seconds": 10.134534074008116
+            },
+            {
+              "bytes": 27320564,
+              "seconds": 8.0,
+              "mbps": 27.320564,
+              "cpu_seconds": 0.285391917,
+              "error": null,
+              "observed_seconds": 10.082332451987895
+            }
+          ],
+          "mbps": 49.88022,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 28064964,
+              "seconds": 8.0,
+              "mbps": 28.064964,
+              "cpu_seconds": 0.27173025000000006,
+              "error": null,
+              "observed_seconds": 10.051530570010073
+            },
+            {
+              "bytes": 25113040,
+              "seconds": 8.0,
+              "mbps": 25.11304,
+              "cpu_seconds": 0.27091538400000004,
+              "error": null,
+              "observed_seconds": 10.132280491001438
+            }
+          ],
+          "mbps": 53.178004,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 22470832,
+              "seconds": 8.0,
+              "mbps": 22.470832,
+              "cpu_seconds": 0.287318285,
+              "error": null,
+              "observed_seconds": 10.100612149995868
+            },
+            {
+              "bytes": 25853396,
+              "seconds": 8.0,
+              "mbps": 25.853396,
+              "cpu_seconds": 0.28340350799999997,
+              "error": null,
+              "observed_seconds": 10.091093630995601
+            }
+          ],
+          "mbps": 48.324228000000005,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 18544500,
+              "seconds": 8.0,
+              "mbps": 18.5445,
+              "cpu_seconds": 0.299996862,
+              "error": null,
+              "observed_seconds": 10.06591175099311
+            },
+            {
+              "bytes": 36304260,
+              "seconds": 8.0,
+              "mbps": 36.30426,
+              "cpu_seconds": 0.296590414,
+              "error": null,
+              "observed_seconds": 10.092794046999188
+            }
+          ],
+          "mbps": 54.84876,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 27253472,
+              "seconds": 8.0,
+              "mbps": 27.253472,
+              "cpu_seconds": 0.32383352,
+              "error": null,
+              "observed_seconds": 10.02874631700979
+            },
+            {
+              "bytes": 33726876,
+              "seconds": 8.0,
+              "mbps": 33.726876,
+              "cpu_seconds": 0.324068802,
+              "error": null,
+              "observed_seconds": 10.027670432988089
+            }
+          ],
+          "mbps": 60.98034799999999,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 37687756,
+              "seconds": 8.0,
+              "mbps": 37.687756,
+              "cpu_seconds": 0.37157737999999996,
+              "error": null,
+              "observed_seconds": 10.048500696997507
+            },
+            {
+              "bytes": 29347636,
+              "seconds": 8.0,
+              "mbps": 29.347636,
+              "cpu_seconds": 0.366488853,
+              "error": null,
+              "observed_seconds": 10.020899987997836
+            }
+          ],
+          "mbps": 67.035392,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 23158568,
+              "seconds": 8.0,
+              "mbps": 23.158568,
+              "cpu_seconds": 0.325650817,
+              "error": null,
+              "observed_seconds": 10.050504832004663
+            },
+            {
+              "bytes": 23054428,
+              "seconds": 8.0,
+              "mbps": 23.054428,
+              "cpu_seconds": 0.319363273,
+              "error": null,
+              "observed_seconds": 10.030020028993022
+            }
+          ],
+          "mbps": 46.212996000000004,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 31841604,
+              "seconds": 8.0,
+              "mbps": 31.841604,
+              "cpu_seconds": 0.339186443,
+              "error": null,
+              "observed_seconds": 10.02230309000879
+            },
+            {
+              "bytes": 28649924,
+              "seconds": 8.0,
+              "mbps": 28.649924,
+              "cpu_seconds": 0.329038181,
+              "error": null,
+              "observed_seconds": 10.02303450499312
+            }
+          ],
+          "mbps": 60.491528,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 22792896,
+              "seconds": 8.0,
+              "mbps": 22.792896,
+              "cpu_seconds": 0.245875445,
+              "error": null,
+              "observed_seconds": 10.080168361004326
+            },
+            {
+              "bytes": 18774340,
+              "seconds": 8.0,
+              "mbps": 18.77434,
+              "cpu_seconds": 0.244417816,
+              "error": null,
+              "observed_seconds": 10.13616336999985
+            }
+          ],
+          "mbps": 41.567235999999994,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 32296964,
+              "seconds": 8.0,
+              "mbps": 32.296964,
+              "cpu_seconds": 0.37055567899999997,
+              "error": null,
+              "observed_seconds": 10.028869275003672
+            },
+            {
+              "bytes": 34631412,
+              "seconds": 8.0,
+              "mbps": 34.631412,
+              "cpu_seconds": 0.36968975200000004,
+              "error": null,
+              "observed_seconds": 10.034313823998673
+            }
+          ],
+          "mbps": 66.928376,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "ul",
+      "repeat": 5,
+      "streams_per_source": 2,
+      "mbps": 506.605284,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 19890292,
+              "seconds": 8.0,
+              "mbps": 19.890292,
+              "cpu_seconds": 0.31008217800000004,
+              "error": null,
+              "observed_seconds": 10.171364873996936
+            },
+            {
+              "bytes": 19575384,
+              "seconds": 8.0,
+              "mbps": 19.575384,
+              "cpu_seconds": 0.30941352899999996,
+              "error": null,
+              "observed_seconds": 10.19360285300354
+            }
+          ],
+          "mbps": 39.465676,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 20136528,
+              "seconds": 8.0,
+              "mbps": 20.136528,
+              "cpu_seconds": 0.29761222600000004,
+              "error": null,
+              "observed_seconds": 10.184212847001618
+            },
+            {
+              "bytes": 30661124,
+              "seconds": 8.0,
+              "mbps": 30.661124,
+              "cpu_seconds": 0.29094241699999995,
+              "error": null,
+              "observed_seconds": 10.019809128003544
+            }
+          ],
+          "mbps": 50.797652,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 23524252,
+              "seconds": 8.0,
+              "mbps": 23.524252,
+              "cpu_seconds": 0.307482044,
+              "error": null,
+              "observed_seconds": 10.066904291001265
+            },
+            {
+              "bytes": 24395584,
+              "seconds": 8.0,
+              "mbps": 24.395584,
+              "cpu_seconds": 0.301297267,
+              "error": null,
+              "observed_seconds": 10.045416148990626
+            }
+          ],
+          "mbps": 47.919836000000004,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 23240480,
+              "seconds": 8.0,
+              "mbps": 23.24048,
+              "cpu_seconds": 0.290955935,
+              "error": null,
+              "observed_seconds": 10.034354475006694
+            },
+            {
+              "bytes": 21832172,
+              "seconds": 8.0,
+              "mbps": 21.832172,
+              "cpu_seconds": 0.287124775,
+              "error": null,
+              "observed_seconds": 10.032297199999448
+            }
+          ],
+          "mbps": 45.072652000000005,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 24618108,
+              "seconds": 8.0,
+              "mbps": 24.618108,
+              "cpu_seconds": 0.300007417,
+              "error": null,
+              "observed_seconds": 11.710644140999648
+            },
+            {
+              "bytes": 24085064,
+              "seconds": 8.0,
+              "mbps": 24.085064,
+              "cpu_seconds": 0.299489263,
+              "error": null,
+              "observed_seconds": 11.756447599997045
+            }
+          ],
+          "mbps": 48.703171999999995,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 23628736,
+              "seconds": 8.0,
+              "mbps": 23.628736,
+              "cpu_seconds": 0.289645927,
+              "error": null,
+              "observed_seconds": 10.021818181994604
+            },
+            {
+              "bytes": 25593860,
+              "seconds": 8.0,
+              "mbps": 25.59386,
+              "cpu_seconds": 0.288058345,
+              "error": null,
+              "observed_seconds": 10.011563178006327
+            }
+          ],
+          "mbps": 49.222595999999996,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 20147256,
+              "seconds": 8.0,
+              "mbps": 20.147256,
+              "cpu_seconds": 0.240957761,
+              "error": null,
+              "observed_seconds": 10.020153275996563
+            },
+            {
+              "bytes": 21628792,
+              "seconds": 8.0,
+              "mbps": 21.628792,
+              "cpu_seconds": 0.24135106399999998,
+              "error": null,
+              "observed_seconds": 10.013698765003937
+            }
+          ],
+          "mbps": 41.776048,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 23686692,
+              "seconds": 8.0,
+              "mbps": 23.686692,
+              "cpu_seconds": 0.297863656,
+              "error": null,
+              "observed_seconds": 12.063775521994103
+            },
+            {
+              "bytes": 26265964,
+              "seconds": 8.0,
+              "mbps": 26.265964,
+              "cpu_seconds": 0.297390285,
+              "error": null,
+              "observed_seconds": 12.268481007005903
+            }
+          ],
+          "mbps": 49.952656000000005,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 28738192,
+              "seconds": 8.0,
+              "mbps": 28.738192,
+              "cpu_seconds": 0.352028475,
+              "error": null,
+              "observed_seconds": 10.028833919990575
+            },
+            {
+              "bytes": 38474592,
+              "seconds": 8.0,
+              "mbps": 38.474592,
+              "cpu_seconds": 0.350545113,
+              "error": null,
+              "observed_seconds": 10.01667637299397
+            }
+          ],
+          "mbps": 67.212784,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "ul",
+          "streams": [
+            {
+              "bytes": 28521620,
+              "seconds": 8.0,
+              "mbps": 28.52162,
+              "cpu_seconds": 0.350988571,
+              "error": null,
+              "observed_seconds": 12.195352024005842
+            },
+            {
+              "bytes": 37960592,
+              "seconds": 8.0,
+              "mbps": 37.960592,
+              "cpu_seconds": 0.348393118,
+              "error": null,
+              "observed_seconds": 12.34768659400288
+            }
+          ],
+          "mbps": 66.482212,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "dl",
+      "repeat": 1,
+      "streams_per_source": 2,
+      "mbps": 383.972968,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 30770152,
+              "seconds": 8,
+              "mbps": 30.770152,
+              "cpu_seconds": 0.44416308699999996,
+              "error": null,
+              "observed_seconds": 10.060919839001144
+            },
+            {
+              "bytes": 19059220,
+              "seconds": 8,
+              "mbps": 19.05922,
+              "cpu_seconds": 0.44290069500000007,
+              "error": null,
+              "observed_seconds": 10.103406096997787
+            }
+          ],
+          "mbps": 49.829372,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 17143524,
+              "seconds": 8,
+              "mbps": 17.143524,
+              "cpu_seconds": 0.5046985799999999,
+              "error": null,
+              "observed_seconds": 10.104614748008316
+            },
+            {
+              "bytes": 29888776,
+              "seconds": 8,
+              "mbps": 29.888776,
+              "cpu_seconds": 0.500894248,
+              "error": null,
+              "observed_seconds": 10.078696951008169
+            }
+          ],
+          "mbps": 47.0323,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 28241972,
+              "seconds": 8,
+              "mbps": 28.241972,
+              "cpu_seconds": 0.504540875,
+              "error": null,
+              "observed_seconds": 10.082680886000162
+            },
+            {
+              "bytes": 29503632,
+              "seconds": 8,
+              "mbps": 29.503632,
+              "cpu_seconds": 0.500540852,
+              "error": null,
+              "observed_seconds": 10.068827668001177
+            }
+          ],
+          "mbps": 57.745604,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 21900684,
+              "seconds": 8,
+              "mbps": 21.900684,
+              "cpu_seconds": 0.465587418,
+              "error": null,
+              "observed_seconds": 10.0657802719943
+            },
+            {
+              "bytes": 28458952,
+              "seconds": 8,
+              "mbps": 28.458952,
+              "cpu_seconds": 0.46350654199999997,
+              "error": null,
+              "observed_seconds": 10.097937690006802
+            }
+          ],
+          "mbps": 50.359635999999995,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 33007672,
+              "seconds": 8,
+              "mbps": 33.007672,
+              "cpu_seconds": 0.5881759059999999,
+              "error": null,
+              "observed_seconds": 10.047643932994106
+            },
+            {
+              "bytes": 30269648,
+              "seconds": 8,
+              "mbps": 30.269648,
+              "cpu_seconds": 0.587874239,
+              "error": null,
+              "observed_seconds": 10.042178139992757
+            }
+          ],
+          "mbps": 63.27732,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 11956608,
+              "seconds": 8,
+              "mbps": 11.956608,
+              "cpu_seconds": 0.31652928999999996,
+              "error": null,
+              "observed_seconds": 10.021823902003234
+            },
+            {
+              "bytes": 12569040,
+              "seconds": 8,
+              "mbps": 12.56904,
+              "cpu_seconds": 0.31561857000000004,
+              "error": null,
+              "observed_seconds": 10.044606114010094
+            }
+          ],
+          "mbps": 24.525647999999997,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 14320116,
+              "seconds": 8,
+              "mbps": 14.320116,
+              "cpu_seconds": 0.295754058,
+              "error": null,
+              "observed_seconds": 10.020214637988829
+            },
+            {
+              "bytes": 10013992,
+              "seconds": 8,
+              "mbps": 10.013992,
+              "cpu_seconds": 0.29777844499999995,
+              "error": null,
+              "observed_seconds": 10.027503571996931
+            }
+          ],
+          "mbps": 24.334108,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 13573720,
+              "seconds": 8,
+              "mbps": 13.57372,
+              "cpu_seconds": 0.304737844,
+              "error": null,
+              "observed_seconds": 9.98689836000267
+            },
+            {
+              "bytes": 16799984,
+              "seconds": 8,
+              "mbps": 16.799984,
+              "cpu_seconds": 0.306878954,
+              "error": null,
+              "observed_seconds": 9.993290931990487
+            }
+          ],
+          "mbps": 30.373703999999996,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 8047512,
+              "seconds": 8,
+              "mbps": 8.047512,
+              "cpu_seconds": 0.18298426699999998,
+              "error": null,
+              "observed_seconds": 10.252653514005942
+            },
+            {
+              "bytes": 160380,
+              "seconds": 8,
+              "mbps": 0.16038,
+              "cpu_seconds": 0.18003621800000003,
+              "error": null,
+              "observed_seconds": 10.203599048996693
+            }
+          ],
+          "mbps": 8.207892,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 15998712,
+              "seconds": 8,
+              "mbps": 15.998712,
+              "cpu_seconds": 0.306266514,
+              "error": null,
+              "observed_seconds": 10.009320686003775
+            },
+            {
+              "bytes": 12288672,
+              "seconds": 8,
+              "mbps": 12.288672,
+              "cpu_seconds": 0.30572458999999996,
+              "error": null,
+              "observed_seconds": 10.023556305008242
+            }
+          ],
+          "mbps": 28.287384,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "dl",
+      "repeat": 2,
+      "streams_per_source": 2,
+      "mbps": 468.074444,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 24454016,
+              "seconds": 8,
+              "mbps": 24.454016,
+              "cpu_seconds": 0.655336465,
+              "error": null,
+              "observed_seconds": 10.084725467997487
+            },
+            {
+              "bytes": 23541904,
+              "seconds": 8,
+              "mbps": 23.541904,
+              "cpu_seconds": 0.65395242,
+              "error": null,
+              "observed_seconds": 10.077236697994522
+            }
+          ],
+          "mbps": 47.99592,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 28936640,
+              "seconds": 8,
+              "mbps": 28.93664,
+              "cpu_seconds": 0.632984139,
+              "error": null,
+              "observed_seconds": 10.091633185002138
+            },
+            {
+              "bytes": 29705980,
+              "seconds": 8,
+              "mbps": 29.70598,
+              "cpu_seconds": 0.633015522,
+              "error": null,
+              "observed_seconds": 10.378137844993034
+            }
+          ],
+          "mbps": 58.64262,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 17716472,
+              "seconds": 8,
+              "mbps": 17.716472,
+              "cpu_seconds": 0.481596649,
+              "error": null,
+              "observed_seconds": 10.129192816006253
+            },
+            {
+              "bytes": 19230720,
+              "seconds": 8,
+              "mbps": 19.23072,
+              "cpu_seconds": 0.471049264,
+              "error": null,
+              "observed_seconds": 10.062326332001248
+            }
+          ],
+          "mbps": 36.947192,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 18682892,
+              "seconds": 8,
+              "mbps": 18.682892,
+              "cpu_seconds": 0.513942136,
+              "error": null,
+              "observed_seconds": 10.018674001999898
+            },
+            {
+              "bytes": 18195004,
+              "seconds": 8,
+              "mbps": 18.195004,
+              "cpu_seconds": 0.513289587,
+              "error": null,
+              "observed_seconds": 10.057178004004527
+            }
+          ],
+          "mbps": 36.877896,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 28192800,
+              "seconds": 8,
+              "mbps": 28.1928,
+              "cpu_seconds": 0.640874288,
+              "error": null,
+              "observed_seconds": 10.027024235998397
+            },
+            {
+              "bytes": 30775624,
+              "seconds": 8,
+              "mbps": 30.775624,
+              "cpu_seconds": 0.637088754,
+              "error": null,
+              "observed_seconds": 10.013263168992125
+            }
+          ],
+          "mbps": 58.968424,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 18499892,
+              "seconds": 8,
+              "mbps": 18.499892,
+              "cpu_seconds": 0.426519584,
+              "error": null,
+              "observed_seconds": 10.179948956007138
+            },
+            {
+              "bytes": 18765280,
+              "seconds": 8,
+              "mbps": 18.76528,
+              "cpu_seconds": 0.423419921,
+              "error": null,
+              "observed_seconds": 10.14149609299784
+            }
+          ],
+          "mbps": 37.265172,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 16561380,
+              "seconds": 8,
+              "mbps": 16.56138,
+              "cpu_seconds": 0.48473210199999994,
+              "error": null,
+              "observed_seconds": 10.070607018002192
+            },
+            {
+              "bytes": 20755928,
+              "seconds": 8,
+              "mbps": 20.755928,
+              "cpu_seconds": 0.48060640699999996,
+              "error": null,
+              "observed_seconds": 10.06203662599728
+            }
+          ],
+          "mbps": 37.317308,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 25774660,
+              "seconds": 8,
+              "mbps": 25.77466,
+              "cpu_seconds": 0.577309603,
+              "error": null,
+              "observed_seconds": 9.998470944003202
+            },
+            {
+              "bytes": 25927724,
+              "seconds": 8,
+              "mbps": 25.927724,
+              "cpu_seconds": 0.5729421969999999,
+              "error": null,
+              "observed_seconds": 10.008634254001663
+            }
+          ],
+          "mbps": 51.702384,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 26291448,
+              "seconds": 8,
+              "mbps": 26.291448,
+              "cpu_seconds": 0.597252597,
+              "error": null,
+              "observed_seconds": 10.011623337006313
+            },
+            {
+              "bytes": 28404228,
+              "seconds": 8,
+              "mbps": 28.404228,
+              "cpu_seconds": 0.5937302799999999,
+              "error": null,
+              "observed_seconds": 10.009475090002525
+            }
+          ],
+          "mbps": 54.695676,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 21772928,
+              "seconds": 8,
+              "mbps": 21.772928,
+              "cpu_seconds": 0.520712956,
+              "error": null,
+              "observed_seconds": 10.040037079990725
+            },
+            {
+              "bytes": 25888924,
+              "seconds": 8,
+              "mbps": 25.888924,
+              "cpu_seconds": 0.517506384,
+              "error": null,
+              "observed_seconds": 10.029866561002564
+            }
+          ],
+          "mbps": 47.661851999999996,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    },
+    {
+      "domain": "fixed",
+      "direction": "dl",
+      "repeat": 3,
+      "streams_per_source": 2,
+      "mbps": 416.098876,
+      "sources": [
+        {
+          "source": "10.20.0.118",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 18875384,
+              "seconds": 8,
+              "mbps": 18.875384,
+              "cpu_seconds": 0.49596549900000003,
+              "error": null,
+              "observed_seconds": 10.027853132007294
+            },
+            {
+              "bytes": 16819200,
+              "seconds": 8,
+              "mbps": 16.8192,
+              "cpu_seconds": 0.492538708,
+              "error": null,
+              "observed_seconds": 10.021428995998576
+            }
+          ],
+          "mbps": 35.694584,
+          "node": "fixed1",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.118",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan1",
+              "table": "101",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.119",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 18920088,
+              "seconds": 8,
+              "mbps": 18.920088,
+              "cpu_seconds": 0.47882810400000003,
+              "error": null,
+              "observed_seconds": 10.382242079998832
+            },
+            {
+              "bytes": 26440340,
+              "seconds": 8,
+              "mbps": 26.44034,
+              "cpu_seconds": 0.475536296,
+              "error": null,
+              "observed_seconds": 10.387381516004098
+            }
+          ],
+          "mbps": 45.360428,
+          "node": "fixed2",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.119",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan2",
+              "table": "102",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.120",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 34799616,
+              "seconds": 8,
+              "mbps": 34.799616,
+              "cpu_seconds": 0.572622901,
+              "error": null,
+              "observed_seconds": 9.98904848699749
+            },
+            {
+              "bytes": 35127296,
+              "seconds": 8,
+              "mbps": 35.127296,
+              "cpu_seconds": 0.5693919510000001,
+              "error": null,
+              "observed_seconds": 9.983388396998635
+            }
+          ],
+          "mbps": 69.926912,
+          "node": "fixed3",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.120",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan3",
+              "table": "103",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.121",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 48708816,
+              "seconds": 8,
+              "mbps": 48.708816,
+              "cpu_seconds": 0.600818362,
+              "error": null,
+              "observed_seconds": 10.000431644992204
+            },
+            {
+              "bytes": 36696524,
+              "seconds": 8,
+              "mbps": 36.696524,
+              "cpu_seconds": 0.593162301,
+              "error": null,
+              "observed_seconds": 9.990020867000567
+            }
+          ],
+          "mbps": 85.40534,
+          "node": "fixed4",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.121",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan4",
+              "table": "104",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.122",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 17294192,
+              "seconds": 8,
+              "mbps": 17.294192,
+              "cpu_seconds": 0.42339210099999997,
+              "error": null,
+              "observed_seconds": 10.009893516995362
+            },
+            {
+              "bytes": 17625168,
+              "seconds": 8,
+              "mbps": 17.625168,
+              "cpu_seconds": 0.42147180999999995,
+              "error": null,
+              "observed_seconds": 10.027771291002864
+            }
+          ],
+          "mbps": 34.91936,
+          "node": "fixed5",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.122",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan5",
+              "table": "105",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.123",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 9538088,
+              "seconds": 8,
+              "mbps": 9.538088,
+              "cpu_seconds": 0.353152637,
+              "error": null,
+              "observed_seconds": 10.013163640993298
+            },
+            {
+              "bytes": 16177080,
+              "seconds": 8,
+              "mbps": 16.17708,
+              "cpu_seconds": 0.34632675999999996,
+              "error": null,
+              "observed_seconds": 10.015570578005281
+            }
+          ],
+          "mbps": 25.715168,
+          "node": "fixed6",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.123",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan6",
+              "table": "106",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.124",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 11845616,
+              "seconds": 8,
+              "mbps": 11.845616,
+              "cpu_seconds": 0.40335063600000004,
+              "error": null,
+              "observed_seconds": 10.948171643991373
+            },
+            {
+              "bytes": 42276024,
+              "seconds": 8,
+              "mbps": 42.276024,
+              "cpu_seconds": 0.40912233900000006,
+              "error": null,
+              "observed_seconds": 9.989675744000124
+            }
+          ],
+          "mbps": 54.12164,
+          "node": "fixed7",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.124",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan7",
+              "table": "107",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.125",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 2593404,
+              "seconds": 8,
+              "mbps": 2.593404,
+              "cpu_seconds": 0.176423295,
+              "error": null,
+              "observed_seconds": 11.109138990010251
+            },
+            {
+              "bytes": 2616236,
+              "seconds": 8,
+              "mbps": 2.616236,
+              "cpu_seconds": 0.175577387,
+              "error": null,
+              "observed_seconds": 11.145869289990515
+            }
+          ],
+          "mbps": 5.20964,
+          "node": "fixed8",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.125",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan8",
+              "table": "108",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.126",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 12957516,
+              "seconds": 8,
+              "mbps": 12.957516,
+              "cpu_seconds": 0.32810344299999994,
+              "error": null,
+              "observed_seconds": 11.169788686995162
+            },
+            {
+              "bytes": 12804396,
+              "seconds": 8,
+              "mbps": 12.804396,
+              "cpu_seconds": 0.325290971,
+              "error": null,
+              "observed_seconds": 11.16704791499069
+            }
+          ],
+          "mbps": 25.761912000000002,
+          "node": "fixed9",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.126",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan9",
+              "table": "109",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        },
+        {
+          "source": "10.20.0.127",
+          "direction": "dl",
+          "streams": [
+            {
+              "bytes": 16956300,
+              "seconds": 8,
+              "mbps": 16.9563,
+              "cpu_seconds": 0.40077527999999996,
+              "error": null,
+              "observed_seconds": 10.432466012993245
+            },
+            {
+              "bytes": 17027592,
+              "seconds": 8,
+              "mbps": 17.027592,
+              "cpu_seconds": 0.3947522849999999,
+              "error": null,
+              "observed_seconds": 10.303606014000252
+            }
+          ],
+          "mbps": 33.983892,
+          "node": "fixed10",
+          "route": [
+            {
+              "dst": "10.55.0.100",
+              "from": "10.20.0.127",
+              "gateway": "10.20.0.1",
+              "dev": "macvlan10",
+              "table": "110",
+              "flags": [],
+              "uid": 1001,
+              "cache": []
+            }
+          ]
+        }
+      ],
+      "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71"
+    }
+  ],
+  "capacity_mbps": {
+    "enterprise": 696.72,
+    "peering": 200.86,
+    "mobile": 4.44,
+    "fixed": 416.1
+  },
+  "probe_sha256": "5978492fbca77789ea0a898afea936d597b47957a2a3f750a953537717213c71",
+  "mitigation": "Temporarily suspended using LAB_CALIBRATION_MODE, forwarding and telemetry retained; finally restoration plus 15 minute watchdog",
+  "enterprise_forwarding": "Temporary TCP calibration-only rules between Enterprise 10.70.0.0/24 and victim 10.55.0.100 on br-ent, in_port 3 <-> 5, priority 20 below mitigation priority 100, cookie 0xbe910090, 900s expiry; removed at cleanup",
+  "selection": "Minimum of directional medians; three initial repeats per direction, optional two additional repeats when initial max/min exceeds 1.3. Scalar reference accommodates BENIGN_V1 bidirectional traffic conservatively.",
+  "cleanup_verified": {
+    "ryu_service": "active",
+    "calibration_mode": false,
+    "temporary_flow_cookie_present": false
+  },
+  "summary": {
+    "mobile": {
+      "reference_mbps": 4.44,
+      "directions": {
+        "ul": {
+          "median_mbps": 4.4414560000000005,
+          "min_mbps": 3.345396,
+          "max_mbps": 6.1671439999999995,
+          "repetitions": 5,
+          "stream_errors": []
+        },
+        "dl": {
+          "median_mbps": 16.362180000000002,
+          "min_mbps": 12.797775999999999,
+          "max_mbps": 19.798344,
+          "repetitions": 5,
+          "stream_errors": [
+            {
+              "node": "ue5",
+              "repeat": 5,
+              "error": "ConnectionResetError(104, 'Connection reset by peer')"
+            }
+          ]
+        }
+      }
+    },
+    "fixed": {
+      "reference_mbps": 416.1,
+      "directions": {
+        "ul": {
+          "median_mbps": 441.308924,
+          "min_mbps": 277.68022800000006,
+          "max_mbps": 549.4470879999999,
+          "repetitions": 5,
+          "stream_errors": []
+        },
+        "dl": {
+          "median_mbps": 416.098876,
+          "min_mbps": 383.972968,
+          "max_mbps": 468.074444,
+          "repetitions": 3,
+          "stream_errors": []
+        }
+      }
+    },
+    "enterprise": {
+      "reference_mbps": 696.72,
+      "directions": {
+        "ul": {
+          "median_mbps": 696.71716,
+          "min_mbps": 559.562492,
+          "max_mbps": 765.9151599999999,
+          "repetitions": 5,
+          "stream_errors": []
+        },
+        "dl": {
+          "median_mbps": 708.586832,
+          "min_mbps": 697.380712,
+          "max_mbps": 826.1082240000001,
+          "repetitions": 3,
+          "stream_errors": []
+        }
+      }
+    },
+    "peering": {
+      "reference_mbps": 200.86,
+      "directions": {
+        "ul": {
+          "median_mbps": 200.862096,
+          "min_mbps": 182.51776,
+          "max_mbps": 339.203044,
+          "repetitions": 5,
+          "stream_errors": []
+        },
+        "dl": {
+          "median_mbps": 479.590072,
+          "min_mbps": 290.84066,
+          "max_mbps": 547.5550559999999,
+          "repetitions": 5,
+          "stream_errors": []
+        }
+      }
+    }
+  },
+  "mobile_actuation_check": {
+    "enforced_records": 5,
+    "all_actions": "unblock",
+    "all_max_prb": 100,
+    "evidence": "RIC /status snapshot taken during final Mobile calibration"
+  },
+  "completed_utc": "2026-10-01T23:08:32.920836+00:00",
+  "limitations": [
+    "TCP payload goodput with these Python generators; not physical link capacity or UDP loss capacity.",
+    "Domains measured separately; references do not guarantee simultaneous peaks.",
+    "Enterprise used calibration-only data-plane forwarding rules.",
+    "Any TCP reset is reported; its partial received bytes are divided by the full 8s measurement window, including the outage.",
+    "Observed variability and VM scheduling are retained in the directional ranges."
+  ],
+  "applied_source_ips": {
+    "ue1": "10.45.1.2",
+    "ue2": "10.45.1.4",
+    "ue3": "10.45.1.5",
+    "ue4": "10.45.1.6",
+    "ue5": "10.45.1.7",
+    "fixed1": "10.20.0.118",
+    "fixed2": "10.20.0.119",
+    "fixed3": "10.20.0.120",
+    "fixed4": "10.20.0.121",
+    "fixed5": "10.20.0.122",
+    "fixed6": "10.20.0.123",
+    "fixed7": "10.20.0.124",
+    "fixed8": "10.20.0.125",
+    "fixed9": "10.20.0.126",
+    "fixed10": "10.20.0.127",
+    "ent-site-1": "10.70.0.11",
+    "ent-site-2": "10.70.0.12",
+    "ent-site-3": "10.70.0.13",
+    "ent-site-4": "10.70.0.14",
+    "ent-site-5": "10.70.0.15",
+    "peer-flow*": "10.30.0.2"
+  }
+}
