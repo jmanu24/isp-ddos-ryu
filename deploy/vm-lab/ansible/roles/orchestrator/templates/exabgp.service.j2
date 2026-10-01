@@ -14,6 +14,17 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# exabgp.conf's own `process peering { run /bin/cat /run/exabgp/exabgp.in; }`
+# needs this FIFO to already exist before exabgp starts -- exabgp itself
+# never creates it (see mitigation/peering_backend.py's own module
+# docstring: "exabgp does NOT create or manage this FIFO itself"), and
+# /run is tmpfs, wiped on every reboot. Without this, `cat` fails
+# ("No such file or directory") on every one of exabgp's own retries
+# until it gives up ("Too many death for peering") and exits -- confirmed
+# on a real run after a VM reboot. `-` prefix: don't fail the whole unit
+# if the FIFO (or dir) already exists from a previous start.
+ExecStartPre=/bin/mkdir -p /run/exabgp
+ExecStartPre=-/usr/bin/mkfifo -m 666 /run/exabgp/exabgp.in
 ExecStart=/opt/Tesis_Controller/venv/bin/exabgp /etc/exabgp/exabgp.conf
 Restart=on-failure
 RestartSec=2
