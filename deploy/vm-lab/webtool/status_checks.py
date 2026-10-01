@@ -43,7 +43,7 @@ def _probe_core5g(node_name: str) -> Dict:
     return {"reachable": res.reachable, "open5gs_container": res.stdout.strip() if res.ok else res.stderr, "healthy": healthy}
 
 
-@_register("ric_flexric")
+@_register("ric_oran_sc")
 def _probe_ric(node_name: str) -> Dict:
     res = run(node_name, "sudo docker ps --format '{{.Names}}' 2>&1 | wc -l", timeout=_TIMEOUT)
     n_containers = int(res.stdout.strip()) if res.ok and res.stdout.strip().isdigit() else 0

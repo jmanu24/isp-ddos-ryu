@@ -41,7 +41,7 @@ ROLE_TO_DOMAIN = {
     "orchestrator": "shared", "pe_ovs": "shared", "victim": "shared",
     "bng": "broadband", "suscriptor": "broadband",
     "br": "bgp", "peer_router": "bgp",
-    "ric_flexric": "mobile", "core5g_open5gs": "mobile",
+    "ric_oran_sc": "mobile", "core5g_open5gs": "mobile",
     "ran_srsran": "mobile", "du_srsran": "mobile", "ue_srsue": "mobile",
     "enterprise_site": "enterprise",
 }

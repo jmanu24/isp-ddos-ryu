@@ -15,7 +15,7 @@
 # processes and starts fully fresh each time, and a second/third attempt
 # has reliably succeeded in every session so far.
 #
-# Prerequisites: site.yml already run for core5g_open5gs, ric_flexric,
+# Prerequisites: site.yml already run for core5g_open5gs, ric_oran_sc,
 # ran_srsran and ue_srsue (this playbook only launches/tests the already
 # -built binaries, it doesn't build anything).
 #

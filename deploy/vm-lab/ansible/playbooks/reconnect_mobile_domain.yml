@@ -86,7 +86,7 @@
 # 2 -- oran-sc-ric (compose down && up for a consistent RMR mesh)
 ######################################################################
 - name: "2/14  ric -- power on + oran-sc-ric (compose down && up)"
-  hosts: ric_flexric        # inventory group name; host is the RIC (10.10.0.4)
+  hosts: ric_oran_sc        # inventory group name; host is the RIC (10.10.0.4)
   gather_facts: false
   tags: [ric]
   vars:
@@ -293,7 +293,7 @@
 # 15 -- KPM bridge + RC actuator (all DUs are up now) + final summary
 ######################################################################
 - name: "KPM bridge + RC actuator, and final validation"
-  hosts: ric_flexric
+  hosts: ric_oran_sc
   gather_facts: false
   tags: [xapps, validate]
   vars:

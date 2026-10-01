@@ -9,7 +9,7 @@
 # 1-thread real-time worker pool from `du`'s original 4-vCPU sizing, and
 # an xApp display bug all had to be found and fixed to get here).
 #
-# Prerequisites: site.yml already run for core5g_open5gs, ric_flexric,
+# Prerequisites: site.yml already run for core5g_open5gs, ric_oran_sc,
 # ran_srsran, du_srsran and ue_srsue -- this playbook only launches/tests
 # the already-built binaries, it doesn't build anything. `du` must be
 # sized at 8 vCPUs (topology.yaml) -- 4 was confirmed insufficient (see
@@ -184,7 +184,7 @@
 
 - name: "[kpm] Capture E2SM-KPM and confirm amf_ue_ngap_id + gnb_cu_ue_f1ap
         travel together in one CU-CP indication (tag: kpm)"
-  hosts: ric_flexric
+  hosts: ric_oran_sc
   gather_facts: false
   tags: [kpm]
   tasks:
@@ -265,7 +265,7 @@
     - name: Pull the amf_ue_ngap_id the KPM capture play (above) found
       ansible.builtin.set_fact:
         kpm_amf_ue_ngap_id: >-
-          {{ hostvars[groups['ric_flexric'][0]].correlation_pair.stdout
+          {{ hostvars[groups['ric_oran_sc'][0]].correlation_pair.stdout
              | regex_search('amf_ue_ngap_id = ([0-9]+)', '\1')
              | first | default('') }}
 

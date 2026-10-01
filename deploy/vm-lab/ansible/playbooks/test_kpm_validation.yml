@@ -19,7 +19,7 @@
 # Usage: ansible-playbook playbooks/test_kpm_validation.yml
 
 - name: Launch the KPM monitor xApp against the real near-RT-RIC
-  hosts: ric_flexric
+  hosts: ric_oran_sc
   gather_facts: false
   tasks:
     - name: Find any running xapp_kpm_moni
@@ -74,7 +74,7 @@
         msg: "{{ ping_result.stdout_lines[-2:] }}"
 
 - name: Confirm the xApp saw real, per-UE-attributed KPM data
-  hosts: ric_flexric
+  hosts: ric_oran_sc
   gather_facts: false
   tasks:
     - name: Give the last indication(s) covering the burst a moment to arrive

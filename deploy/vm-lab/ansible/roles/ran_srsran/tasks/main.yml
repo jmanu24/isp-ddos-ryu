@@ -1,7 +1,7 @@
 ---
 # ran_srsran role -- srsRAN Project gNB (CU+DU+RU fused, no F1 split),
 # ZMQ RF driver (no SDR hardware), built with the E2 interface enabled --
-# this is what the ric_flexric role's FlexRIC actually talks to.
+# this is what the ric_oran_sc role's FlexRIC actually talks to.
 #
 # Replaces OCUDU (srsRAN Project's own successor fork, used earlier in
 # this lab's build -- see this file's own git history for the RACH-
@@ -199,7 +199,7 @@
     state: directory
     mode: "0755"
 
-- name: Deploy gNB ZMQ config (multi-UE, matches ric_flexric's E2 subscription expectations)
+- name: Deploy gNB ZMQ config (multi-UE, matches ric_oran_sc's E2 subscription expectations)
   ansible.builtin.template:
     src: gnb_zmq.yaml.j2
     dest: /etc/srsran/gnb_zmq.yaml

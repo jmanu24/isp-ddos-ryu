@@ -227,7 +227,7 @@ vms:
       - {network: PEERING, ip: "10.30.0.2"}
 
   - name: ric
-    role: ric_flexric
+    role: ric_oran_sc
     template: ubuntu
     vcpu: 2
     ram_mb: 4096

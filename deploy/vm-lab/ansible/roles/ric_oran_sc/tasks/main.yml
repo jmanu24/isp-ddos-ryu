@@ -1,0 +1,149 @@
+---
+# ric_oran_sc role -- O-RAN SC RIC (github.com/srsran/oran-sc-ric), the
+# DEFINITIVE Near-RT RIC stack for this lab (item 4: unify the mobile
+# deployment procedure). This role REPLACES the previous ric_oran_sc
+# role, which built FlexRIC from source (`dev` branch) -- that approach
+# was abandoned after a real migration (see the oran-sc-ric-migration
+# memory): a from-source FlexRIC build never got its KPM delivery
+# working reliably against srsRAN Project's current E2SM-KPM encoder,
+# while srsRAN Project's own docs already list O-RAN SC RIC as the
+# other officially-supported RIC integration -- a single `docker compose
+# up` away, with KPM confirmed working end-to-end against this lab's own
+# real DUs/UEs (mobile-bringup-order memory).
+#
+# This role's job is the ONE-TIME setup (clone + config + the 2 patches
+# below) -- bringing the compose stack up/down during a reconnect cycle
+# stays reconnect_mobile_domain.yml's own job (its "ric" play), same
+# split already used for every other mobile component (role installs,
+# the reconnect playbook launches/validates). Running `ansible-playbook
+# site.yml` alone (no prior manual VM setup, no tribal knowledge from
+# the mobile-bringup-order memory) is enough to reach the same state
+# this task file was reverse-engineered FROM -- confirmed by fetching
+# docker-compose.yml/routes.rtg verbatim from the real, running `ric` VM
+# (see files/ in this role) rather than reconstructed from memory.
+
+- name: Stop any leftover FlexRIC-era services (previous ric_oran_sc role)
+  # oran-sc-ric's own e2term needs sctp/36421 -- a leftover near-rt-ric
+  # (FlexRIC) process holding it is a real, confirmed conflict (see
+  # reconnect_mobile_domain.yml's own "ric" play, which defensively stops
+  # these every single reconnect for exactly this reason). Harmless no-op
+  # on a VM that never ran the old role.
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: [near-rt-ric, kpm-telemetry-api]
+  failed_when: false
+  changed_when: false
+
+- name: Install docker + the compose plugin
+  ansible.builtin.apt:
+    name: [docker.io, docker-compose-v2, git]
+    state: present
+    update_cache: true
+
+- name: Add {{ ansible_user }} to the docker group (so compose/exec don't need sudo)
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+
+- name: Enable and start docker
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Check whether O-RAN SC RIC is already cloned
+  # ansible.builtin.git's own force=false (deliberately not force=true --
+  # see below) refuses to touch a dest with ANY local modification, which
+  # this one always has after its first real run (the 2 file patches +
+  # the 2 xApp files just below are themselves uncommitted changes against
+  # the clone) -- confirmed hitting this exact wall on a real re-run
+  # against the already-provisioned `ric` VM. Skipping the clone entirely
+  # once .git exists is what makes the rest of this role (file overlays +
+  # compose up) safely re-runnable against either a fresh VM or an
+  # already-provisioned one.
+  ansible.builtin.stat:
+    path: /home/{{ ansible_user }}/oran-sc-ric/.git
+  register: oran_sc_ric_cloned
+
+- name: Clone O-RAN SC RIC, pinned to the commit this lab validated KPM/RC against
+  # Pinned, not `main` -- srsRAN's own repo moves (new xApp examples,
+  # image version bumps in .env), and this lab's own docker-compose.yml
+  # patch (files/docker-compose.yml, see below) is diffed against this
+  # exact commit's own file, not whatever `main` has drifted to since.
+  # force=false, deliberately -- NEVER discard real changes already made
+  # on top of the clone (same reasoning as orchestrator's own "Clone
+  # Tesis_Controller" task); the stat check above is what keeps this task
+  # from even being attempted a 2nd time, rather than forcing through it.
+  ansible.builtin.git:
+    repo: https://github.com/srsran/oran-sc-ric.git
+    dest: /home/{{ ansible_user }}/oran-sc-ric
+    version: 621ade26251f69a4ad079ba98bb708d8e5aeeb98
+    force: false
+  when: not oran_sc_ric_cloned.stat.exists
+
+- name: Generate the stock per-component config files (routes.rtg, rtmgr.yaml, ...)
+  # create_ric_config_files.sh reads .env and writes ric/configs/* fresh
+  # every time -- safe to always re-run (idempotent from .env's own
+  # content), and it's what regenerates routes.rtg BEFORE this role's own
+  # patched copy (next task) overlays the actuator-split route on top.
+  # Only on first provisioning (an already-running RIC's routes.rtg is
+  # this role's own patched copy, already correct -- regenerating here
+  # would just mean the very next task immediately overlays it again,
+  # harmless either way, but there's no reason to re-run a code-generator
+  # against a VM that's already fully configured).
+  ansible.builtin.command:
+    cmd: ./create_ric_config_files.sh
+    chdir: /home/{{ ansible_user }}/oran-sc-ric
+  when: not oran_sc_ric_cloned.stat.exists
+  changed_when: true
+
+- name: "Patch 1/2: docker-compose.yml -- rc_actuator_runner as its own container"
+  # The stock compose file runs the KPM bridge AND the RC actuator xApp
+  # in the SAME container (python_xapp_runner) -- confirmed on a real run
+  # that this makes their RMR listeners collide and breaks KPM delivery
+  # entirely (see commit 2a9c923's own message). This patched file adds
+  # rc_actuator_runner as a second instance of the same python_xapp_
+  # runner image, its own IP (10.0.2.21) and port (8768), fetched
+  # verbatim from the real, running `ric` VM.
+  ansible.builtin.copy:
+    src: docker-compose.yml
+    dest: /home/{{ ansible_user }}/oran-sc-ric/docker-compose.yml
+    mode: "0644"
+
+- name: "Patch 2/2: routes.rtg -- RIC_CONTROL_ACK/FAILURE to the actuator's own container"
+  # Must be applied AFTER create_ric_config_files.sh (which would
+  # otherwise regenerate the stock, unpatched routing table and silently
+  # undo this). RIC_INDICATION (12050) stays routed to the bridge
+  # (10.0.2.20:4561); only RIC_CONTROL_ACK/FAILURE (12041/12042) move to
+  # the actuator's own container (10.0.2.21:4560) -- see commit 2a9c923.
+  ansible.builtin.copy:
+    src: routes.rtg
+    dest: /home/{{ ansible_user }}/oran-sc-ric/ric/configs/routes.rtg
+    mode: "0644"
+
+- name: Deploy this lab's 2 custom xApps (KPM bridge + RC actuator)
+  # Single source of truth: oran_bridge/{kpm_bridge_xapp.py,
+  # rc_actuator_xapp.py} in this repo -- NOT duplicated into this role,
+  # copied straight from there so there is exactly one copy to keep in
+  # sync. python_xapp_runner/rc_actuator_runner both bind-mount
+  # ./xApps/python into /opt/xApps (see files/docker-compose.yml).
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../oran_bridge/{{ item }}"
+    dest: /home/{{ ansible_user }}/oran-sc-ric/xApps/python/{{ item }}
+    mode: "0644"
+  loop: [kpm_bridge_xapp.py, rc_actuator_xapp.py]
+
+- name: Bring the RIC containers up (idempotent -- reconnect_mobile_domain.yml's
+        own "ric" play is what re-cycles this during a mobile reconnect)
+  ansible.builtin.shell: >-
+    cd /home/{{ ansible_user }}/oran-sc-ric &&
+    docker compose up -d >/dev/null 2>&1;
+    docker compose ps --status running --format '{{ '{{' }}.Name{{ '}}' }}' | wc -l
+  register: ric_up
+  until: ric_up.stdout | trim | int >= 8
+  retries: 15
+  delay: 6
+  changed_when: true

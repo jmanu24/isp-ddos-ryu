@@ -98,7 +98,7 @@
     mode: "0644"
 
 - name: Note about starting the OAI UE (no systemd service, same as
-        ran_srsran/ric_flexric)
+        ran_srsran/ric_oran_sc)
   ansible.builtin.debug:
     msg: >-
       Binary is at

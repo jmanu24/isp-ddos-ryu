@@ -29,9 +29,9 @@
   hosts: peer_router
   roles: [peer_router]
 
-- name: Near-RT RIC + xApp (FlexRIC br-flexric)
-  hosts: ric_flexric
-  roles: [ric_flexric]
+- name: Near-RT RIC + xApps (O-RAN SC RIC)
+  hosts: ric_oran_sc
+  roles: [ric_oran_sc]
 
 - name: 5G Core (Open5GS, dockerized via srsRAN_Project/docker)
   hosts: core5g_open5gs

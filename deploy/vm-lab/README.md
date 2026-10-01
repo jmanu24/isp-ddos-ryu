@@ -7,16 +7,28 @@ element, sized to actually cross `DIST_MIN_SOURCES=5` per domain with
 traffic honest to each domain's own design (spoofed only where the
 domain already spoofs -- mobile, bgp -- never in enterprise).
 
-**Status: partially verified against a real ESXi 7.0.3 host (Enterprise
-Plus licensed, standalone, no vCenter).** The govc-based VM lifecycle
-(register/resize/network/power) and one full Alpine clone (`victim`)
-were confirmed working end-to-end on real hardware. Packer and
+**Status: verified against a real ESXi 7.0.3 host (Enterprise Plus
+licensed, standalone, no vCenter).** The govc-based VM lifecycle
+(register/resize/network/power) and every VM clone (Ubuntu/Debian/
+Alpine) are confirmed working end-to-end on real hardware. Packer and
 `govc vm.clone` were NOT usable at all -- see "Confirmed standalone-ESXi
 limitations" below, a load-bearing section, read it before doing
-anything else. The RIC/RAN/Core/UE software stack itself (FlexRIC,
-srsRAN, Open5GS) remains unverified beyond individual config files
-fetched verbatim from srsRAN's own docs -- budget real debugging time
-there specifically (see "Known risk areas" below).
+anything else.
+
+The mobile domain's full RIC/RAN/Core/UE chain (Open5GS, srsRAN Project
+CU/DU, srsUE, O-RAN SC RIC) is confirmed working end-to-end against real
+hardware: UE attach (RACH->RRC->PDU Session), real UL/DL traffic, E2SM-
+KPM delivery with per-UE attribution, and RC-based mitigation (throttle/
+release) all observed on real runs across all 5 UEs. It is NOT claimed
+to be fully stable/deterministic -- the ZMQ RACH between a DU and its UE
+is a known, unresolved source of non-determinism (see "Known risk
+areas" #1 and the mobile-bringup-order-style bring-up this lab's own
+`reconnect_mobile_domain.yml` automates), so a bring-up or a statistical
+trial can still need a retry. "Works end-to-end" and "is stable under
+repeated cycling" are different claims -- see
+`analysis/README-statistical-trials.md`'s own repeatability campaign
+(`--repeatability-cycles`) for how this repo actually measures the
+second one, instead of assuming a single successful run proves it.
 
 ## Confirmed standalone-ESXi limitations (read this first)
 
@@ -51,7 +63,7 @@ limits with no config workaround:
   console (`https://<esxi-host>/ui/`) -- upload the ISO, `govc vm.create`
   the shell (scripted, see below), install interactively through the
   console. Not automatable without vCenter.
-- `deploy_govc.sh` clones the 16 lab VMs via the standard bare-ESXi
+- `deploy_govc.sh` clones the 23 lab VMs via the standard bare-ESXi
   workaround instead of `vm.clone`: SSH to the ESXi host's own shell,
   `vmkfstools -i` to copy the VMDK at the datastore level, then
   `govc vm.register` the copy as a new VM. This means the script needs
@@ -145,7 +157,7 @@ govc vm.power -on tpl-alpine
 #         then shut the VM down and eject its ISO:
 govc device.cdrom.eject -vm tpl-alpine
 
-# 3. Provision the 16 lab VMs (SSH+vmkfstools clone, resize, network,
+# 3. Provision the 23 lab VMs (SSH+vmkfstools clone, resize, network,
 #    cloud-init injection -- see deploy_govc.sh's own header for exactly
 #    what this does and why it's not govc vm.clone)
 ./scripts/deploy_govc.sh
@@ -156,7 +168,7 @@ govc device.cdrom.eject -vm tpl-alpine
 #    paste the contents of:
 cat generated/alpine/<vm-name>/apply.sh
 
-# 5. Install and configure the real software on all 16
+# 5. Install and configure the real software on all 23
 cd ansible
 ansible-playbook site.yml
 ```
@@ -181,30 +193,43 @@ project's own history and what srsRAN's docs say about themselves:
    `docker-compose.yml` to actually work. If the gNB can't reach the
    AMF, check raw connectivity to `core5g` on tcp/udp 38412 FIRST.
 
-2. **Near-RT RIC / FlexRIC (`ric_flexric` role).** This project already
-   tried and abandoned a DIFFERENT FlexRIC integration once
-   (`deploy/setup_ns_oran_flexric.sh`, ns-3 simulation + Orange's
-   `ns-O-RAN-flexric` fork on the `oie-ric-taap-xapps` branch) --
-   confirmed real bugs in that fork (a heap buffer overflow in ASN.1
-   measurement-name encoding, `bad_any_cast`, PRB-threshold gating), all
-   inside Orange's ns-3 code, none in FlexRIC itself. This role uses a
-   **different, official** path instead: FlexRIC's `br-flexric` branch
-   (commit `1a3903a7`) against a **real srsRAN gNB's own native E2
-   interface** -- confirmed via srsRAN Project's own current docs to be
-   one of two officially-supported RIC integrations (the other being
-   ORAN SC RIC, a single-`docker compose up` alternative if FlexRIC gives
-   you trouble again -- see `ric_flexric`'s own task comments).
+2. **Near-RT RIC: O-RAN SC RIC, the DEFINITIVE stack (`ric_oran_sc`
+   role).** Two earlier RIC integrations were tried and abandoned before
+   this one: (a) `deploy/setup_ns_oran_flexric.sh`, ns-3 simulation +
+   Orange's `ns-O-RAN-flexric` fork -- confirmed real bugs in that fork
+   (a heap buffer overflow in ASN.1 measurement-name encoding,
+   `bad_any_cast`, PRB-threshold gating), all inside Orange's ns-3 code;
+   (b) FlexRIC built from source (`br-flexric`@`1a3903a7`, then `dev`) --
+   never got its KPM delivery reliably working against srsRAN Project's
+   current E2SM-KPM encoder (see the oran-sc-ric-migration history for
+   the full story). **O-RAN SC RIC** (`github.com/srsran/oran-sc-ric`,
+   pinned to the commit `ric_oran_sc/tasks/main.yml` clones) is the
+   stack this lab actually runs now, with KPM delivery and RC-based
+   mitigation both confirmed working end-to-end against this lab's real
+   DUs/UEs -- a single `docker compose up`, no from-source build. Two
+   patches on top of the stock repo (both captured verbatim from the
+   validated deployment into the role's own `files/`): the RC actuator
+   xApp runs in its OWN container (`rc_actuator_runner`, its own IP) so
+   its RMR listener doesn't collide with the KPM bridge xApp's; the
+   routing table sends `RIC_CONTROL_ACK`/`FAILURE` there accordingly.
+   `ansible-playbook site.yml` alone reaches this state from a bare VM --
+   no manual setup, no tribal knowledge needed beyond this README.
 
-3. **5 UEs, not 3 (`ue_srsue` role).** The deployed
-   `multi_ue_scenario.grc` GNU-Radio broker is srsRAN's own REAL,
-   official file (fetched verbatim, not reconstructed) -- but it only
-   wires up 3 UEs. Reaching 5 needs you to open it in
-   `gnuradio-companion` and duplicate the UE3 signal path twice by hand
-   (see the role's own final debug message) -- not something safe to
-   hand-patch blind in raw XML. srsRAN's own docs also call this whole
-   pattern "not optimized, performant, or scalable" and srsUE's 5G
-   support "maintenance only, not for deployment-ready scenarios" -- budget
-   real troubleshooting time here specifically.
+3. **5 UEs via 5 dedicated DUs, not a GNU-Radio broker
+   (`du_srsran`/`ue_srsue` roles).** An earlier design combined 3 UEs'
+   uplink through srsRAN's own `multi_ue_scenario.grc` broker -- confirmed
+   unreliable past 1 UE (a real, unsolved Msg3 CRC failure from the
+   combiner not modeling per-UE timing/CFO offset; srsRAN's own docs call
+   this pattern "not optimized, performant, or scalable" and srsUE's 5G
+   support "maintenance only"). The current, validated design instead
+   gives each UE its OWN dedicated DU (`du`/`du2`/`du3`/`du4`/`du5`, see
+   `topology.yaml`) and its own ZMQ RF pair -- no RF combining at all, so
+   the broker's own combiner bug doesn't apply. 3 of the 5 UEs run on the
+   `ue` VM, the other 2 on `ue2` (a 2nd UE-hosting VM, added once 3
+   srsue instances plus the GNU-Radio broker stopped fitting comfortably
+   on one VM -- see `topology.yaml`'s own `ue`/`ue2` comments). `ran` is
+   paired with `du`/`du2`/`du3` as their CU (cu1); `cu2` is a 2nd CU
+   paired with `du4`/`du5`.
 
 4. **`gnb_zmq.yaml.j2`'s exact schema.** Cloned from `srsRAN_Project`'s
    `main` branch (not a pinned tag) -- the YAML schema for `cell_cfg`/`e2`
@@ -218,14 +243,15 @@ project's own history and what srsRAN's docs say about themselves:
 | VM(s) | OS | Key software |
 |---|---|---|
 | orchestrator | Debian 13 | ryu-manager + exabgp, exact `requirements.txt` pins from this repo |
-| bng | Alpine | dnsmasq |
-| suscriptor | Ubuntu 22.04 | BNGBlaster 0.9.17 (this repo's own installer) |
+| bng | Ubuntu 22.04 | accel-ppp (real IPoE BRAS) + FreeRADIUS (real AAA/accounting) |
+| suscriptor | Ubuntu 22.04 | per-subscriber macvlan DHCP sessions, kernel-socket SYN/UDP flood (`simulation/bng_flood.py` -- hping3 confirmed not to work over these interfaces) |
 | br | Ubuntu 22.04 | flow 0.2.0, nfdump 1.7.4 (this repo's own installer), FRR (real eBGP) |
 | peer-router | Alpine | hping3, bird2 (real eBGP) |
-| ric | Ubuntu 22.04 | FlexRIC `br-flexric`@`1a3903a7` |
+| ric | Ubuntu 22.04 | **O-RAN SC RIC** (`github.com/srsran/oran-sc-ric`, docker compose -- see "Known risk areas" #2) |
 | core5g | Ubuntu 22.04 | Open5GS, dockerized via `srsRAN_Project/docker` |
-| ran | Ubuntu 22.04 | srsRAN Project gNB, ZMQ RF, E2 enabled |
-| ue | Ubuntu 22.04 | srsRAN_4G `srsue` ×5 (network namespaces) + GNU-Radio broker |
+| ran, cu2 | Ubuntu 22.04 | srsRAN Project gNB (CU-CP+CU-UP only, split from the DU), ZMQ RF, E2 enabled -- 2 CUs: `ran`=cu1 (du/du2/du3), `cu2` (du4/du5) |
+| du, du2, du3, du4, du5 | Ubuntu 22.04 | srsRAN Project DU (split from the CU), ZMQ RF, E2 + RC enabled -- one dedicated DU per UE |
+| ue, ue2 | Ubuntu 22.04 | srsRAN_4G `srsue` ×5 total across network namespaces (`ue`: ue1-3, `ue2`: ue4-5) -- see "Known risk areas" #3 |
 | pe | Alpine | Open vSwitch, OpenFlow13 to the orchestrator |
 | ent-site-1..5 | Alpine | hping3, nftables (unspoofed real attack sources) |
 | victim | Alpine | Python `http.server` |
