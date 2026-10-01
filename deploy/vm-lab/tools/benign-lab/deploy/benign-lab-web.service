@@ -2,6 +2,7 @@
 Description=BENIGN Lab web controller Python 3.8
 After=network-online.target
 [Service]
+Environment=BENIGN_ALLOWED_HOSTS=192.168.18.154,localhost,127.0.0.1,::1
 User=ubuntu
 WorkingDirectory=/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab
 EnvironmentFile=/home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/web.env

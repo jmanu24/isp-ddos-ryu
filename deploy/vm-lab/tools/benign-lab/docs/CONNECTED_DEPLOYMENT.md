@@ -64,3 +64,6 @@ The deployed systemd unit listens on `192.168.18.154:8780`. Open
 `http://192.168.18.154:8780` from a host that can reach the controller.
 This binding persists across service and controller restarts.
 SSH tunnels must forward to remote `192.168.18.154:8780`.
+
+Direct API access requires `BENIGN_ALLOWED_HOSTS=192.168.18.154,localhost,127.0.0.1,::1`.
+The deployed environment and versioned service unit include this explicit list.
