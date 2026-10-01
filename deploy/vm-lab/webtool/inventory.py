@@ -1,12 +1,11 @@
 """
-webtool/inventory.py -- the 16(+2)-VM ESXi lab's node/network/domain map,
-combining ../topology.yaml (parsed live -- it IS this lab's single source
-of truth for VM names, roles and per-network interfaces) with a small
-static overlay for the 2 VMs that exist for real but were hot-added
-outside topology.yaml (cu2, ue2 -- see mobile-bringup-order memory: a 2nd
-CU + a 2nd UE-hosting VM added directly on ESXi, never folded back into
-topology.yaml/render_topology.py) and for domain grouping (topology.yaml
-has no "domain" concept, only `role:`).
+webtool/inventory.py -- the 23-VM ESXi lab's node/network/domain map,
+parsed live from ../topology.yaml (this lab's single source of truth for
+VM names, roles and per-network interfaces -- cu2/ue2 included: they
+were originally hot-added directly on ESXi outside this file, then
+folded back into topology.yaml so it stays accurate). Only domain
+grouping is a static overlay here, since topology.yaml has no "domain"
+concept of its own, only `role:`.
 
 Domain grouping (for the UI's 4-domain layout):
   mobile      -- ric, core5g, the 2 CU hosts (ran=cu1, cu2), 5 DU hosts,
@@ -47,19 +46,6 @@ ROLE_TO_DOMAIN = {
     "enterprise_site": "enterprise",
 }
 
-# cu2/ue2: real VMs, hot-added directly on ESXi, never folded back into
-# topology.yaml (see this module's own docstring + mobile-bringup-order
-# memory). Interfaces mirror their sibling (ran/ue) -- same 2 networks,
-# addresses confirmed via generated/ansible/inventory.ini (MGMT) and the
-# mobile-bringup-order memory's own bring-up table (RAN side is
-# functionally equivalent, exact last octet isn't load-bearing for the
-# topology graph this feeds).
-_EXTRA_VMS = {
-    "cu2": {"role": "ran_srsran", "interfaces": [("MGMT", "10.10.0.15"), ("RAN", "10.40.0.9")]},
-    "ue2": {"role": "ue_srsue", "interfaces": [("MGMT", "10.10.0.16"), ("RAN", "10.40.0.16")]},
-}
-
-
 @dataclass
 class UeNs:
     netns: str          # ue1..ue5
@@ -92,11 +78,6 @@ def _build_nodes() -> List[Node]:
         ifaces = [{"network": i["network"], "ip": i.get("ip")} for i in vm.get("interfaces", [])]
         mgmt_ip = next((i["ip"] for i in ifaces if i["network"] == "MGMT" and i.get("ip")), None)
         nodes.append(Node(name=vm["name"], role=role, domain=domain, ip=mgmt_ip, interfaces=ifaces))
-    for name, extra in _EXTRA_VMS.items():
-        role = extra["role"]
-        ifaces = [{"network": net, "ip": ip} for net, ip in extra["interfaces"]]
-        mgmt_ip = next((i["ip"] for i in ifaces if i["network"] == "MGMT"), None)
-        nodes.append(Node(name=name, role=role, domain=ROLE_TO_DOMAIN.get(role, "shared"), ip=mgmt_ip, interfaces=ifaces))
     return nodes, networks
 
 

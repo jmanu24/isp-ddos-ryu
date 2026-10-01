@@ -279,6 +279,27 @@ vms:
       - {network: MGMT, ip: "10.10.0.6"}
       - {network: RAN, ip: "10.40.0.2"}
 
+  # cu2: a 2nd CU, added so the mobile domain could scale past 3 DUs/UEs
+  # on `ran` alone (du1-3/ue1-3 stay on cu1=`ran`; du4-5/ue4-5 pair with
+  # this one instead -- see reconnect_mobile_domain.yml's own strict
+  # bring-up order and the mobile-bringup-order memory for the exact
+  # cu<->du pairing). WAS hot-added directly on ESXi outside this file
+  # (and outside render_topology.py/deploy_govc.sh entirely) during that
+  # scale-out -- confirmed for real via `govc vm.info`/SSH against the
+  # live VM and folded back in here so topology.yaml stays this lab's
+  # actual single source of truth. Same sizing as `ran` (same role,
+  # same srscu-only workload -- see that VM's own vcpu comment for why
+  # 4, not 8, is correct here too).
+  - name: cu2
+    role: ran_srsran
+    template: ubuntu
+    vcpu: 4
+    ram_mb: 8192
+    disk_gb: 20
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.15"}
+      - {network: RAN, ip: "10.40.0.9"}
+
   - name: du
     role: du_srsran
     # Split off from `ran` (which keeps only srscu, CU-CP+CU-UP combined)
@@ -322,9 +343,11 @@ vms:
   # NOT the GNU-Radio broker path (docs/ran-testing.md SS6: confirmed
   # unreliable past 1 UE, real unsolved Msg3 CRC failure from the
   # combiner not modeling per-UE timing/CFO offset). Each of these gets
-  # its own real ZMQ RF pair to a dedicated srsue *process* on the
-  # existing `ue` VM (no new UE VMs -- see that VM's own comment: RAM is
-  # not the constraint, ~600-900MB per srsue instance) -- since there's
+  # its own real ZMQ RF pair to a dedicated srsue *process* -- du2/du3
+  # pair with a process on the existing `ue` VM (ue2/ue3; RAM is not the
+  # constraint, ~600-900MB per srsue instance), du4/du5 pair with a
+  # process on the NEW `ue2` VM instead (ue4/ue5 -- see that VM's own
+  # comment for why a 2nd UE-hosting VM was needed) -- since there's
   # no RF combining at all, the broker's own combiner bug doesn't apply
   # here. Same sizing as `du` in every respect (8 vCPU/8GB/20GB): that
   # sizing is a confirmed hard requirement (docs/ran-testing.md SS8.4),
@@ -385,17 +408,33 @@ vms:
     # guessing at a smaller number.
     vcpu: 8
     # 2048 was a real undersize -- confirmed on a real run -- each srsue
-    # instance uses ~600-900MB RSS, and running just 3 (of the planned 5)
-    # concurrently made the kernel OOM-killer kill one outright ("Out of
-    # memory: Killed process ... (srsue)"). ric/core5g/ran all get 4096
-    # for a SINGLE heavy process each; this role runs several
-    # concurrently plus the GNU-Radio broker, so it needs more, not the
-    # same or less.
+    # instance uses ~600-900MB RSS, and running just 3 (of the then-
+    # planned 5) concurrently made the kernel OOM-killer kill one
+    # outright ("Out of memory: Killed process ... (srsue)"). ric/core5g/
+    # ran all get 4096 for a SINGLE heavy process each; this role runs
+    # several concurrently plus the GNU-Radio broker, so it needs more,
+    # not the same or less. The plan changed after this -- see `ue2`
+    # below -- this VM now hosts only ue1-3 (3 srsue instances), not 5.
     ram_mb: 8192
     disk_gb: 10
     interfaces:
       - {network: MGMT, ip: "10.10.0.8"}
       - {network: RAN, ip: "10.40.0.3"}
+
+  # ue2: a 2nd UE-hosting VM, added alongside cu2 to scale the mobile
+  # domain past 3 UEs on `ue` alone -- hosts ue4/ue5 (netns), paired with
+  # du4/du5/cu2. Same hot-added-outside-this-file history as cu2 (see
+  # that VM's own comment) -- folded back in here from the live VM's
+  # real `govc vm.info`/SSH-confirmed specs and addresses.
+  - name: ue2
+    role: ue_srsue
+    template: ubuntu
+    vcpu: 8
+    ram_mb: 8192
+    disk_gb: 15
+    interfaces:
+      - {network: MGMT, ip: "10.10.0.16"}
+      - {network: RAN, ip: "10.40.0.10"}
 
   - name: pe
     role: pe_ovs

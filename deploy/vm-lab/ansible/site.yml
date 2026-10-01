@@ -1,5 +1,5 @@
 ---
-# site.yml -- configures all 17 VMs. Each play targets one Ansible group
+# site.yml -- configures all 23 VMs. Each play targets one Ansible group
 # from ../generated/ansible/inventory.ini (one group per topology.yaml
 # `role:`), running the one role that installs/configures that role's
 # real software stack.

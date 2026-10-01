@@ -1,4 +1,4 @@
-# VM lab -- 16-VM ESXi topology (docs/thesis-revision-plan.md §4.1.1-4.1.2)
+# VM lab -- 23-VM ESXi topology (docs/thesis-revision-plan.md §4.1.1-4.1.2)
 
 Automates standing up the "topología con límites de VM, interfaces y
 puntos de medición reales" the thesis review asked for: 4 domains
@@ -71,7 +71,7 @@ limits with no config workaround:
 **Also confirmed necessary, not ESXi-specific:** whichever machine
 actually runs `ansible-playbook`/`deploy_govc.sh` (the "control node")
 needs its own IP address on **every one of the 5 lab VLANs**, not just
-the one hosting the orchestrator -- otherwise most of the 16 VMs are
+the one hosting the orchestrator -- otherwise most of the 23 VMs are
 simply unreachable for configuration. If the control node is itself a VM
 on the same ESXi host, give it one additional vNIC per VLAN
 (`govc vm.network.add -vm <control-vm> -net <portgroup> -net.adapter vmxnet3`,
@@ -81,7 +81,7 @@ the control node itself, not something `deploy_govc.sh` does for you.
 ## Layout
 
 ```
-topology.yaml              # SINGLE SOURCE OF TRUTH -- 16 VMs, specs, addressing
+topology.yaml              # SINGLE SOURCE OF TRUTH -- 23 VMs, specs, addressing
 packer/                    # 3 golden-image templates, ONE SUBDIRECTORY EACH
   ubuntu-2204/, debian-13/, alpine/   # (packer combines all .pkr.hcl in one dir into one template)
 scripts/
@@ -89,7 +89,7 @@ scripts/
   deploy_govc.sh            # generated/ -> actual VMs on ESXi, via govc
 ansible/
   site.yml, ansible.cfg
-  roles/<role>/             # one role per topology.yaml `role:` value (12 roles, 16 VMs)
+  roles/<role>/             # one role per topology.yaml `role:` value (13 roles, 23 VMs)
 generated/                  # ALL derived from topology.yaml -- never hand-edit, re-run render_topology.py instead
 ```
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 render_topology.py -- reads ../topology.yaml (the single source of truth
-for the 16-VM ESXi lab) and generates everything derived from it:
+for the 23-VM ESXi lab) and generates everything derived from it:
 
   generated/cloud-init/<vm>/user-data   (Ubuntu/Debian VMs -- NoCloud format)
   generated/cloud-init/<vm>/meta-data
