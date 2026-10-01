@@ -31,25 +31,72 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
-DOMAINS = ("enterprise", "broadband", "peering")
-# Mobile is intentionally excluded from statistical trials until the
-# CU/DU/UE attach path is stable enough to recover deterministically.
-# DOMAINS = ("enterprise", "broadband", "mobile", "peering")
+DOMAINS = ("enterprise", "broadband", "mobile", "peering")
 VECTORS = ("TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "MULTIDOMAIN_FLOOD")
 TARGET_IP = "10.55.0.100"
 
+# Mobile's one representative attacker is ue1 (netns on host `ue`,
+# cu1=`ran` -> du1=`du` -> ue1 -- see mobile-bringup-order memory). The
+# other 4 UEs are left out of the trial design the same way enterprise
+# only uses ent-site-1 and broadband only uses `suscriptor`: one real
+# attacker per domain is the point, not exhaustive coverage.
 HOST_BY_DOMAIN = {
     "enterprise": "ent-site-1",
     "broadband": "suscriptor",
-    # "mobile": "ue",
+    "mobile": "ue",
     "peering": "peer-router",
 }
 
 SOURCE_HINT = {
     "enterprise": "10.70.0.11",
-    # "mobile": "10.45.1.2",
+    "mobile": "10.45.1.2",
     "peering": "10.30.0.2",
 }
+
+# Minimal kernel-socket SYN/UDP flood for the mobile domain's UE netns --
+# same approach as simulation/bng_flood.py (hping3's raw-socket path
+# needs real Ethernet L2 framing; tun_srsue is POINTOPOINT/NOARP, so it
+# never sees a single packet, exactly like broadband's own macvlan/PPP
+# interfaces before that script replaced hping3 there too). Pushed to
+# the UE host as a plain file (not run via `python3 -c`) to avoid
+# quoting a multi-line script through two layers of shell (this
+# process's own command string -> ansible's shell module -> the
+# remote /bin/sh).
+_MOBILE_FLOOD_SCRIPT = '''#!/usr/bin/env python3
+import socket
+import sys
+
+
+def tcp_syn_flood(dst_ip, dst_port):
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.setblocking(False)
+            s.connect_ex((dst_ip, dst_port))
+        except OSError:
+            pass
+        finally:
+            s.close()
+
+
+def udp_flood(dst_ip, dst_port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    payload = b"\\x00" * 32
+    while True:
+        try:
+            s.sendto(payload, (dst_ip, dst_port))
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    proto, dst_ip, dst_port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    if proto == "udp":
+        udp_flood(dst_ip, dst_port)
+    else:
+        tcp_syn_flood(dst_ip, dst_port)
+'''
 
 DETECTION_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[.,]\d{3,6})?).*"
@@ -127,10 +174,24 @@ class Lab:
         return self._run(argv, timeout=timeout, check=check)
 
     def playbook(self, path: str, *, limit: str, skip_tags: str = "",
+                 tags: str = "", extra_vars: Optional[dict] = None,
                  timeout: int = 300) -> str:
-        argv = ["ansible-playbook", "-i", str(self.inventory), path, "--limit", limit]
+        # --become unconditionally: this process runs ansible-playbook
+        # from the repo root with an explicit -i, so deploy/vm-lab/
+        # ansible/ansible.cfg's own `become = True` default (which only
+        # loads when the CWD is that directory, or ANSIBLE_CONFIG points
+        # at it) is never picked up here -- several of this playbook's
+        # own tasks are commented "become=true inherited" assuming
+        # exactly that default. Forcing it here matches what they expect
+        # regardless of CWD.
+        argv = ["ansible-playbook", "-i", str(self.inventory), path,
+                "--limit", limit, "--become"]
         if skip_tags:
             argv += ["--skip-tags", skip_tags]
+        if tags:
+            argv += ["--tags", tags]
+        for key, value in (extra_vars or {}).items():
+            argv += ["-e", f"{key}={value}"]
         return self._run(argv, timeout=timeout)
 
     def healthy(self, host: str, command: str) -> bool:
@@ -209,13 +270,39 @@ class Lab:
             args = f"--icmp -i u1000 {TARGET_IP}"
         else:
             raise LabError(f"unsupported vector: {vector}")
-        # Mobile prefix retained for a future re-enable:
-        # prefix = "ip netns exec ue1 " if domain == "mobile" else ""
-        prefix = ""
         return (
             f"date +%s.%N > {marker}; "
-            f"timeout {duration} {prefix}hping3 {args} "
+            f"timeout {duration} hping3 {args} "
             f">/tmp/ddos-trial-{run_id}.log 2>&1"
+        )
+
+    def _mobile_command(self, vector: str, run_id: str, duration: int) -> str:
+        # hping3 does NOT work over srsue's tun_srsue interface -- it is
+        # POINTOPOINT/NOARP, the same class of L2-framing mismatch that
+        # already ruled out hping3 for the broadband domain's own
+        # interfaces (see simulation/bng_flood.py's module docstring).
+        # Mirrors that script's kernel-socket approach instead, pushed to
+        # the UE host and run inside ue1's netns.
+        marker = self.marker_path(run_id, "mobile")
+        # The heredoc's closing delimiter MUST be alone on its own line --
+        # a trailing "\n" here is load-bearing, not cosmetic. Appending
+        # ";" straight after "PYEOF" would put the terminator and the
+        # next command on the same line, which the shell doesn't
+        # recognize as the end of the heredoc at all (confirmed on a
+        # real run: dash warns "here-document ... delimited by end-of-
+        # file" and the whole rest of the command gets swallowed as part
+        # of the file content instead of executing).
+        push = f"cat > /tmp/mobile_flood.py <<'PYEOF'\n{_MOBILE_FLOOD_SCRIPT}\nPYEOF\n"
+        if vector == "ICMP_FLOOD":
+            inner = f"ip netns exec ue1 ping -f -q -W1 {TARGET_IP}"
+        else:
+            proto = "udp" if vector in ("UDP_FLOOD", "MULTIDOMAIN_FLOOD") else "syn"
+            dst_port = 53 if proto == "udp" else 443
+            inner = f"ip netns exec ue1 python3 /tmp/mobile_flood.py {proto} {TARGET_IP} {dst_port}"
+        return (
+            f"{push}"
+            f"date +%s.%N > {marker}; "
+            f"timeout {duration} {inner} >/tmp/ddos-trial-{run_id}.log 2>&1"
         )
 
     def launch(self, domain: str, vector: str, run_id: str, duration: int) -> None:
@@ -234,6 +321,9 @@ class Lab:
                 f"printf '%s\\n' 'attack {scenario}' > /run/bng-agent/cmd"
             )
             self.shell(host, command)
+        elif domain == "mobile":
+            self.shell(host, self._mobile_command(vector, run_id, duration),
+                       background=True)
         else:
             self.shell(host, self._hping_command(domain, vector, run_id, duration),
                        background=True)
@@ -251,6 +341,13 @@ class Lab:
         host = HOST_BY_DOMAIN[domain]
         if domain == "broadband":
             self.shell(host, "printf '%s\\n' baseline > /run/bng-agent/cmd", check=False)
+        elif domain == "mobile":
+            self.shell(
+                host,
+                "pkill -f '[m]obile_flood.py' 2>/dev/null; "
+                f"pkill -f '[p]ing -f -q -W1 {TARGET_IP}' 2>/dev/null; true",
+                check=False,
+            )
         else:
             self.shell(host, "pkill -f '[h]ping3' || true", check=False)
 
@@ -283,7 +380,7 @@ class Lab:
         print("\n=== startup healthcheck: VM availability ===", flush=True)
         for host in (
             "orchestrator", "victim", "ent-site-1", "pe", "bng", "suscriptor",
-            # Mobile VMs intentionally disabled: "ran", "du", "ue".
+            "ric", "core5g", "ran", "du", "ue",
             "br", "peer-router",
         ):
             self.ensure_vm_reachable(host, host)
@@ -314,30 +411,58 @@ class Lab:
             self.shell("suscriptor", "systemctl restart bng-subscriber-agent", timeout=90)
             self.wait_for_baseline(("broadband",), timeout=150)
 
-        # Mobile healthcheck/recovery intentionally disabled. Re-enable this
-        # block together with the mobile entries in DOMAINS, HOST_BY_DOMAIN
-        # and SOURCE_HINT once CU -> DU -> UE attach is deterministic.
-        #
-        # print("=== startup healthcheck: mobile ===", flush=True)
-        # mobile_check = (
-        #     "pgrep -f '^srsue ' >/dev/null && "
-        #     "ip netns exec ue1 test -d /sys/class/net/tun_srsue && "
-        #     f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"
-        # )
-        # mobile_ok = (
-        #     self.healthy("ran", "pgrep -f '^srscu -c' >/dev/null")
-        #     and self.healthy("du", "pgrep -f '^srsdu -c' >/dev/null && "
-        #                      "grep -qE '\\s38472\\s' /proc/net/sctp/assocs")
-        #     and self.healthy("ue", mobile_check)
-        # )
-        # if not mobile_ok:
-        #     for attempt in range(1, 4):
-        #         self.playbook(
-        #             "deploy/vm-lab/ansible/playbooks/test_split_cu_du.yml",
-        #             limit="ran,du,ue", skip_tags="kpm,correlate", timeout=360,
-        #         )
-        #         if self.healthy("ue", mobile_check):
-        #             break
+        print("=== startup healthcheck: mobile ===", flush=True)
+        # Signals match deploy/vm-lab/webtool/status_checks.py's own
+        # validated probes (and the mobile-bringup-order memory): each
+        # component's OWN log/process, never e2mgr's connectionStatus
+        # (frequently stale) or a raw SCTP-association grep (the old
+        # pre-oran-sc-ric-migration port, 38472, isn't even the RIC's
+        # current E2 port -- 36421 -- so that check would always have
+        # failed regardless of real health).
+        mobile_check = (
+            "systemctl is-active ue1 >/dev/null && "
+            "ip netns exec ue1 test -d /sys/class/net/tun_srsue && "
+            f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"
+        )
+        mobile_ok = (
+            self.healthy("ran", "pgrep -f '^srscu -c' >/dev/null")
+            and self.healthy("du", "pgrep -f '^srsdu -c' >/dev/null && "
+                             "grep -q 'E2 Setup procedure successful' /tmp/du.log")
+            and self.healthy("ue", mobile_check)
+        )
+        if not mobile_ok:
+            for attempt in range(1, 4):
+                # Targeted recovery only (cu1/du1/ue1) -- reconnect_mobile_
+                # domain.yml also covers du2-5/ue2-5/cu2, which this
+                # single-attacker trial design doesn't touch, matching how
+                # enterprise/broadband recovery above is likewise scoped
+                # to just their one representative source. power_cycle is
+                # explicitly false: a full power-off/on of the whole
+                # mobile domain is a last resort the user runs by hand
+                # (see mobile-bringup-order memory), not something a
+                # statistical-trial retry loop should ever trigger.
+                self.playbook(
+                    "deploy/vm-lab/ansible/playbooks/reconnect_mobile_domain.yml",
+                    limit="ran,du,ue", tags="cu1,du1,ue1",
+                    extra_vars={"power_cycle": "false"}, timeout=360,
+                )
+                if self.healthy("ue", mobile_check):
+                    break
+            else:
+                # NOT a hard raise, deliberately -- the mobile domain's
+                # ZMQ RACH is known non-deterministic (mobile-bringup-
+                # order memory: real recovery sometimes needs a full
+                # power-cycle this targeted retry can't do). Printing and
+                # continuing lets the other 3 domains' trials still run;
+                # mobile's own trials will simply come back INCOMPLETE
+                # (extract_result already handles a missing detection).
+                print(
+                    "WARNING: mobile recovery did not succeed after 3 attempts "
+                    "(cu1/du1/ue1) -- continuing anyway, mobile trials may be "
+                    "INCOMPLETE. See mobile-bringup-order memory for a manual "
+                    "full power-cycle if this persists.",
+                    file=sys.stderr,
+                )
 
         print("=== startup healthcheck: peering ===", flush=True)
         peering_check = (

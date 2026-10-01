@@ -10,8 +10,50 @@ from run_vm_lab_trials import DOMAINS, Lab, TrialResult, extract_result, parse_t
 
 
 class TrialParsingTests(unittest.TestCase):
-    def test_active_domains_exclude_mobile(self):
-        self.assertEqual(DOMAINS, ("enterprise", "broadband", "peering"))
+    def test_active_domains_include_mobile(self):
+        self.assertEqual(DOMAINS, ("enterprise", "broadband", "mobile", "peering"))
+
+    def test_mobile_flood_does_not_use_hping3(self):
+        # hping3's raw-socket path needs real Ethernet L2 framing;
+        # srsue's tun_srsue is POINTOPOINT/NOARP and never sees a single
+        # packet from it -- same reasoning that already ruled out hping3
+        # for broadband (simulation/bng_flood.py's own module docstring).
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.command = ""
+
+            def shell(self, host, command, **kwargs):
+                self.command = command
+                return ""
+
+        lab = CapturingLab()
+        lab.launch("mobile", "UDP_FLOOD", "test", 20)
+        self.assertNotIn("hping3", lab.command)
+        self.assertIn("ip netns exec ue1", lab.command)
+        self.assertIn("mobile_flood.py", lab.command)
+
+    def test_mobile_flood_heredoc_terminator_is_on_its_own_line(self):
+        # Regression check for a real bug found while testing this
+        # against the live lab: appending ";" straight after the
+        # heredoc's closing "PYEOF" (same line) makes the shell treat
+        # everything after it as still being part of the file content --
+        # the terminator MUST be followed by an actual newline before any
+        # further command.
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.command = ""
+
+            def shell(self, host, command, **kwargs):
+                self.command = command
+                return ""
+
+        lab = CapturingLab()
+        lab.launch("mobile", "UDP_FLOOD", "test", 20)
+        for line in lab.command.splitlines():
+            if line.strip() == "PYEOF":
+                self.assertEqual(line, "PYEOF", "heredoc terminator must be alone on its line")
 
     def test_broadband_fifo_commands_preserve_space_and_newline(self):
         class CapturingLab(Lab):
