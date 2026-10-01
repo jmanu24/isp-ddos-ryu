@@ -283,6 +283,31 @@ PEERING_R1_EXTERNAL_IP = "10.97.0.1"
 # defaults False there unchanged.
 PEERING_DISTRIBUTED_MODE = os.environ.get("PEERING_DISTRIBUTED_MODE", "").lower() in ("1", "true", "yes")
 
+# Detection mode -- the axis analysis/run_vm_lab_trials.py's own --mode
+# does NOT control (that flag only picks the ATTACK scenario: one
+# domain's source vs. one-per-domain MULTIDOMAIN_FLOOD). This is
+# orthogonal: whether MultidomainCorrelator (correlation/correlator.py)
+# merges telemetry across domains before detection/engine.py sees it.
+#   true  (default, unchanged prior behavior) -- "multidomain detection":
+#         events bucketed by dst_ip alone, so traffic toward the shared
+#         victim from different domains lands in the SAME CorrelatedEvent
+#         -- this is what lets detection/engine.py raise
+#         MULTIDOMAIN_DISTRIBUTED_ATTACK and what the coordination this
+#         thesis is actually testing depends on.
+#   false -- "isolated detection": bucketed by (domain, dst_ip) instead,
+#         so a CorrelatedEvent can never span more than one domain's
+#         events -- each domain's FlowStatsIDS instance effectively
+#         analyzes only its own telemetry, with no cross-domain boost or
+#         coordinated reaction, the A/B baseline the thesis needs to
+#         demonstrate correlation's actual benefit (not just that an
+#         attack of either shape gets detected).
+# Restarting ryu-manager picks up a changed value (see Lab.set_detection_
+# mode in analysis/run_vm_lab_trials.py) -- this is a process-start
+# setting, not hot-reloaded.
+DETECTION_CROSS_DOMAIN_CORRELATION = os.environ.get(
+    "DETECTION_CROSS_DOMAIN_CORRELATION", "true"
+).lower() in ("1", "true", "yes")
+
 # br's real address on VLAN-MGMT (deploy/vm-lab/topology.yaml) -- what
 # `flow` binds its exabgp-facing listener to, and what this controller
 # SSHes to. Deliberately br's MGMT address, NOT its PEERING one: this

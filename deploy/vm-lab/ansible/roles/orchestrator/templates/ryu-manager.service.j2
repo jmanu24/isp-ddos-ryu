@@ -33,6 +33,13 @@ Environment=PYTHONPATH=/opt/Tesis_Controller
 # to Mininet-mode peering logic under systemd until this was found.
 Environment=PEERING_DISTRIBUTED_MODE=true
 Environment=BNG_DISTRIBUTED_MODE=true
+# "multidomain" detection (cross-domain correlation ON) is this unit's
+# own fixed default -- analysis/run_vm_lab_trials.py's --detection-mode
+# flips it per campaign via `systemctl set-environment` + restart (see
+# Lab.set_detection_mode), which overrides this line for that process's
+# lifetime without needing a redeploy. See config/settings.py's
+# DETECTION_CROSS_DOMAIN_CORRELATION for what this actually changes.
+Environment=DETECTION_CROSS_DOMAIN_CORRELATION=true
 ExecStart=/opt/Tesis_Controller/venv/bin/ryu-manager --observe-links controller/ryu_controller_2.py
 Restart=on-failure
 RestartSec=2

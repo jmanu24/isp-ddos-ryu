@@ -171,7 +171,14 @@ class FlowStatsIDS(app_manager.RyuApp):
         self._known_active_block_domains = set()
 
         # ── Stages 2-5: Correlation → Detection → Decision → Control ─
-        self.correlator  = MultidomainCorrelator()
+        # cross_domain toggles "multidomain" (default) vs. "isolated"
+        # detection -- see settings.DETECTION_CROSS_DOMAIN_CORRELATION's
+        # own comment. A process-start setting (not hot-reloaded):
+        # changing it needs a ryu-manager restart, same as
+        # PEERING_DISTRIBUTED_MODE/BNG_DISTRIBUTED_MODE below.
+        self.correlator  = MultidomainCorrelator(
+            cross_domain=settings.DETECTION_CROSS_DOMAIN_CORRELATION
+        )
         self.detector    = DDoSDetectionEngine()
         self.orchestrator = OrchestrationController(
             self.all_adapters,
@@ -189,6 +196,8 @@ class FlowStatsIDS(app_manager.RyuApp):
         # ── Web dashboard ─────────────────────────────────────────────
         threading.Thread(target=start_server, daemon=True).start()
 
+        detection_mode = "multidomain" if settings.DETECTION_CROSS_DOMAIN_CORRELATION else "isolated"
+        self.logger.info(log_line("controller", "STARTUP", f"DETECTION_MODE={detection_mode}"))
         self.logger.info(log_line("controller", "STARTUP", "READY"))
 
     # ------------------------------------------------------------------

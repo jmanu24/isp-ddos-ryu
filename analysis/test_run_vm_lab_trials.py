@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 
 from run_vm_lab_trials import (
-    DOMAINS, Lab, TrialResult, VECTORS, extract_result, parse_ts,
-    resolve_effective_vectors, write_outputs,
+    DOMAINS, Lab, TrialResult, VECTORS, extract_result, mobile_preflight,
+    parse_ts, resolve_effective_vectors, run_trial, write_outputs,
 )
 
 
@@ -171,6 +171,68 @@ class TrialParsingTests(unittest.TestCase):
     def test_mode_both_is_unchanged_previous_behavior(self):
         effective = resolve_effective_vectors("both", VECTORS, DOMAINS, self.fail)
         self.assertEqual(effective, VECTORS)
+
+    def test_mobile_preflight_dry_run_is_always_ok(self):
+        lab = Lab(Path("."), Path("inventory.ini"), dry_run=True)
+        ok, reason = mobile_preflight(lab)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+
+    def test_mobile_preflight_captures_recovery_exception(self):
+        # item 2: a recovery failure must be CAPTURED here, never raised --
+        # one domain's known flakiness can't be allowed to crash the
+        # whole campaign process.
+        class FlakyLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+
+            def mobile_chain_healthy(self):
+                return False
+
+            def playbook(self, *args, **kwargs):
+                raise RuntimeError("ansible-playbook exploded")
+
+        ok, reason = mobile_preflight(FlakyLab())
+        self.assertFalse(ok)
+        self.assertIn("raised", reason)
+
+    def _unhealthy_mobile_lab(self):
+        class UnhealthyMobileLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+                self.launched = []
+                self.code_version_value = "deadbeef"
+
+            def code_version(self):
+                return self.code_version_value
+
+            def mobile_chain_healthy(self):
+                return False
+
+            def playbook(self, *args, **kwargs):
+                return ""  # "recovery" that doesn't actually fix anything
+
+            def launch(self, domain, vector, run_id, duration):
+                self.launched.append(domain)
+
+            def log_size(self):
+                self.fail("must not reach the attack phase when mobile preflight fails")
+
+        return UnhealthyMobileLab()
+
+    def test_isolated_mobile_trial_is_invalid_not_error(self):
+        lab = self._unhealthy_mobile_lab()
+        rows = run_trial(lab, 1, "UDP_FLOOD", ("mobile",), 5, 10, 1, scenario_mode="isolated")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].status, "INVALID")
+        self.assertEqual(lab.launched, [])  # the attack must never have been launched
+
+    def test_joint_scenario_invalidates_every_domain(self):
+        lab = self._unhealthy_mobile_lab()
+        rows = run_trial(lab, 1, "MULTIDOMAIN_FLOOD", ("mobile", "enterprise"), 5, 10, 1,
+                         scenario_mode="multidomain")
+        self.assertEqual({r.status for r in rows}, {"INVALID_SCENARIO"})
+        self.assertEqual(lab.launched, [])  # not even enterprise's own attack ran
 
     def test_writes_expected_wide_columns(self):
         row = TrialResult("test", 1, "enterprise", "TCP_SYN_FLOOD", "10.70.0.11", "10.55.0.100",

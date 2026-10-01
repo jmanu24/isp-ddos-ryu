@@ -28,7 +28,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 
 DOMAINS = ("enterprise", "broadband", "mobile", "peering")
@@ -148,6 +148,15 @@ class TrialResult:
     Tr_s: Optional[float] = None
     status: str = "ERROR"
     error: str = ""
+    # Traceability (item 6): everything needed to tell two rows apart
+    # besides domain/vector/iteration, and to tell a real detection event
+    # apart from a mere log timestamp (item 5) -- see each field's own
+    # Lab method/constant for how it's actually measured.
+    code_version: str = ""        # git commit hash, from Lab.code_version()
+    detection_mode: str = ""      # "isolated" | "multidomain" -- see Lab.set_detection_mode()
+    scenario_mode: str = ""       # the campaign's --mode (isolated|multidomain|both)
+    observed_pps: Optional[float] = None  # measured over the attack window -- see Lab.sample_tx_packets()
+    traffic_recovered: Optional[bool] = None  # legitimate-traffic probe AFTER Tr_s -- see check_traffic_recovery()
 
 
 class LabError(RuntimeError):
@@ -159,6 +168,8 @@ class Lab:
         self.repo = repo
         self.inventory = inventory
         self.dry_run = dry_run
+        self.detection_mode = "multidomain"  # updated by set_detection_mode()
+        self._code_version: Optional[str] = None
 
     def _run(self, argv: list[str], timeout: int = 45, check: bool = True) -> str:
         print("+", " ".join(argv), flush=True)
@@ -208,6 +219,102 @@ class Lab:
         for key, value in (extra_vars or {}).items():
             argv += ["-e", f"{key}={value}"]
         return self._run(argv, timeout=timeout)
+
+    def code_version(self) -> str:
+        """Short git commit hash of THIS checkout at run time, recorded on
+        every TrialResult (item 6: traceability) -- `git describe` isn't
+        used (a dirty worktree during an active campaign is normal, not
+        worth failing over), just the commit + a dirty marker."""
+        if self._code_version is not None:
+            return self._code_version
+        try:
+            commit = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"], cwd=self.repo,
+                text=True, capture_output=True, timeout=10, check=True,
+            ).stdout.strip()
+            dirty = subprocess.run(
+                ["git", "status", "--porcelain"], cwd=self.repo,
+                text=True, capture_output=True, timeout=10, check=True,
+            ).stdout.strip()
+            self._code_version = commit + ("-dirty" if dirty else "")
+        except Exception:  # noqa: BLE001 -- never block a trial over this
+            self._code_version = "unknown"
+        return self._code_version
+
+    def set_detection_mode(self, mode: str) -> None:
+        """Switches "isolated" vs. "multidomain" detection (item 1) by
+        overriding ryu-manager's DETECTION_CROSS_DOMAIN_CORRELATION via a
+        TRANSIENT systemd drop-in (/run, not /etc -- gone on the next
+        reboot/redeploy, which falls back to the ansible-managed unit's
+        own default) and restarting it. A plain `systemctl set-
+        environment` does NOT work here: the unit file already sets this
+        same variable via its own Environment= line, which takes
+        precedence over the manager-level default -- a drop-in's
+        Environment= is the one mechanism that actually overrides it.
+        Deliberately does NOT touch anything else -- the attack side
+        (sources/rates/duration/target/thresholds) is completely
+        untouched, so the same attack runs in both modes."""
+        if mode not in ("isolated", "multidomain"):
+            raise LabError(f"invalid detection mode: {mode}")
+        if self.detection_mode == mode:
+            return
+        value = "false" if mode == "isolated" else "true"
+        command = (
+            "mkdir -p /run/systemd/system/ryu-manager.service.d && "
+            f"printf '[Service]\\nEnvironment=DETECTION_CROSS_DOMAIN_CORRELATION={value}\\n' "
+            "> /run/systemd/system/ryu-manager.service.d/99-detection-mode.conf && "
+            "systemctl daemon-reload && systemctl restart ryu-manager"
+        )
+        print(f"Switching detection mode: {self.detection_mode} -> {mode}", flush=True)
+        self.shell("orchestrator", command, timeout=60)
+        if self.dry_run:
+            self.detection_mode = mode
+            return
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if self.healthy("orchestrator", "systemctl is-active ryu-manager"):
+                self.detection_mode = mode
+                return
+            time.sleep(3)
+        raise LabError(f"ryu-manager did not come back up after switching to detection mode {mode}")
+
+    # Per-domain command to dump the attack SOURCE's own interface
+    # counters, used by sample_tx_packets() below to measure the actually
+    # ACHIEVED send rate over the attack window -- an approximation (host-
+    # level counters, not a packet capture), not a precise per-flow rate,
+    # and documented as such wherever it's reported (item 6: "tasas
+    # observadas", item 5: don't overclaim precision logs can't back up).
+    _RATE_PROBE_CMD = {
+        "enterprise": "cat /proc/net/dev",
+        "peering": "cat /proc/net/dev",
+        "broadband": "cat /proc/net/dev",
+        "mobile": "ip netns exec ue1 cat /proc/net/dev",
+    }
+
+    def sample_tx_packets(self, domain: str) -> Optional[int]:
+        """Sum of tx_packets across every non-loopback interface on the
+        domain's attack source (its own netns for mobile). Two calls
+        bracketing the attack window, divided by elapsed wall time, give
+        an observed pps -- see run_trial()'s own use of this."""
+        cmd = self._RATE_PROBE_CMD.get(domain)
+        if cmd is None or self.dry_run:
+            return None
+        res = self.shell(HOST_BY_DOMAIN[domain], cmd, timeout=10, check=False)
+        total = 0
+        for line in res.splitlines():
+            if ":" not in line:
+                continue
+            iface, rest = line.split(":", 1)
+            if iface.strip() == "lo":
+                continue
+            fields = rest.split()
+            if len(fields) < 10:
+                continue
+            try:
+                total += int(fields[9])  # tx_packets, see /proc/net/dev's own column order
+            except ValueError:
+                continue
+        return total
 
     def healthy(self, host: str, command: str) -> bool:
         try:
@@ -370,6 +477,28 @@ class Lab:
         for domain in DOMAINS:
             self.stop(domain)
 
+    def mobile_chain_healthy(self) -> bool:
+        """CU1(`ran`)/DU1(`du`)/UE1 chain health, by each component's OWN
+        log/process (deploy/vm-lab/webtool/status_checks.py's own
+        validated probes, mobile-bringup-order memory) -- never e2mgr's
+        connectionStatus (frequently stale) or a raw SCTP-association
+        grep (the old pre-oran-sc-ric-migration port, 38472, isn't even
+        the RIC's current E2 port -- 36421). Shared by startup_
+        healthcheck() (once, at campaign start) and mobile_preflight()
+        (before every single mobile trial, item 2) -- exceptions never
+        escape, a probe that can't even run counts as unhealthy."""
+        try:
+            return (
+                self.healthy("ran", "pgrep -f '^srscu -c' >/dev/null")
+                and self.healthy("du", "pgrep -f '^srsdu -c' >/dev/null && "
+                                 "grep -q 'E2 Setup procedure successful' /tmp/du.log")
+                and self.healthy("ue", "systemctl is-active ue1 >/dev/null && "
+                                 "ip netns exec ue1 test -d /sys/class/net/tun_srsue && "
+                                 f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}")
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
     def healthcheck(self) -> None:
         checks = (
             ("orchestrator", "systemctl is-active ryu-manager nfcapd exabgp"),
@@ -427,25 +556,7 @@ class Lab:
             self.wait_for_baseline(("broadband",), timeout=150)
 
         print("=== startup healthcheck: mobile ===", flush=True)
-        # Signals match deploy/vm-lab/webtool/status_checks.py's own
-        # validated probes (and the mobile-bringup-order memory): each
-        # component's OWN log/process, never e2mgr's connectionStatus
-        # (frequently stale) or a raw SCTP-association grep (the old
-        # pre-oran-sc-ric-migration port, 38472, isn't even the RIC's
-        # current E2 port -- 36421 -- so that check would always have
-        # failed regardless of real health).
-        mobile_check = (
-            "systemctl is-active ue1 >/dev/null && "
-            "ip netns exec ue1 test -d /sys/class/net/tun_srsue && "
-            f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"
-        )
-        mobile_ok = (
-            self.healthy("ran", "pgrep -f '^srscu -c' >/dev/null")
-            and self.healthy("du", "pgrep -f '^srsdu -c' >/dev/null && "
-                             "grep -q 'E2 Setup procedure successful' /tmp/du.log")
-            and self.healthy("ue", mobile_check)
-        )
-        if not mobile_ok:
+        if not self.mobile_chain_healthy():
             for attempt in range(1, 4):
                 # Targeted recovery only (cu1/du1/ue1) -- reconnect_mobile_
                 # domain.yml also covers du2-5/ue2-5/cu2, which this
@@ -461,7 +572,7 @@ class Lab:
                     limit="ran,du,ue", tags="cu1,du1,ue1",
                     extra_vars={"power_cycle": "false"}, timeout=360,
                 )
-                if self.healthy("ue", mobile_check):
+                if self.mobile_chain_healthy():
                     break
             else:
                 # NOT a hard raise, deliberately -- the mobile domain's
@@ -647,16 +758,98 @@ def wait_and_collect(lab: Lab, offset: int, results: list[TrialResult], starts: 
     return [extract_result(latest, row, starts[row.domain]) for row in results]
 
 
+# Legitimate-traffic recovery probe, from the SAME source the attack
+# used -- see check_traffic_recovery()'s own docstring (item 5: a Tr_s
+# timestamp only proves a MITIGATION->UNBLOCK pair was logged, not that
+# the legitimate source can actually reach the target again).
+_RECOVERY_PROBE = {
+    "enterprise": ("ent-site-1", f"ping -c 2 -W 2 {TARGET_IP}"),
+    "peering": ("peer-router", f"ping -c 2 -W 2 {TARGET_IP}"),
+    "mobile": ("ue", f"ip netns exec ue1 ping -c 2 -W 3 {TARGET_IP}"),
+    # broadband has no single stable source IP to re-probe this way (its
+    # attack rides a macvlan session the subscriber-agent itself owns) --
+    # wait_for_baseline()'s own 8-active-session check already is that
+    # domain's recovery signal, via a different mechanism. Omitted here
+    # on purpose, not an oversight -- see check_traffic_recovery().
+}
+
+
+def mobile_preflight(lab: Lab) -> Tuple[bool, str]:
+    """Item 2 -- checked before EVERY mobile trial (Lab.mobile_chain_healthy()
+    is cheap: a handful of SSH round trips, not a full bring-up). On a
+    failed chain, ONE bounded, targeted recovery attempt
+    (reconnect_mobile_domain.yml --tags cu1,du1,ue1, power_cycle=false --
+    same scope as startup_healthcheck()'s own recovery, just a single
+    attempt instead of 3 to keep the per-trial cost bounded over a long
+    campaign). Any exception the recovery attempt raises is CAUGHT here
+    and turned into an invalidation reason -- it must never propagate
+    and crash the whole campaign process over one domain's known
+    flakiness (mobile-bringup-order memory)."""
+    if lab.dry_run or lab.mobile_chain_healthy():
+        return True, ""
+    try:
+        lab.playbook(
+            "deploy/vm-lab/ansible/playbooks/reconnect_mobile_domain.yml",
+            limit="ran,du,ue", tags="cu1,du1,ue1",
+            extra_vars={"power_cycle": "false"}, timeout=300,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"mobile recovery raised: {exc}"
+    if lab.mobile_chain_healthy():
+        return True, ""
+    return False, "cu1/du1/ue1 chain still unhealthy after 1 targeted recovery attempt"
+
+
+def check_traffic_recovery(lab: Lab, domain: str) -> Optional[bool]:
+    """Sends real traffic from the attack's own source, right after
+    Tr_s, and reports whether it reached the target. None (not False)
+    when this domain has no such probe defined above -- a missing
+    measurement must never be reported as a failed one."""
+    probe = _RECOVERY_PROBE.get(domain)
+    if probe is None or lab.dry_run:
+        return None
+    host, cmd = probe
+    return lab.healthy(host, cmd)
+
+
 def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
-              attack_duration: int, event_timeout: int, poll: int) -> list[TrialResult]:
+              attack_duration: int, event_timeout: int, poll: int,
+              scenario_mode: str = "") -> list[TrialResult]:
     run_id = f"i{iteration:03d}-{vector.lower()}-{uuid.uuid4().hex[:8]}"
-    offset = lab.log_size()
     results = [
-        TrialResult(run_id, iteration, domain, vector, SOURCE_HINT.get(domain, ""), TARGET_IP)
+        TrialResult(run_id, iteration, domain, vector, SOURCE_HINT.get(domain, ""), TARGET_IP,
+                   code_version=lab.code_version(), detection_mode=lab.detection_mode,
+                   scenario_mode=scenario_mode)
         for domain in domains
     ]
+
+    # Item 2 -- check the CU/DU/UE chain before EVERY mobile trial (not
+    # just once at campaign start), only when mobile is actually one of
+    # this trial's domains. A failed chain gets ONE bounded, captured
+    # recovery attempt (mobile_preflight() never lets a recovery
+    # exception escape uncaught) before this trial is given up on.
+    #   - isolated trial (mobile alone): invalidate ONLY mobile's own
+    #     row ("INVALID") -- the other domains in this iteration/vector
+    #     run as their own separate isolated trials and are unaffected.
+    #   - joint scenario (mobile + others, i.e. MULTIDOMAIN_FLOOD):
+    #     invalidate the WHOLE scenario ("INVALID_SCENARIO") -- a 3-of-4
+    #     -domain attack is not the 4-domain coordinated event this
+    #     scenario is meant to measure, so none of its rows may be
+    #     counted as one.
+    if "mobile" in domains:
+        mobile_ok, reason = mobile_preflight(lab)
+        if not mobile_ok:
+            status = "INVALID" if len(domains) == 1 else "INVALID_SCENARIO"
+            for row in results:
+                row.status = status
+                row.error = f"mobile preflight failed: {reason}"
+            return results
+
+    offset = lab.log_size()
     starts: dict[str, float] = {}
+    tx_before: dict[str, Optional[int]] = {}
     try:
+        tx_before = {d: lab.sample_tx_packets(d) for d in domains}
         # Async hping launches keep multidomain starts close together; broadband's
         # FIFO write is synchronous and takes only one local operation.
         # A multidomain trial is one sequential experiment, but its one source
@@ -677,7 +870,29 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
                 row.status = "DRY_RUN"
                 row.error = "commands validated but not executed"
             return results
+
+        # Bracket the attack window to measure the ACHIEVED rate (item 6:
+        # "tasas observadas") -- not the configured/intended one. Sleeping
+        # past attack_duration (the remote `timeout N` wrapper self-stops
+        # the flood by then) keeps this a clean before/after pair instead
+        # of racing lab.stop()'s own kill in the `finally` below.
+        time.sleep(attack_duration + 1)
+        elapsed = attack_duration + 1
+        for domain in domains:
+            after = lab.sample_tx_packets(domain)
+            before = tx_before.get(domain)
+            row = next(r for r in results if r.domain == domain)
+            if before is not None and after is not None and after >= before:
+                row.observed_pps = round((after - before) / elapsed, 1)
+
         parsed = wait_and_collect(lab, offset, results, starts, event_timeout, poll)
+
+        # Item 5 -- a Tr_s timestamp only means a MITIGATION->UNBLOCK pair
+        # was logged; confirm the legitimate source can actually reach
+        # the target again before calling it recovered.
+        for row in parsed:
+            if row.status == "OK" and row.Tr_s is not None:
+                row.traffic_recovered = check_traffic_recovery(lab, row.domain)
     except Exception as exc:
         for row in results:
             row.status = "ERROR"
@@ -722,6 +937,12 @@ def main() -> int:
                         help="isolated: TCP/UDP/ICMP_FLOOD only, one domain per trial. "
                              "multidomain: MULTIDOMAIN_FLOOD only, needs >=2 --domains. "
                              "both (default): run --vectors as given, unchanged behavior.")
+    parser.add_argument("--detection-mode", choices=("isolated", "multidomain"), default="multidomain",
+                        help="isolated: each domain's telemetry analyzed on its own, no cross-domain "
+                             "correlation/coordination. multidomain (default, unchanged prior behavior): "
+                             "correlation.correlator.MultidomainCorrelator merges by dst_ip across domains. "
+                             "Orthogonal to --mode -- the SAME attack (sources/rates/duration/target/"
+                             "thresholds) runs in both; only ryu-manager's own correlation changes.")
     parser.add_argument("--attack-duration", type=int, default=20)
     parser.add_argument("--event-timeout", type=int, default=150,
                         help="seconds allowed for detection, mitigation and recovery")
@@ -762,6 +983,15 @@ def main() -> int:
     lab = Lab(repo, inventory, args.dry_run)
     rng = random.Random(args.seed)
 
+    # Set BEFORE startup_healthcheck() -- restarting ryu-manager to apply
+    # a detection-mode change drops its in-memory state (active blocks),
+    # so the healthcheck right after is what confirms the campaign is
+    # starting from a clean, known-good state in whichever mode was asked
+    # for (item 1: resolved/validated before the campaign begins, like
+    # --mode's own resolve_effective_vectors()).
+    lab.set_detection_mode(args.detection_mode)
+    print(f"Detection mode: {args.detection_mode}", flush=True)
+
     lab.startup_healthcheck()
     lab.cleanup()
     lab.wait_for_baseline(args.domains)
@@ -789,11 +1019,20 @@ def main() -> int:
             lab.cleanup()
             lab.wait_for_baseline(domains)
             rows = run_trial(lab, iteration, vector, domains, args.attack_duration,
-                             args.event_timeout, args.poll)
+                             args.event_timeout, args.poll, scenario_mode=args.mode)
             append_checkpoint(checkpoint, rows)
             previous.extend(rows)
             write_outputs(out_dir, previous)
-            failed = [r for r in rows if r.status not in ("OK", "DRY_RUN")]
+            # INVALID/INVALID_SCENARIO are expected, handled outcomes of
+            # item 2's mobile preflight -- a known-flaky domain failing
+            # its own pre-check is not a script bug, so it must NOT halt
+            # the whole campaign the way a genuine ERROR/INCOMPLETE does.
+            # They stay OUT of `completed` (only "OK" counts there), so
+            # --resume retries them like any other not-yet-OK combination.
+            invalid = [r for r in rows if r.status in ("INVALID", "INVALID_SCENARIO")]
+            for r in invalid:
+                print(f"  {r.status}: {r.domain}/{r.vector} -- {r.error}", file=sys.stderr)
+            failed = [r for r in rows if r.status not in ("OK", "DRY_RUN", "INVALID", "INVALID_SCENARIO")]
             if failed:
                 print("Trial incomplete; checkpoint saved. Fix the cause and rerun with --resume.", file=sys.stderr)
                 return 2
