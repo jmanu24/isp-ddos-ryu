@@ -1,0 +1,115 @@
+domain:
+  name: mobile
+
+population:
+  users:
+    - ue1
+    - ue2
+    - ue3
+    - ue4
+    - ue5
+
+directionality:
+  target_dl_ul_ratio: 2.0
+
+state_machine:
+
+  idle:
+    weight: 0.35
+    duration_s:
+      distribution: uniform
+      min: 5
+      max: 30
+
+  web:
+    weight: 0.25
+
+    duration_s:
+      distribution: uniform
+      min: 10
+      max: 60
+
+    object_size_bytes:
+      distribution: truncated_pareto
+      minimum: 2000
+      maximum: 5000000
+      alpha: 1.2
+
+    think_time_s:
+      distribution: exponential
+      mean: 12
+
+    direction:
+      dl_probability: 0.95
+      ul_probability: 0.05
+
+  streaming:
+    weight: 0.20
+
+    duration_s:
+      distribution: uniform
+      min: 20
+      max: 90
+
+    dl_rate_fraction:
+      distribution: uniform
+      min: 0.015
+      max: 0.040
+
+    ul_rate_fraction:
+      distribution: uniform
+      min: 0.001
+      max: 0.004
+
+  download:
+    weight: 0.10
+
+    file_size_bytes:
+      distribution: fixed
+      value: 500000
+
+    think_time_s:
+      distribution: exponential
+      mean: 5
+
+  upload:
+    weight: 0.10
+
+    file_size_bytes:
+      distribution: fixed
+      value: 500000
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.01
+      max: 0.04
+
+special_benign_events:
+
+  - name: mobile_legitimate_ul_burst
+
+    source_candidates:
+      - ue4
+      - ue5
+
+    start_s:
+      distribution: uniform
+      min: 280
+      max: 300
+
+    duration_s:
+      distribution: uniform
+      min: 10
+      max: 20
+
+    direction: ul
+
+    protocol: tcp
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.10
+      max: 0.15
+
+    label: benign
+

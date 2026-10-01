@@ -1,0 +1,160 @@
+domain:
+  name: fixed
+
+population:
+  logical_subscribers: 10
+
+  identifiers:
+    prefix: fixed
+    start: 1
+    end: 10
+
+directionality:
+  target_dl_ul_ratio: 8.0
+
+application_mix:
+
+  streaming:
+    weight: 0.40
+
+    duration_s:
+      distribution: uniform
+      min: 30
+      max: 180
+
+    dl_rate_fraction:
+      distribution: uniform
+      min: 0.015
+      max: 0.045
+
+    ul_rate_fraction:
+      distribution: uniform
+      min: 0.0005
+      max: 0.003
+
+    burst_cycle:
+      enabled: true
+
+      on_s:
+        distribution: uniform
+        min: 2
+        max: 6
+
+      off_s:
+        distribution: uniform
+        min: 0.5
+        max: 2
+
+  web:
+    weight: 0.25
+
+    object_size_bytes:
+      distribution: truncated_pareto
+      minimum: 4000
+      maximum: 8000000
+      alpha: 1.2
+
+    think_time_s:
+      distribution: exponential
+      mean: 15
+
+  cloud_file:
+    weight: 0.15
+
+    file_size_mb:
+      distribution: uniform
+      min: 5
+      max: 25
+
+    direction:
+      dl_probability: 0.75
+      ul_probability: 0.25
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.02
+      max: 0.08
+
+  gaming:
+    weight: 0.10
+
+    duration_s:
+      distribution: uniform
+      min: 30
+      max: 180
+
+    protocol: udp
+
+    packet_size_bytes:
+      distribution: uniform
+      min: 80
+      max: 500
+
+    packet_interval_ms:
+      distribution: uniform
+      min: 20
+      max: 100
+
+    bidirectional: true
+
+  voice_video:
+    weight: 0.05
+
+    duration_s:
+      distribution: uniform
+      min: 30
+      max: 180
+
+    protocol: udp
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.003
+      max: 0.015
+
+    bidirectional: true
+
+  background:
+    weight: 0.05
+
+    protocols:
+      - tcp
+      - udp
+      - icmp
+
+    interval_s:
+      distribution: uniform
+      min: 5
+      max: 60
+
+special_benign_events:
+
+  - name: fixed_legitimate_download
+
+    source_candidates:
+      - fixed7
+      - fixed8
+      - fixed9
+      - fixed10
+
+    start_s:
+      distribution: uniform
+      min: 175
+      max: 190
+
+    duration_s:
+      distribution: uniform
+      min: 15
+      max: 30
+
+    direction: dl
+
+    protocol: tcp
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.20
+      max: 0.25
+
+    label: benign
+

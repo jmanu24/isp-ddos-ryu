@@ -1,0 +1,18 @@
+[Unit]
+Description=BENIGN Lab web controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=benign-lab
+Group=benign-lab
+WorkingDirectory=/opt/benign-lab
+StateDirectory=benign-lab
+EnvironmentFile=-/etc/benign-lab.env
+ExecStart=/opt/benign-lab/.venv/bin/benign-lab serve --lab /opt/benign-lab/config/lab.yaml --data /var/lib/benign-lab --host 127.0.0.1 --port 8765
+Restart=on-failure
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

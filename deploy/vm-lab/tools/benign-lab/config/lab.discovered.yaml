@@ -1,0 +1,402 @@
+# Live observation; configured=false until deployment readiness is verified. DHCP IPs are a snapshot.
+require_explicit_mapping: true
+capacity_mbps:
+  mobile: null
+  fixed: null
+  enterprise: null
+  peering: null
+allowed_target_cidrs:
+- 10.0.0.0/8
+max_clock_skew_s: 0.25
+start_lead_s: 5
+topology:
+  victim: 10.55.0.100
+  mobile_backbone: 10.91.0.0/30
+  fixed_backbone: 10.92.0.0/30
+  peering_backbone: 10.93.0.0/30
+  fixed_services:
+  - accel-ppp
+  - FreeRADIUS
+  - DHCP/IPoE
+nodes:
+  ue1:
+    configured: false
+    adapter: ssh_netns
+    host: 10.10.0.8
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.45.1.2
+    interface: tun_srsue
+    expected_gateway: null
+    check_route: true
+    namespace: ue1
+    sudo: true
+    observed_route: true
+  ue2:
+    configured: false
+    adapter: ssh_netns
+    host: 10.10.0.8
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.45.1.4
+    interface: tun_srsue
+    expected_gateway: null
+    check_route: true
+    namespace: ue2
+    sudo: true
+    observed_route: true
+  ue3:
+    configured: false
+    adapter: ssh_netns
+    host: 10.10.0.8
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.45.1.5
+    interface: tun_srsue
+    expected_gateway: null
+    check_route: true
+    namespace: ue3
+    sudo: true
+    observed_route: true
+  ue4:
+    configured: false
+    adapter: ssh_netns
+    host: 10.10.0.16
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.45.1.6
+    interface: tun_srsue
+    expected_gateway: null
+    check_route: true
+    namespace: ue4
+    sudo: true
+    observed_route: true
+  ue5:
+    configured: false
+    adapter: ssh_netns
+    host: 10.10.0.16
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.45.1.7
+    interface: tun_srsue
+    expected_gateway: null
+    check_route: true
+    namespace: ue5
+    sudo: true
+    observed_route: true
+  fixed1:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.19
+    interface: macvlan1
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: ipoe0
+    observed_route: true
+    observed_active_session: true
+  fixed2:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.20
+    interface: macvlan2
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: ipoe1
+    observed_route: true
+    observed_active_session: true
+  fixed3:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.12
+    interface: macvlan3
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+    observed_route: true
+    observed_active_session: false
+  fixed4:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.13
+    interface: macvlan4
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: ipoe3
+    observed_route: true
+    observed_active_session: true
+  fixed5:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.14
+    interface: macvlan5
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: ipoe4
+    observed_route: true
+    observed_active_session: true
+  fixed6:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.15
+    interface: macvlan6
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: ipoe5
+    observed_route: true
+    observed_active_session: true
+  fixed7:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.16
+    interface: macvlan7
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: ipoe6
+    observed_route: true
+    observed_active_session: true
+  fixed8:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.20.0.17
+    interface: macvlan8
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: ipoe7
+    observed_route: true
+    observed_active_session: true
+  fixed9:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+    observation: No interface/session for logical subscriber in live inspection
+  fixed10:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+    observation: No interface/session for logical subscriber in live inspection
+  ent-site-1:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.21
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.70.0.11
+    interface: ens160
+    expected_gateway: null
+    check_route: true
+    observed_route: true
+    observation: SSH verified
+  ent-site-2:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.22
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.70.0.12
+    interface: null
+    expected_gateway: null
+    check_route: true
+    observed_route: false
+    observation: Topology address; SSH returned No route to host
+  ent-site-3:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.23
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.70.0.13
+    interface: null
+    expected_gateway: null
+    check_route: true
+    observed_route: false
+    observation: Topology address; SSH returned No route to host
+  ent-site-4:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.24
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.70.0.14
+    interface: null
+    expected_gateway: null
+    check_route: true
+    observed_route: false
+    observation: Topology address; SSH returned No route to host
+  ent-site-5:
+    configured: false
+    adapter: ssh
+    host: 10.10.0.25
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.70.0.15
+    interface: null
+    expected_gateway: null
+    check_route: true
+    observed_route: false
+    observation: Topology address; SSH returned No route to host
+  peer-flow*:
+    configured: false
+    adapter: ssh
+    host: 10.30.0.2
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: 10.30.0.2
+    interface: ens160
+    expected_gateway: 10.30.0.1
+    check_route: true
+    observed_route: true
+targets:
+  victim-web:
+    host: 10.55.0.100
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-1:
+    host: 10.70.0.11
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-2:
+    host: 10.70.0.12
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-3:
+    host: 10.70.0.13
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-4:
+    host: 10.70.0.14
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-5:
+    host: 10.70.0.15
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+discovery:
+  date: '2026-10-01'
+  control_node: 192.168.18.154
+  project: /home/ubuntu/isp-ddos-ryu
+  revision: aa7ae879332364bd0bfd2b0f9aa19617dbe6d52f
+  scope: SSH and route inspection; no deployment or traffic experiment
+deployment_pending:
+- Python >=3.11 on controller and workers
+- Agent and receivers not deployed
+- Noninteractive SSH credentials and known_hosts for worker hosts
+- Domain capacities not calibrated
+- Fixed logical population 10 vs 8 interfaces and 7 active sessions
+- Enterprise sites 2-5 unreachable

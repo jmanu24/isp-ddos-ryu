@@ -104,7 +104,7 @@ REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_DIR)
 from simulation.bng_ipoe_config import SCENARIOS, SCENARIO_PARAMS, BASELINE_SCENARIO, build_scenario  # noqa: E402
 
-_MAX_SUBSCRIBERS = 8
+_MAX_SUBSCRIBERS = 10
 _DHCP_RUN_DIR = "/run/bng-subscribers"
 _DHCP_WAIT_S = 15
 # How often the background thread (see run()) checks every subscriber's
@@ -650,6 +650,9 @@ def run(fifo_path: str, target_ip: str, gateway_ip: str, start_baseline: bool) -
     pool = SubscriberPool(target_ip=target_ip, gateway_ip=gateway_ip)
     if start_baseline:
         pool.launch(BASELINE_SCENARIO)
+    else:
+        pool._ensure_up(_MAX_SUBSCRIBERS)
+        pool._write_state()
 
     threading.Thread(target=_resync_loop, args=(pool,), daemon=True).start()
     threading.Thread(target=_http_loop, args=(_HTTP_PORT,), daemon=True).start()

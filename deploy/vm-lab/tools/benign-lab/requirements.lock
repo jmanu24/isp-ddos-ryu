@@ -1,0 +1,24 @@
+# Resolved and tested on the control node with Python 3.8.10.
+annotated-types==0.7.0
+anyio==4.5.2
+certifi==2026.7.22
+click==8.1.8
+exceptiongroup==1.3.1
+fastapi==0.115.14
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.27.2
+idna==3.15
+iniconfig==2.1.0
+packaging==26.3
+pluggy==1.5.0
+pydantic==2.10.6
+pydantic_core==2.27.2
+pytest==8.3.5
+PyYAML==6.0.3
+setuptools==75.3.4
+sniffio==1.3.1
+starlette==0.44.0
+tomli==2.4.1
+typing_extensions==4.13.2
+uvicorn==0.33.0

@@ -1,0 +1,79 @@
+{
+  "payload_shortfalls": [
+    {
+      "event": "enterprise-pilot-ent-site-1-1",
+      "actual": 800,
+      "planned": 1200
+    },
+    {
+      "event": "enterprise-pilot-ent-site-2-1",
+      "actual": 800,
+      "planned": 1200
+    },
+    {
+      "event": "enterprise-pilot-ent-site-3-1",
+      "actual": 800,
+      "planned": 1200
+    },
+    {
+      "event": "enterprise-pilot-ent-site-4-1",
+      "actual": 800,
+      "planned": 1200
+    },
+    {
+      "event": "enterprise-pilot-ent-site-5-1",
+      "actual": 800,
+      "planned": 1200
+    },
+    {
+      "event": "fixed-pilot-fixed2-1",
+      "actual": 1000,
+      "planned": 1200
+    }
+  ],
+  "status": "completed_with_errors",
+  "counts": {
+    "completed": 126
+  },
+  "bytes_tx": 75600,
+  "bytes_rx": 73400,
+  "domains": {
+    "mobile": {
+      "counts": {
+        "completed": 30
+      },
+      "bytes_tx": 18000,
+      "bytes_rx": 18000,
+      "active_planned_mbps": 0.0
+    },
+    "fixed": {
+      "counts": {
+        "completed": 60
+      },
+      "bytes_tx": 36000,
+      "bytes_rx": 35800,
+      "active_planned_mbps": 0.0
+    },
+    "enterprise": {
+      "counts": {
+        "completed": 30
+      },
+      "bytes_tx": 18000,
+      "bytes_rx": 16000,
+      "active_planned_mbps": 0.0
+    },
+    "peering": {
+      "counts": {
+        "completed": 6
+      },
+      "bytes_tx": 3600,
+      "bytes_rx": 3600,
+      "active_planned_mbps": 0.0
+    }
+  },
+  "failures": [],
+  "run_id": "20261001T145025-ce2b3d55",
+  "agents": 21,
+  "plan_hash": "00bafe30a831734afeb8e9515ae4322d1fef35ea723ab748bb44468d5ab1d4ac",
+  "purpose": "connectivity pilot; not calibrated full baseline"
+}

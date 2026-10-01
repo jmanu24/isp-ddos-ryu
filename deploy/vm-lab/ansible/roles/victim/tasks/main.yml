@@ -35,6 +35,7 @@
           post-up ip route add {{ ent_lan_cidr }} dev {{ victim_ent_dc_iface }} || true
           post-up ip route add {{ backbone_mobile_cidr }} dev {{ victim_ent_dc_iface }} || true
           post-up ip route add {{ backbone_fixed_cidr }} dev {{ victim_ent_dc_iface }} || true
+          post-up ip route replace 10.20.0.0/24 via {{ hostvars['bng'].own_backbone_addr }} dev {{ victim_ent_dc_iface }}
           post-up ip route add {{ backbone_peering_cidr }} dev {{ victim_ent_dc_iface }} || true
           post-up ip route add {{ peering_cidr }} via {{ hostvars['br'].own_backbone_addr }} dev {{ victim_ent_dc_iface }} || true
   notify: restart networking

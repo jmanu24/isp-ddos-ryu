@@ -11,3 +11,10 @@ deploy/vm-lab/*.iso
 deploy/vm-lab/lab_control_pubkey.pub
 simulation/output/
 analysis/results/
+
+/.runtime/
+/.codex-backups/
+/benign-lab-integrado.zip
+/deploy/vm-lab/tools/benign-lab/.venv/
+/deploy/vm-lab/tools/benign-lab/data/
+/deploy/vm-lab/ansible/roles/victim/*.before-benign-route

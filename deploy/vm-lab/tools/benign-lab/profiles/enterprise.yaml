@@ -1,0 +1,177 @@
+domain:
+  name: enterprise
+
+population:
+
+  sites:
+    - ent-site-1
+    - ent-site-2
+    - ent-site-3
+    - ent-site-4
+    - ent-site-5
+
+services:
+
+  central:
+    - victim-web
+
+  distributed:
+    - ssh
+    - file
+    - application
+
+directionality:
+  target_dl_ul_ratio: 3.0
+
+session_mix:
+
+  http_https:
+    weight: 0.50
+
+    duration_s:
+      distribution: uniform
+      min: 2
+      max: 30
+
+    object_size_bytes:
+      distribution: truncated_pareto
+      minimum: 50000
+      maximum: 5000000
+      alpha: 1.3
+
+    think_time_s:
+      distribution: exponential
+      mean: 15
+
+  dns:
+    weight: 0.20
+
+    protocol: udp
+
+    packet_size_bytes:
+      distribution: uniform
+      min: 60
+      max: 512
+
+    interval_s:
+      distribution: uniform
+      min: 5
+      max: 60
+
+  ssh:
+    weight: 0.10
+
+    protocol: tcp
+
+    duration_s:
+      distribution: uniform
+      min: 30
+      max: 180
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.0002
+      max: 0.002
+
+  file_transfer:
+    weight: 0.10
+
+    protocol: tcp
+
+    file_size_mb:
+      distribution: uniform
+      min: 5
+      max: 50
+
+    direction:
+      download_probability: 0.65
+      upload_probability: 0.35
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.02
+      max: 0.08
+
+  mail_other:
+    weight: 0.10
+
+    protocol: tcp
+
+    object_size_kb:
+      distribution: uniform
+      min: 10
+      max: 5000
+
+communication_matrix:
+
+  - source: ent-site-1
+    destination: victim-web
+    weight: 4
+
+  - source: ent-site-2
+    destination: victim-web
+    weight: 3
+
+  - source: ent-site-3
+    destination: victim-web
+    weight: 2
+
+  - source: ent-site-4
+    destination: victim-web
+    weight: 2
+
+  - source: ent-site-5
+    destination: victim-web
+    weight: 3
+
+  - source: ent-site-3
+    destination: ent-site-1
+    services:
+      - ssh
+    weight: 1
+
+  - source: ent-site-4
+    destination: ent-site-2
+    services:
+      - file_transfer
+    weight: 1
+
+  - source: ent-site-1
+    destination: ent-site-5
+    services:
+      - http_https
+    weight: 1
+
+  - source: ent-site-2
+    destination: ent-site-4
+    services:
+      - dns
+      - mail_other
+    weight: 1
+
+special_benign_events:
+
+  - name: enterprise_legitimate_file_transfer
+
+    source: ent-site-4
+    destination: ent-site-2
+
+    start_s:
+      distribution: uniform
+      min: 395
+      max: 410
+
+    duration_s:
+      distribution: uniform
+      min: 20
+      max: 30
+
+    protocol: tcp
+
+    rate_fraction:
+      distribution: uniform
+      min: 0.15
+      max: 0.20
+
+    label: benign
+

@@ -1,0 +1,39 @@
+# COPY to lab.yaml; replace management IPs, namespaces, capacities and paths.
+# Management addresses and enterprise target addresses below are placeholders.
+# Data-plane traffic must route through the actual mobile/fixed/enterprise/peering paths.
+capacity_mbps: {mobile: 100, fixed: 100, enterprise: 100, peering: 100}
+allowed_target_cidrs: [10.0.0.0/8]
+max_clock_skew_s: 0.25
+start_lead_s: 5
+nodes:
+  ue1: {adapter: ssh_netns, host: 10.10.0.11, user: lab, namespace: ue1, sudo: true}
+  ue2: {adapter: ssh_netns, host: 10.10.0.11, user: lab, namespace: ue2, sudo: true}
+  ue3: {adapter: ssh_netns, host: 10.10.0.11, user: lab, namespace: ue3, sudo: true}
+  ue4: {adapter: ssh_netns, host: 10.10.0.11, user: lab, namespace: ue4, sudo: true}
+  ue5: {adapter: ssh_netns, host: 10.10.0.11, user: lab, namespace: ue5, sudo: true}
+  fixed1: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed1, sudo: true}
+  fixed2: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed2, sudo: true}
+  fixed3: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed3, sudo: true}
+  fixed4: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed4, sudo: true}
+  fixed5: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed5, sudo: true}
+  fixed6: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed6, sudo: true}
+  fixed7: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed7, sudo: true}
+  fixed8: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed8, sudo: true}
+  fixed9: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed9, sudo: true}
+  fixed10: {adapter: ssh_netns, host: 10.10.0.12, user: lab, namespace: fixed10, sudo: true}
+  ent-site-1: {adapter: ssh, host: 10.10.0.21, user: lab}
+  ent-site-2: {adapter: ssh, host: 10.10.0.22, user: lab}
+  ent-site-3: {adapter: ssh, host: 10.10.0.23, user: lab}
+  ent-site-4: {adapter: ssh, host: 10.10.0.24, user: lab}
+  ent-site-5: {adapter: ssh, host: 10.10.0.25, user: lab}
+  'peer-flow*': {adapter: ssh, host: 10.10.0.31, user: lab}
+targets:
+  victim-web: {host: 10.55.0.100, tcp_port: 9001, udp_port: 9002, http_port: 8088}
+  ent-site-1: {host: 10.61.1.100, tcp_port: 9001, udp_port: 9002, http_port: 8088}
+  ent-site-2: {host: 10.61.2.100, tcp_port: 9001, udp_port: 9002, http_port: 8088}
+  ent-site-3: {host: 10.61.3.100, tcp_port: 9001, udp_port: 9002, http_port: 8088}
+  ent-site-4: {host: 10.61.4.100, tcp_port: 9001, udp_port: 9002, http_port: 8088}
+  ent-site-5: {host: 10.61.5.100, tcp_port: 9001, udp_port: 9002, http_port: 8088}
+# Per node optional: python, agent_path, identity_file, port (SSH).
+# Default remote agent_path: /opt/benign-lab/benign_lab/agent.py
+# Native local namespace example: {adapter: netns, namespace: ue1, sudo: true}

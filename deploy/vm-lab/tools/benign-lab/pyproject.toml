@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61,<76"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "benign-lab"
+version = "1.0.0"
+description = "Reproducible BENIGN_V1 traffic orchestration for isolated laboratories"
+requires-python = ">=3.8"
+dependencies = ["fastapi>=0.115,<0.116", "uvicorn>=0.30,<0.34", "PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<8.4", "httpx>=0.27,<0.28"]
+
+[project.scripts]
+benign-lab = "benign_lab.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["benign_lab*"]
+
+[tool.setuptools.package-data]
+benign_lab = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

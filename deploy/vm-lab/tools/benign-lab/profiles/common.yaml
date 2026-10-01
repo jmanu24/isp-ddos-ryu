@@ -1,0 +1,59 @@
+profile:
+  name: BENIGN_V1
+  version: 1
+
+experiment:
+  duration_s: 600
+  warmup_s: 60
+  evaluation_window_s: 5
+  start_jitter_s:
+    min: 0
+    max: 30
+
+random:
+  master_seed: 1
+  independent_domain_rng: true
+
+ground_truth:
+  window_s: 5
+  benign_label: 0
+  attack_label: 1
+
+rate_model:
+  # Todas las tasas se expresan como fracción de la capacidad
+  # configurada para cada dominio.
+  unit: capacity_fraction
+
+domains:
+  mobile:
+    target_mean_load: 0.15
+    normal_max_load: 0.25
+    benign_peak_load: 0.35
+
+  fixed:
+    target_mean_load: 0.18
+    normal_max_load: 0.28
+    benign_peak_load: 0.40
+
+  enterprise:
+    target_mean_load: 0.15
+    normal_max_load: 0.25
+    benign_peak_load: 0.35
+
+  peering:
+    target_mean_load: 0.20
+    normal_max_load: 0.30
+    benign_peak_load: 0.40
+
+output:
+  plan_file: benign_plan.json
+  event_file: generated_events.csv
+  window_file: ground_truth_windows.csv
+
+
+# Implementation extension: explicit extra benign bulk sessions only if the
+# specified session mix cannot reach the mean target while respecting peak caps.
+# Reported separately as calibration_bulk in the plan. Set false to preserve
+# the unaugmented model and receive a warning when the mean is unreachable.
+normalization:
+  supplement_bulk_when_sparse: true

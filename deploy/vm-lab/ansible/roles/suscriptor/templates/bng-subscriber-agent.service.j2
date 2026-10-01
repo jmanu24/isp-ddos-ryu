@@ -18,7 +18,8 @@ ExecStart=/usr/bin/python3 simulation/bng_subscriber_agent.py \
     --target-ip {{ bng_target_ip }} \
     --gateway-ip {{ bng_access_addr }} \
     --parent-interface {{ suscriptor_access_iface }} \
-    --fifo /run/bng-agent/cmd
+    --fifo /run/bng-agent/cmd \
+    --no-baseline
 Restart=on-failure
 RestartSec=2
 StandardOutput=append:/var/log/bng-subscriber-agent.log

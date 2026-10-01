@@ -1,0 +1,18 @@
+# Demonstration: all logical sources share one local process/network stack.
+# Use simulation first. Lab mode requires the bundled receiver on localhost.
+capacity_mbps: {mobile: 100, fixed: 100, enterprise: 100, peering: 100}
+allowed_target_cidrs: [127.0.0.0/8]
+max_clock_skew_s: 0.5
+start_lead_s: 2
+nodes:
+  'ue*': {adapter: local}
+  'fixed*': {adapter: local}
+  'ent-site-*': {adapter: local}
+  'peer-flow*': {adapter: local}
+targets:
+  victim-web: &local {host: 127.0.0.1, tcp_port: 9001, udp_port: 9002, http_port: 8088}
+  ent-site-1: *local
+  ent-site-2: *local
+  ent-site-3: *local
+  ent-site-4: *local
+  ent-site-5: *local

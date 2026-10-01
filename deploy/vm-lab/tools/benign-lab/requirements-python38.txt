@@ -1,0 +1,7 @@
+# Resolve on Python 3.8; requirements.lock is replaced after verification.
+setuptools>=61,<76
+fastapi>=0.115,<0.116
+uvicorn>=0.30,<0.34
+PyYAML>=6,<7
+pytest>=8,<8.4
+httpx>=0.27,<0.28

@@ -1,0 +1,11 @@
+[Unit]
+Description=BENIGN Lab web controller Python 3.8
+After=network-online.target
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab
+EnvironmentFile=/home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/web.env
+ExecStart=/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab/.venv/bin/benign-lab serve --host 127.0.0.1 --port 8780 --lab /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab/config/lab.connected.yaml --data /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/data
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target

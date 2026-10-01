@@ -1,0 +1,133 @@
+domain:
+  name: peering
+
+population:
+  flow_pool_size: 100
+
+concurrency:
+  active_flows:
+    distribution: uniform_integer
+    min: 20
+    max: 60
+
+protocol_mix_by_bytes:
+
+  tcp: 0.68
+  udp: 0.28
+  icmp: 0.01
+  other: 0.03
+
+flow_classes:
+
+  short_tcp:
+
+    protocol: tcp
+    weight: 0.35
+
+    duration_s:
+      distribution: lognormal
+      median: 1.0
+      sigma: 1.0
+      maximum: 5
+
+    payload_kb:
+      distribution: lognormal
+      median: 50
+      sigma: 1.5
+      maximum: 1000
+
+  long_tcp:
+
+    protocol: tcp
+    weight: 0.33
+
+    duration_s:
+      distribution: uniform
+      min: 10
+      max: 120
+
+    packet_size_bytes:
+      distribution: uniform
+      min: 900
+      max: 1500
+
+  interactive_udp:
+
+    protocol: udp
+    weight: 0.12
+
+    duration_s:
+      distribution: uniform
+      min: 5
+      max: 120
+
+    packet_size_bytes:
+      distribution: uniform
+      min: 100
+      max: 800
+
+  bulk_udp:
+
+    protocol: udp
+    weight: 0.16
+
+    duration_s:
+      distribution: uniform
+      min: 5
+      max: 60
+
+    packet_size_bytes:
+      distribution: uniform
+      min: 800
+      max: 1400
+
+  icmp:
+
+    protocol: icmp
+    weight: 0.01
+
+    packet_size_bytes:
+      distribution: uniform
+      min: 64
+      max: 256
+
+  other:
+
+    protocol: other
+    weight: 0.03
+
+rate_envelope:
+
+  interval_s: 10
+
+  load_fraction:
+    distribution: bounded_random_walk
+
+    initial: 0.20
+
+    minimum: 0.10
+    maximum: 0.30
+
+    step_sigma: 0.03
+
+benign_peak:
+
+  enabled: true
+
+  start_s:
+    distribution: uniform
+    min: 450
+    max: 500
+
+  duration_s:
+    distribution: uniform
+    min: 10
+    max: 30
+
+  load_fraction:
+    distribution: uniform
+    min: 0.35
+    max: 0.40
+
+  label: benign
+

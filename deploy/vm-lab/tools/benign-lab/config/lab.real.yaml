@@ -1,0 +1,355 @@
+# Complete null values before generating a lab plan. configured=true enables each source.
+require_explicit_mapping: true
+capacity_mbps:
+  mobile: null
+  fixed: null
+  enterprise: null
+  peering: null
+allowed_target_cidrs:
+- 10.0.0.0/8
+max_clock_skew_s: 0.25
+start_lead_s: 5
+topology:
+  victim: 10.55.0.100
+  mobile_backbone: 10.91.0.0/30
+  fixed_backbone: 10.92.0.0/30
+  peering_backbone: 10.93.0.0/30
+  fixed_services:
+  - accel-ppp
+  - FreeRADIUS
+  - DHCP/IPoE
+nodes:
+  ue1:
+    configured: false
+    adapter: ssh_netns
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    namespace: ue1
+    sudo: true
+  ue2:
+    configured: false
+    adapter: ssh_netns
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    namespace: ue2
+    sudo: true
+  ue3:
+    configured: false
+    adapter: ssh_netns
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    namespace: ue3
+    sudo: true
+  ue4:
+    configured: false
+    adapter: ssh_netns
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    namespace: ue4
+    sudo: true
+  ue5:
+    configured: false
+    adapter: ssh_netns
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    namespace: ue5
+    sudo: true
+  fixed1:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed2:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed3:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed4:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed5:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed6:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed7:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed8:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed9:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  fixed10:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+    access_mode: ipoe_bound
+    session_id: null
+  ent-site-1:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+  ent-site-2:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+  ent-site-3:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+  ent-site-4:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+  ent-site-5:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+  peer-flow*:
+    configured: false
+    adapter: ssh
+    host: null
+    user: null
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/benign_lab/agent.py
+    source_ip: null
+    interface: null
+    expected_gateway: null
+    check_route: true
+targets:
+  victim-web:
+    host: 10.55.0.100
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-1:
+    host: null
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-2:
+    host: null
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-3:
+    host: null
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-4:
+    host: null
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088
+  ent-site-5:
+    host: null
+    tcp_port: 9001
+    udp_port: 9002
+    http_port: 8088

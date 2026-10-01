@@ -263,3 +263,27 @@ deliberately distinct from `FLOW_LOCAL_AS`/`EXABGP_LOCAL_AS` (65001/65002,
 see `webtool/peering_ops.py`), which stay reserved for the *internal*
 `flow`↔`exabgp` FlowSpec control channel. This lab's `br`↔`peer-router`
 session is a separate, real eBGP session for genuine route exchange.
+
+
+## BENIGN_V1 traffic tool
+
+The web-operated benign traffic tool is maintained in
+[`tools/benign-lab`](tools/benign-lab/README.md). The current deployment and
+verified host, namespace, interface and subscriber mappings are documented in
+[`CONNECTED_DEPLOYMENT.md`](tools/benign-lab/docs/CONNECTED_DEPLOYMENT.md).
+Use that deployment report for the inspected live VM operating systems.
+
+The controller runs on Python 3.8; remote workers also support the inspected
+Python 3.10 and 3.14 environments. Preserve `requirements.lock` when installing.
+The service is `benign-lab-web.service`, listening on controller localhost:8780.
+Access it through an SSH tunnel to `ubuntu@192.168.18.154`.
+
+Mobile uses five UE namespaces, Fixed uses ten IPoE subscribers, Enterprise
+uses five sites, and Peering uses the aggregate peer-router generator.
+The seed, BENIGN_V1 profiles, reusable `benign_plan.json`, SHA-256 `plan_hash`
+and five-second ground truth windows are preserved.
+
+Credentials and experiment output belong under `.runtime/benign-lab/`, outside
+the versioned tool. Set the four domain capacities in `config/lab.connected.yaml`
+before running a scientific baseline. The connected pilot report records
+successful connectivity and observed payload shortfalls; it is not a baseline.

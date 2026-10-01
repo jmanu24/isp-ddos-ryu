@@ -440,7 +440,7 @@ def render_ansible_group_vars(topology: dict, out_dir: Path) -> None:
         # match simulation/bng_ipoe_config.py's own _MAX_SUBSCRIBERS in
         # simulation/bng_subscriber_agent.py (the largest subscriber_
         # count any scenario there uses, distributed_*/low_and_slow's 8).
-        "bng_subscriber_count": 8,
+        "bng_subscriber_count": 10,
         "ent_lan_cidr": topology["networks"]["ENT_LAN"]["cidr"],
         "bgp_br_as": topology["bgp"]["br_as"],
         "bgp_peer_router_as": topology["bgp"]["peer_router_as"],
