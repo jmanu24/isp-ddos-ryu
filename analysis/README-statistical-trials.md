@@ -43,26 +43,86 @@ el log es la única fuente para ellos.
   contador de interfaz, no una captura de paquetes -- documentado así en
   `Lab.sample_tx_packets()`, no se debe citar como una medición de
   precisión de captura.
-- **`traffic_recovered`** (columna en `trials_long.csv`): tras Tr, se envía
-  tráfico real desde la MISMA fuente del ataque (ping real) y se registra si
-  llegó. Esto es lo que efectivamente valida "recuperación del servicio" --
-  Tr por sí solo únicamente certifica que el log mostró un
-  `UNBLOCK`/`UNTHROTTLE`. `None` (no `False`) en Broadband: esa fuente no
-  tiene una IP de origen estable para volver a sondear (cada sesión vive en
-  un macvlan que el agente de suscriptor administra) -- su propia señal de
-  recuperación es el chequeo de 8 sesiones IPoE activas de
-  `wait_for_baseline()`, un mecanismo distinto, no una omisión.
+- **`traffic_recovered`** (columna en `trials_long.csv`): tras Tr, se hace una
+  conexión TCP real al puerto 80 de la víctima (el servicio HTTP real que
+  expone `roles/victim`, NO un ping ICMP -- un ping solo prueba alcance
+  ICMP, no que el servicio TCP/UDP que el ataque realmente apuntaba vuelva a
+  responder) desde la MISMA fuente del ataque, y se registra si la conexión
+  tuvo éxito. Esto es lo que efectivamente valida "recuperación del
+  servicio" -- Tr por sí solo únicamente certifica que el log mostró un
+  `UNBLOCK`/`UNTHROTTLE`. Broadband SÍ tiene esta sonda (antes no la tenía):
+  se enlaza a `macvlan1` (el suscriptor #1, siempre uno de los atacantes
+  cuando `bng_subscriber_agent.py` lanza cualquier escenario), ya que ese
+  host no tiene una única IP propia estable como los demás dominios.
+- **`mitigation_withdrawn`** (columna en `trials_long.csv`): una conexión
+  HTTP exitosa NO prueba que la regla específica de este ensayo (TCP/443 o
+  UDP/53, según el vector) haya sido retirada -- podría coexistir con un
+  bloqueo obsoleto sobre ese 5-tuple exacto mientras el puerto 80 sigue
+  funcionando por otra vía. Se consulta `/api/blocks` del propio controlador
+  (desde `orchestrator`, loopback) y se verifica que no quede ningún bloqueo
+  activo para (fuente, destino, puerto, protocolo) de este ensayo. `None` en
+  cualquiera de las dos columnas (nunca `False`) significa que no hay fuente
+  única que sondear (p. ej. la fila de Enterprise en `MULTIDOMAIN_FLOOD`,
+  cuyo origen es comodín) o que la sonda no pudo ejecutarse -- nunca se
+  reporta una medición ausente como una falla.
+- **`generator_confirmed`** (columna en `trials_long.csv`): confirmación
+  independiente de que el generador del ataque realmente corrió, leyendo su
+  propio log por-ensayo en busca de marcadores de fallo conocidos (binario
+  no encontrado, permisos, traceback de Python). `observed_pps` por sí solo
+  no basta -- suma los `tx_packets` de TODAS las interfaces del host,
+  incluyendo tráfico de administración SSH, así que un generador que nunca
+  llegó a enviar nada podría dejar una lectura pequeña pero distinta de cero.
 
-Las pruebas TCP, UDP e ICMP usan exactamente un origen. La prueba
-`MULTIDOMAIN_FLOOD` necesita por definición más de un dominio; utiliza
-exactamente un origen por dominio y el mismo destino, protocolo y puerto.
-Broadband siempre utiliza una sola sesión atacante; las otras siete sesiones
-permanecen en baseline. **Mobile usa un UE representativo (`ue1`, emparejado
-con `du`/`ran`=cu1)**, no los 5 UEs del dominio -- igual que Enterprise usa
-solo `ent-site-1` (de 5) y Peering solo `peer-router` (su única fuente
-posible). Los resultados de Mobile en esta campaña caracterizan la cadena
-`ran(cu1)→du(du1)→ue1`, no el comportamiento agregado de los 5 UEs/DUs del
-dominio.
+Una fila cuyo `status` sea `NO_DETECTION` (ver más abajo) exige
+`observed_pps >= MIN_CONFIRMED_ATTACK_PPS` (un piso muy por encima del
+tráfico de administración incidental) **y** `generator_confirmed is not
+False` -- un `observed_pps` apenas positivo ya no basta por sí solo.
+
+Las pruebas TCP, UDP e ICMP usan exactamente un origen, salvo Enterprise en
+`MULTIDOMAIN_FLOOD` (ver abajo). La prueba `MULTIDOMAIN_FLOOD` necesita por
+definición más de un dominio; cada dominio usa el mismo destino, protocolo y
+puerto, pero **Enterprise lanza su ataque desde sus 5 hosts `ent-site-1..5`
+simultáneamente** (no solo `ent-site-1`) -- un solo atacante por dominio
+nunca puede cruzar `config.settings.DIST_MIN_SOURCES` (5), así que antes
+este escenario no podía demostrar `MULTIDOMAIN_DISTRIBUTED_ATTACK` bajo
+ninguna combinación de `--domains` (máximo 4 dominios = 4 fuentes). **Nota
+de diseño:** esto significa que Enterprise por sí solo ya cruza el umbral de
+fuentes distribuidas (`DDOS_DISTRIBUTED`), sin necesitar correlación
+multidominio -- un detector puramente aislado por dominio también lo
+detectaría. Este escenario demuestra que la arquitectura puede identificar
+y atribuir correctamente un ataque de 5+ fuentes repartidas en varios
+dominios (`MULTIDOMAIN_DISTRIBUTED_ATTACK`, ver más abajo), pero NO es el
+mismo escenario que "ataque repartido por debajo de los umbrales locales de
+cada dominio, solo detectable agregando entre dominios" -- ese escenario
+(cada dominio individualmente bajo su propio umbral) demostraría la ventaja
+real de la correlación multidominio de forma más directa, y este runner
+todavía no lo implementa como una condición separada.
+
+Broadband siempre utiliza una sola sesión atacante (fuera de su propio rol
+en `MULTIDOMAIN_FLOOD`, igual que las demás); las otras siete sesiones
+permanecen en baseline. Broadband además detiene explícitamente su propio
+generador al final de la ventana de `attack_duration`, igual que los demás
+dominios (antes seguía atacando hasta el `stop()` final del ensayo, ya
+avanzada la espera de detección/mitigación/recuperación -- ver
+`run_trial()`). **Mobile usa un UE representativo (`ue1`, emparejado con
+`du`/`ran`=cu1)**, no los 5 UEs del dominio -- igual que Peering solo usa
+`peer-router` (su única fuente posible). Los resultados de Mobile en esta
+campaña caracterizan la cadena `ran(cu1)→du(du1)→ue1`, no el comportamiento
+agregado de los 5 UEs/DUs del dominio.
+
+## Atribución de una detección multidominio
+
+Una `MULTIDOMAIN_DISTRIBUTED_ATTACK`/`DDOS_DISTRIBUTED` genera UNA sola
+`DetectionResult`, pero con fuentes repartidas en varios dominios
+(`DetectionResult.source_domains`). El controlador emite una línea
+`DETECTION: ATTACK_DETECTED` **por cada dominio que realmente contribuyó**
+(no solo bajo el dominio "representativo" que el motor eligió para el resto
+de los campos) -- así, la fila de cada dominio en esta campaña ve su propia
+línea de detección correctamente etiquetada, en vez de que dominios como
+Mobile o Peering queden sin detección (`INCOMPLETE`/`NO_DETECTION`) solo
+porque el motor escogió a Enterprise como representativo. Cada línea incluye
+`domains=` y `domain_sources=` para trazabilidad completa de quién
+contribuyó.
 
 ## Modo de ESCENARIO: `--mode {isolated,multidomain,both}`
 
@@ -135,6 +195,16 @@ Una corrida exitosa de Mobile demuestra que la cadena `ran(cu1)→du(du1)→ue1`
    `traffic_recovered`, y cuántos necesitaron intervención entre ciclos --
    esta última cifra es la métrica de estabilidad real; su objetivo es 0.
 
+`--resume` CONTINÚA la secuencia, no la reinicia: los números de ciclo ya
+completados (`status` OK/DRY_RUN/NO_DETECTION) en el `--output-dir` se
+saltan y la campaña sigue desde el primer ciclo faltante -- una campaña de
+30 ciclos que llegó al 18 antes de interrumpirse corre 19..30 al reanudar,
+nunca un 1..30 ambiguo encima de lo que ya existe. Código de salida: `0`
+campaña completa y toda recuperación confirmada; `2` algún ciclo falló
+(`ERROR`/`INCOMPLETE`); `3` todos los ciclos completaron detección/
+mitigación pero al menos uno dejó `traffic_recovered`/`mitigation_withdrawn`
+en `False` (recuperación sin confirmar, distinto de un fallo real).
+
 ```bash
 python3 analysis/run_vm_lab_trials.py --repeatability-cycles 20 \
   --domains mobile \
@@ -167,30 +237,34 @@ advertencia y la campaña sigue con el siguiente trabajo. Ambos quedan fuera
 del conjunto de corridas ya completadas, así que `--resume` los vuelve a
 intentar como cualquier combinación todavía no resuelta.
 
-El healthcheck de arranque (y el que corre antes de cada corrida) solo
-revisa las VMs/servicios de los dominios que `--domains` realmente
-seleccionó -- una campaña sin `mobile` nunca queda bloqueada, ni
-ralentizada, por la inestabilidad conocida de ese dominio.
+El healthcheck de arranque (y el que corre antes de cada corrida), la
+limpieza entre corridas (`cleanup()`) y la disponibilidad de VMs
+(`ensure_vm_reachable()`) ahora respetan `--domains` de punta a punta: una
+campaña sin `mobile` nunca queda bloqueada, ralentizada, ni ve sus propios
+generadores detenidos, por la inestabilidad conocida de ese dominio. Si una
+VM del propio dominio Mobile (`ric`/`core5g`/`ran`/`du`/`ue`) está
+inalcanzable, ya no se aborta la campaña entera en esta fase -- se difiere
+al manejo tolerante descrito arriba (el chequeo de la cadena ya trata una VM
+inalcanzable como una cadena no sana, sin necesidad de abortar antes de
+llegar ahí).
 
 ## `NO_DETECTION`: ausencia de detección como resultado válido
 
-Si el ataque se confirma realmente lanzado (`observed_pps > 0`, medido por
-`Lab.sample_tx_packets()`) pero nunca aparece una línea `ATTACK_DETECTED`
-dentro de `--event-timeout`, la fila queda `status=NO_DETECTION` -- un
-resultado experimental válido para una comparación de sensibilidad A/B
-(`--detection-mode isolated` vs. `multidomain`), no una falla del script.
-`NO_DETECTION`, igual que `INVALID`/`INVALID_SCENARIO`, no detiene la
-campaña y sí cuenta como corrida completada para `--resume`. Una detección
-que SÍ ocurrió pero cuya mitigación/recuperación nunca llegó sigue siendo
-`INCOMPLETE` (síntoma de un bug real del pipeline, como el de FLOWSPEC de
-peering encontrado en esta misma campaña) y sigue deteniendo la campaña.
-
-`MULTIDOMAIN_FLOOD` lanza ahora el ataque de enterprise desde los 5 hosts
-`ent-site-1..5` (no solo uno) -- un solo atacante por dominio nunca puede
-cruzar `config.settings.DIST_MIN_SOURCES` (5), así que antes este escenario
-no podía demostrar `MULTIDOMAIN_DISTRIBUTED_ATTACK` bajo ninguna selección
-de `--domains` (máximo 4 dominios = 4 fuentes). Con enterprise participando,
-la campaña sí puede alcanzar el umbral por sí sola.
+Si el ataque se confirma realmente lanzado -- `observed_pps >=
+MIN_CONFIRMED_ATTACK_PPS` **y** `generator_confirmed is not False` (ver la
+sección de trazabilidad de columnas más arriba; `observed_pps > 0` a secas
+ya no basta, un generador que nunca lanzó nada podía dejar una lectura
+pequeña pero distinta de cero solo por tráfico de administración SSH) --
+pero nunca aparece una línea `ATTACK_DETECTED` dentro de `--event-timeout`,
+la fila queda `status=NO_DETECTION` -- un resultado experimental válido para
+una comparación de sensibilidad A/B (`--detection-mode isolated` vs.
+`multidomain`), no una falla del script. `NO_DETECTION`, igual que
+`INVALID`/`INVALID_SCENARIO`, no detiene la campaña y sí cuenta como corrida
+completada para `--resume` (siempre que `traffic_recovered`/
+`mitigation_withdrawn` tampoco sean `False`). Una detección que SÍ ocurrió
+pero cuya mitigación/recuperación nunca llegó sigue siendo `INCOMPLETE`
+(síntoma de un bug real del pipeline, como el de FLOWSPEC de peering
+encontrado en esta misma campaña) y sigue deteniendo la campaña.
 
 ## Manifiesto de campaña (`--resume`)
 
@@ -255,6 +329,13 @@ con `--inventory /ruta/absoluta/inventory.ini`.
 La ejecución completa puede tardar varias horas porque cada corrida espera el
 desbloqueo real y un periodo de enfriamiento. No deben lanzarse ataques
 manuales mientras esté activa.
+
+Código de salida: `0` campaña completa y toda recuperación confirmada; `2`
+alguna fila real falló (`ERROR`/`INCOMPLETE` -- reintentar con `--resume`
+tras investigar la causa); `3` la campaña terminó y cada fila completó
+detección/mitigación, pero al menos una dejó `traffic_recovered`/
+`mitigation_withdrawn` en `False` (recuperación sin confirmar -- distinto de
+un fallo real del pipeline; revisar `trials_long.csv`).
 
 Para una validación corta del procedimiento:
 

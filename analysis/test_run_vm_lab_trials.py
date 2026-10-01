@@ -435,10 +435,16 @@ class TrialParsingTests(unittest.TestCase):
         lab.launch("enterprise", "UDP_FLOOD", "run1", 20)
         self.assertEqual(lab.hosts, ["ent-site-1"])
 
-    def test_source_matches_accepts_wildcard_for_enterprise(self):
+    def test_source_matches_accepts_wildcard_for_any_domain(self):
+        # 2nd review pass, finding 1: the controller now emits one
+        # ATTACK_DETECTED line PER CONTRIBUTING DOMAIN, so a line's own
+        # [domain] bracket is architecturally guaranteed correct --
+        # wildcard "*" sources are no longer restricted to
+        # broadband/enterprise.
         self.assertTrue(source_matches("enterprise", "10.70.0.11", "*"))
         self.assertTrue(source_matches("broadband", "", "*"))
-        self.assertFalse(source_matches("mobile", "10.45.1.2", "*"))
+        self.assertTrue(source_matches("mobile", "10.45.1.2", "*"))
+        self.assertTrue(source_matches("peering", "10.30.0.2", "*"))
 
     def test_multidomain_flood_enterprise_row_source_is_wildcard(self):
         lab = Lab(Path("."), Path("inventory.ini"), dry_run=True)
@@ -448,6 +454,115 @@ class TrialParsingTests(unittest.TestCase):
         peering_row = next(r for r in rows if r.domain == "peering")
         self.assertEqual(enterprise_row.source, "")
         self.assertNotEqual(peering_row.source, "")
+
+    # --- 2nd review pass, finding 2: generator_confirmed ---
+
+    def test_generator_confirmed_false_on_known_error_marker(self):
+        class ErrorLogLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+
+            def shell(self, host, command, **kwargs):
+                return "bash: hping3: command not found\n"
+
+        self.assertFalse(ErrorLogLab().generator_confirmed("enterprise", "run1"))
+
+    def test_generator_confirmed_true_on_clean_empty_log(self):
+        class CleanLogLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+
+            def shell(self, host, command, **kwargs):
+                return ""  # hping3's own happy-path default (non -V) output
+
+        self.assertTrue(CleanLogLab().generator_confirmed("enterprise", "run1"))
+
+    def test_generator_confirmed_none_for_broadband(self):
+        lab = Lab(Path("."), Path("inventory.ini"), dry_run=False)
+        self.assertIsNone(lab.generator_confirmed("broadband", "run1"))
+
+    def test_no_detection_requires_meaningful_pps_floor(self):
+        # A tiny nonzero reading (incidental SSH/management chatter) must
+        # NOT be accepted as confirmation the attack generator ran.
+        row = TrialResult("run1", 1, "enterprise", "UDP_FLOOD", "10.70.0.11", "10.55.0.100",
+                          observed_pps=2.0)
+        extract_result("", row, 1000.0)
+        self.assertEqual(row.status, "INCOMPLETE")
+
+    def test_no_detection_vetoed_by_generator_not_confirmed(self):
+        row = TrialResult("run1", 1, "enterprise", "UDP_FLOOD", "10.70.0.11", "10.55.0.100",
+                          observed_pps=500.0, generator_confirmed=False)
+        extract_result("", row, 1000.0)
+        self.assertEqual(row.status, "INCOMPLETE")
+
+    # --- 2nd review pass, finding 3: broadband respects attack_duration ---
+
+    def test_broadband_attack_is_stopped_after_the_attack_window(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+                self.commands = []
+
+            def shell(self, host, command, **kwargs):
+                self.commands.append((host, command))
+                return ""
+
+            def sample_tx_packets(self, domain, vector=""):
+                return 0
+
+            def generator_confirmed(self, domain, run_id, vector=""):
+                return None
+
+            def attack_start(self, domain, run_id, vector=""):
+                return 1000.0
+
+            def log_size(self):
+                return 0
+
+            def log_from(self, offset):
+                return ""
+
+        lab = CapturingLab()
+        run_trial(lab, 1, "UDP_FLOOD", ("broadband",), 0, 0, 1)
+        baseline_commands = [c for h, c in lab.commands if "baseline" in c]
+        # One from the explicit post-attack-window stop, one from the
+        # trial's own `finally: lab.stop(domain)` cleanup.
+        self.assertGreaterEqual(len(baseline_commands), 2)
+
+    # --- 2nd review pass, finding 5: cleanup()/healthcheck() scoping ---
+
+    def test_cleanup_only_stops_selected_domains(self):
+        class CapturingLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=True)
+                self.stopped = []
+
+            def stop(self, domain):
+                self.stopped.append(domain)
+
+        lab = CapturingLab()
+        lab.cleanup(("enterprise",))
+        self.assertEqual(lab.stopped, ["enterprise"])
+
+    # --- 2nd review pass, finding 6: repeatability --resume continues
+    # the sequence instead of restarting it ---
+
+    def test_repeatability_resume_skips_already_completed_cycles(self):
+        from run_vm_lab_trials import run_mobile_repeatability
+        import tempfile
+
+        previous = [
+            TrialResult("prev1", 1, "mobile", "UDP_FLOOD", "10.45.1.2", "10.55.0.100",
+                       status="OK", scenario_mode="repeatability"),
+            TrialResult("prev2", 2, "mobile", "UDP_FLOOD", "10.45.1.2", "10.55.0.100",
+                       status="OK", scenario_mode="repeatability"),
+        ]
+        lab = Lab(Path("."), Path("inventory.ini"), dry_run=True)
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory)
+            checkpoint = out_dir / "trials.jsonl"
+            rows = run_mobile_repeatability(lab, 3, 1, 5, 1, checkpoint, out_dir, previous)
+        self.assertEqual([r.iteration for r in rows], [3])
 
 
 if __name__ == "__main__":

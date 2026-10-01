@@ -35,6 +35,19 @@ DOMAINS = ("enterprise", "broadband", "mobile", "peering")
 VECTORS = ("TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "MULTIDOMAIN_FLOOD")
 TARGET_IP = "10.55.0.100"
 
+# 2nd review pass, finding 2: observed_pps sums tx_packets across EVERY
+# non-loopback interface on the host (Lab.sample_tx_packets()'s own
+# docstring already says so) -- that includes this very SSH/ansible
+# management traffic, not just the attack. A generator that silently
+# never launched (missing binary, bad args, permission error) could
+# still leave a small nonzero reading from incidental management
+# chatter alone and get wrongly accepted as a confirmed NO_DETECTION.
+# Not a precise calibration -- just comfortably above what a handful of
+# SSH round trips over an attack_duration-sized window produce, and
+# comfortably below any actually-running flood (hping3's own -i u1000
+# alone is already ~1000 pps nominal).
+MIN_CONFIRMED_ATTACK_PPS = 20.0
+
 # Campaign mode -- decided and validated ONCE, before the statistical
 # campaign starts (main(), via resolve_effective_vectors() below), not
 # discovered mid-run. Before this, "isolated" vs. "multidomain" was only
@@ -177,6 +190,8 @@ class TrialResult:
     scenario_mode: str = ""       # the campaign's --mode (isolated|multidomain|both)
     observed_pps: Optional[float] = None  # measured over the attack window -- see Lab.sample_tx_packets()
     traffic_recovered: Optional[bool] = None  # legitimate-traffic probe AFTER Tr_s -- see check_traffic_recovery()
+    generator_confirmed: Optional[bool] = None  # independent evidence the generator ran -- see Lab.generator_confirmed()
+    mitigation_withdrawn: Optional[bool] = None  # the block/throttle rule itself is gone -- see Lab.mitigation_withdrawn()
 
 
 class LabError(RuntimeError):
@@ -286,12 +301,21 @@ class Lab:
             )
         except (LabError, subprocess.TimeoutExpired):
             return "unknown"
-        lines = out.splitlines()
-        if not lines:
+        # Minor fix (2nd review pass): ansible's own ad-hoc output
+        # prepends a "<host> | CHANGED | rc=0 >>" header line before the
+        # command's real stdout -- the same shape log_size()/
+        # attack_start() already work around with a regex instead of a
+        # naive first-line read. A plain `out.splitlines()[0]` here would
+        # capture THAT header instead of the git hash it looks like it's
+        # reading, every single time.
+        m = re.search(r"(?m)^([0-9a-f]{7,40})\s*$", out)
+        if not m:
             return "unknown"
-        commit = lines[0].strip()
-        dirty = any(line.strip() for line in lines[1:])
-        return commit + ("-dirty" if dirty else "") if commit else "unknown"
+        commit = m.group(1)
+        # Any non-blank line after the matched commit line is `git status
+        # --porcelain`'s own dirty-file output.
+        dirty = bool(re.search(r"(?m)^\s*\S", out[m.end():]))
+        return commit + ("-dirty" if dirty else "")
 
     def set_detection_mode(self, mode: str) -> None:
         """Switches "isolated" vs. "multidomain" detection (item 1) by
@@ -400,6 +424,99 @@ class Lab:
                 except ValueError:
                     continue
         return total
+
+    # Known failure signatures to look for in a generator's own per-run
+    # log (2nd review pass, finding 2) -- hping3's default (non -V) mode
+    # prints NOTHING to stdout/stderr on a clean run (an EMPTY log is the
+    # expected happy path, not a red flag), so "file is non-empty" would
+    # be the wrong signal; these markers catch the actual failure modes
+    # instead (binary missing, bad args/permissions, or -- for the
+    # mobile flood's own python3 script -- an uncaught exception at
+    # startup, which prints a traceback before the loop even begins).
+    _GENERATOR_ERROR_MARKERS = (
+        "command not found",
+        "No such file or directory",
+        "Permission denied",
+        "Operation not permitted",
+        "Traceback (most recent call last)",
+        "No such device",
+    )
+
+    def generator_confirmed(self, domain: str, run_id: str, vector: str = "") -> Optional[bool]:
+        """Independent confirmation that the attack generator itself
+        actually ran, from its OWN per-run log
+        (/tmp/ddos-trial-{run_id}.log, written by both _hping_command's
+        and _mobile_command's `timeout N <generator> >LOG 2>&1`) --
+        observed_pps alone (host-wide /proc/net/dev counters) can't
+        distinguish real attack traffic from incidental management/SSH
+        chatter, so a generator that silently failed to launch could
+        otherwise still be accepted as a confirmed NO_DETECTION. Returns
+        False only on a recognized failure marker; True when the log was
+        read and had none; None (never a failure) when there's no such
+        per-run log for this domain at all (broadband's FIFO-driven
+        agent has no per-run file -- see run_trial()'s own broadband
+        recovery note for the same "not every domain has every signal"
+        pattern) or the log itself could not even be read."""
+        if self.dry_run or domain == "broadband":
+            return None
+        hosts = (ENTERPRISE_MULTIDOMAIN_HOSTS if domain == "enterprise" and vector == "MULTIDOMAIN_FLOOD"
+                 else (HOST_BY_DOMAIN[domain],))
+        read_any = False
+        for host in hosts:
+            try:
+                out = self.shell(host, f"cat /tmp/ddos-trial-{run_id}.log 2>/dev/null; true", timeout=10)
+            except (LabError, subprocess.TimeoutExpired):
+                continue
+            read_any = True
+            if any(marker in out for marker in self._GENERATOR_ERROR_MARKERS):
+                return False
+        return True if read_any else None
+
+    # vector -> the (dst_port, protocol) _hping_command()/_mobile_command()
+    # actually target -- used by mitigation_withdrawn() below to look up
+    # the SPECIFIC rule a trial's own mitigation should have created,
+    # not just "is anything blocked". 0 for ICMP, which carries no port.
+    _EXPECTED_BLOCK_TUPLE = {
+        "TCP_SYN_FLOOD": (443, "TCP"),
+        "UDP_FLOOD": (53, "UDP"),
+        "MULTIDOMAIN_FLOOD": (53, "UDP"),
+        "ICMP_FLOOD": (0, "ICMP"),
+    }
+
+    def mitigation_withdrawn(self, vector: str, src_ip: str, dst_ip: str) -> Optional[bool]:
+        """2nd review pass, finding 4: a successful TCP:80 probe
+        (check_traffic_recovery) proves the victim's HTTP service is
+        reachable again -- it does NOT prove the SPECIFIC rule this
+        trial's own attack triggered (TCP/443 or UDP/53, _EXPECTED_
+        BLOCK_TUPLE above) was ever actually withdrawn; a stale/wrongly-
+        scoped block on that exact 5-tuple could coexist with port 80
+        working fine. Queries the controller's own /api/blocks (web/
+        api.py, backed by OrchestrationController._sync_dashboard_blocks
+        -- the same source of truth `/api/blocks` returns to a human
+        looking at the dashboard) from orchestrator itself (loopback,
+        port 5000 -- see web/socket_server.py's own start_server()) and
+        checks whether a block matching this trial's own (src_ip, dst_ip,
+        dst_port, protocol) is still present. None (never a failure) when
+        src_ip is empty (a wildcard/distributed row -- see MULTIDOMAIN_
+        FLOOD's own enterprise source handling, no single 5-tuple to look
+        up) or the API couldn't be reached/parsed at all."""
+        if self.dry_run or not src_ip:
+            return None
+        dst_port, protocol = self._EXPECTED_BLOCK_TUPLE.get(vector, (0, ""))
+        try:
+            out = self.shell("orchestrator", "curl -s http://127.0.0.1:5000/api/blocks", timeout=10)
+            blocks = json.loads(out)
+        except (LabError, subprocess.TimeoutExpired, ValueError):
+            return None
+        if not isinstance(blocks, list):
+            return None
+        still_blocked = any(
+            isinstance(b, dict) and b.get("src_ip") == src_ip and b.get("dst_ip") == dst_ip
+            and (dst_port == 0 or b.get("dst_port") == dst_port)
+            and str(b.get("protocol", "")).upper() == protocol
+            for b in blocks
+        )
+        return not still_blocked
 
     def healthy(self, host: str, command: str) -> bool:
         try:
@@ -584,8 +701,14 @@ class Lab:
         else:
             self.shell(host, "pkill -f '[h]ping3' || true", check=False)
 
-    def cleanup(self) -> None:
-        for domain in DOMAINS:
+    def cleanup(self, domains: tuple = DOMAINS) -> None:
+        """`domains` (2nd review pass, finding 5 -- same scoping as
+        healthcheck()/startup_healthcheck()) -- this used to always stop
+        every domain's generator regardless of what was actually
+        selected, which could delay or disturb a domain's traffic that a
+        campaign never touched at all (e.g. pkilling hping3 on every
+        ent-site-N host even for a Mobile-only --domains run)."""
+        for domain in domains:
             self.stop(domain)
 
     def mobile_chain_healthy(self) -> bool:
@@ -658,8 +781,28 @@ class Lab:
         hosts = {"orchestrator", "victim"}
         for domain in domains:
             hosts.update(self._DOMAIN_HOSTS[domain])
+        # Mobile's own hosts are handled tolerantly here (2nd review pass,
+        # finding 5) -- a VM-level unreachability (ensure_vm_reachable's
+        # own govc-recovery attempt failed, not just a process inside it)
+        # used to raise straight out of this loop and abort the whole
+        # campaign before ever reaching the "mobile" block's own tolerant
+        # retry further down, even though that block already exists
+        # specifically to NOT let Mobile's known flakiness take the other
+        # domains down with it. mobile_chain_healthy() below calls
+        # self.healthy() on ran/du/ue itself and already treats an
+        # unreachable VM as just another unhealthy chain (caught, not
+        # raised) -- so this only needs to keep this loop from aborting
+        # before that block gets a chance to run.
+        mobile_hosts = set(self._DOMAIN_HOSTS["mobile"]) if "mobile" in domains else set()
         for host in sorted(hosts):
-            self.ensure_vm_reachable(host, host)
+            if host in mobile_hosts:
+                try:
+                    self.ensure_vm_reachable(host, host)
+                except LabError as exc:
+                    print(f"WARNING: {host} unreachable at startup ({exc}) -- "
+                          "deferring to mobile's own tolerant recovery below", file=sys.stderr)
+            else:
+                self.ensure_vm_reachable(host, host)
 
         print("\n=== startup healthcheck: shared services ===", flush=True)
         if not self.healthy("orchestrator", "systemctl is-active ryu-manager nfcapd exabgp"):
@@ -804,14 +947,20 @@ def canonical_domain(log_domain: str) -> str:
 
 def source_matches(domain: str, expected: str, observed: str) -> bool:
     if observed == "*":
-        # Item 7 fix: enterprise's MULTIDOMAIN_FLOOD now launches from
-        # ALL 5 ent-site-N hosts (ENTERPRISE_MULTIDOMAIN_HOSTS), the same
-        # multi-source shape broadband already had -- a detection could
-        # legitimately report an aggregate "*" source for either domain
-        # now. Isolated enterprise vectors (TCP/UDP/ICMP_FLOOD, single
-        # source) can never actually produce distinct_sources >=
-        # DIST_MIN_SOURCES on their own, so this is a no-op for them.
-        return domain in ("broadband", "enterprise")
+        # Accepted for ANY domain now (2nd review pass, finding 1):
+        # controller/ryu_controller_2.py emits one ATTACK_DETECTED line
+        # PER CONTRIBUTING DOMAIN for a DDOS_DISTRIBUTED/MULTIDOMAIN_
+        # DISTRIBUTED_ATTACK detection (DetectionResult.source_domains'
+        # real per-source attribution), not just one line under
+        # whichever domain _pick_representative() happened to choose --
+        # so a line's own [domain] bracket is now architecturally
+        # guaranteed to be a domain that genuinely contributed sources.
+        # Previously restricted to ("broadband", "enterprise") because
+        # ONLY those two domains could ever end up as the representative
+        # for their own multi-source attack; now that every contributing
+        # domain gets its own correctly-bracketed line, that restriction
+        # would just as wrongly reject a real Mobile/Peering line.
+        return True
     return not expected or observed == expected
 
 
@@ -854,7 +1003,8 @@ def extract_result(log: str, result: TrialResult, attack_epoch: float) -> TrialR
         result.error = ""
     elif (
         detection is None and mitigation is None and recovery is None
-        and result.observed_pps is not None and result.observed_pps > 0
+        and result.observed_pps is not None and result.observed_pps >= MIN_CONFIRMED_ATTACK_PPS
+        and result.generator_confirmed is not False
     ):
         # Item 7 fix: a genuine "the attack ran but nothing detected it"
         # outcome is a VALID experimental result for an A/B sensitivity
@@ -864,16 +1014,29 @@ def extract_result(log: str, result: TrialResult, attack_epoch: float) -> TrialR
         # mitigated) produces, which main()'s own loop treats as fatal
         # and aborts the whole campaign on. Distinguished here from that
         # case by requiring INDEPENDENT confirmation the attack actually
-        # sent traffic (observed_pps, from Lab.sample_tx_packets()'s own
-        # before/after window) -- not just "no detection line appeared",
-        # which could equally mean the attack itself never launched. A
-        # detection that DID fire but whose mitigation/recovery never
+        # sent traffic -- not just "no detection line appeared", which
+        # could equally mean the attack itself never launched.
+        #
+        # 2nd review pass, finding 2 -- observed_pps > 0 alone was too
+        # weak a bar: Lab.sample_tx_packets() sums EVERY non-loopback
+        # interface's tx_packets, which includes this very SSH/ansible
+        # management traffic, not just the attack -- a generator that
+        # silently never launched could still read nonzero from
+        # incidental chatter alone. Now requires a MEANINGFUL floor
+        # (MIN_CONFIRMED_ATTACK_PPS, comfortably above plain management
+        # traffic) AND generator_confirmed is not False (Lab.
+        # generator_confirmed()'s own read of the generator's PER-RUN log
+        # for a recognized failure marker -- None, e.g. broadband with no
+        # such log, never vetoes this on its own).
+        #
+        # A detection that DID fire but whose mitigation/recovery never
         # followed stays "INCOMPLETE" on purpose -- that is a real
         # pipeline-bug symptom (e.g. the peering FLOWSPEC bug found
         # earlier in this campaign) and must keep halting the campaign.
         result.status = "NO_DETECTION"
         result.error = (
-            f"attack confirmed (observed_pps={result.observed_pps}) but no "
+            f"attack confirmed (observed_pps={result.observed_pps}, "
+            f"generator_confirmed={result.generator_confirmed}) but no "
             "ATTACK_DETECTED logged within the event window"
         )
     else:
@@ -1091,8 +1254,10 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
         # elapsed time is measurably longer than attack_duration + 1 once
         # launch/attack_start's own remote calls are accounted for, which
         # a fixed constant silently ignored.
-        window_start = time.monotonic()
-        tx_before = {d: lab.sample_tx_packets(d, vector) for d in domains}
+        tx_before_at: dict[str, float] = {}
+        for d in domains:
+            tx_before[d] = lab.sample_tx_packets(d, vector)
+            tx_before_at[d] = time.monotonic()
         # Async hping launches keep multidomain starts close together; broadband's
         # FIFO write is synchronous and takes only one local operation.
         # A multidomain trial is one sequential experiment, but its one source
@@ -1120,22 +1285,60 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
         # the flood by then) keeps this a clean before/after pair instead
         # of racing lab.stop()'s own kill in the `finally` below.
         time.sleep(attack_duration + 1)
-        elapsed = time.monotonic() - window_start
+        if "broadband" in domains:
+            # 2nd review pass, finding 3: broadband's launch() just sends
+            # 'attack <scenario>' to bng_subscriber_agent's FIFO -- unlike
+            # every hping3/mobile-flood invocation, which is wrapped in
+            # `timeout {duration} ...` and self-stops, the agent keeps
+            # the generator running until it receives a DIFFERENT command
+            # (this method's own `finally: lab.stop(domain)` below, which
+            # only runs once wait_and_collect()'s full event_timeout has
+            # elapsed). That let broadband keep attacking well past
+            # attack_duration -- through the detection/mitigation wait
+            # AND the recovery probe -- while every other domain's
+            # generator had already self-stopped, breaking comparability
+            # across domains and risking a SECOND, spurious re-detection/
+            # re-mitigation cycle before this trial even finishes
+            # evaluating the first one. Stopped explicitly here, at the
+            # same point every other domain's `timeout` wrapper already
+            # stops itself, BEFORE detection/mitigation/recovery are
+            # evaluated below.
+            lab.stop("broadband")
         for domain in domains:
             after = lab.sample_tx_packets(domain, vector)
+            after_at = time.monotonic()
             before = tx_before.get(domain)
+            # Minor fix (2nd review pass): each domain's own before/after
+            # pair is bracketed by ITS OWN two timestamps now, not one
+            # `elapsed` shared across every domain computed before any of
+            # them had even been sampled -- sample_tx_packets() calls are
+            # sequential (one SSH round trip per domain/host), so by the
+            # time the last domain in a multidomain trial is sampled, its
+            # real window is measurably different from the first one's.
+            elapsed = after_at - tx_before_at.get(domain, after_at)
             row = next(r for r in results if r.domain == domain)
-            if before is not None and after is not None and after >= before:
+            if before is not None and after is not None and after >= before and elapsed > 0:
                 row.observed_pps = round((after - before) / elapsed, 1)
+            # Item 2 (2nd review pass): independent confirmation the
+            # generator itself actually ran, from its own per-run log --
+            # observed_pps alone can't tell real attack traffic apart
+            # from incidental management/SSH chatter.
+            row.generator_confirmed = lab.generator_confirmed(domain, run_id, vector)
 
         parsed = wait_and_collect(lab, offset, results, starts, event_timeout, poll)
 
         # Item 5 -- a Tr_s timestamp only means a MITIGATION->UNBLOCK pair
         # was logged; confirm the legitimate source can actually reach
-        # the target again before calling it recovered.
+        # the target again before calling it recovered. 2nd review pass,
+        # finding 4 -- that HTTP probe alone doesn't prove the trial's
+        # OWN rule (its specific src/dst/port/protocol) was withdrawn, so
+        # mitigation_withdrawn checks that separately and explicitly,
+        # instead of conflating "the web service is reachable" with "the
+        # mitigation that targeted this exact 5-tuple is gone."
         for row in parsed:
             if row.status == "OK" and row.Tr_s is not None:
                 row.traffic_recovered = check_traffic_recovery(lab, row.domain)
+                row.mitigation_withdrawn = lab.mitigation_withdrawn(vector, row.source, row.target)
     except Exception as exc:
         for row in results:
             row.status = "ERROR"
@@ -1179,9 +1382,31 @@ def run_mobile_repeatability(lab: Lab, cycles: int, attack_duration: int,
     if not ok:
         raise LabError(f"mobile repeatability aborted -- chain never came up: {reason}")
 
+    # 2nd review pass, finding 6: --resume used to just re-run 1..cycles
+    # unconditionally, appending NEW rows under the SAME cycle numbers
+    # already in `previous` -- trials.jsonl ended up with two rows per
+    # repeated cycle number (ambiguous which is "the" result for that
+    # cycle) and trials_table.csv's own by_key dict silently kept only
+    # the LAST one, discarding the earlier one with no indication
+    # anything was lost. This CONTINUES the sequence instead: already-
+    # completed cycle numbers (status OK/DRY_RUN/NO_DETECTION, matching
+    # the main iteration loop's own notion of "done") are skipped, so
+    # resuming a 30-cycle campaign that got to cycle 18 runs 19..30, not
+    # a fresh, ambiguous 1..30 on top of what's already there.
+    completed_cycles = {
+        r.iteration for r in previous
+        if r.domain == "mobile" and r.scenario_mode == "repeatability"
+        and r.status in ("OK", "DRY_RUN", "NO_DETECTION")
+    }
+    if completed_cycles:
+        print(f"Resuming: {len(completed_cycles)} cycle(s) already completed "
+              f"({sorted(completed_cycles)}) -- running the rest.", flush=True)
+
     all_rows: list[TrialResult] = []
     needed_intervention = 0
     for cycle in range(1, cycles + 1):
+        if cycle in completed_cycles:
+            continue
         pre_healthy = lab.dry_run or lab.mobile_chain_healthy()
         if not pre_healthy:
             needed_intervention += 1
@@ -1211,12 +1436,22 @@ def run_mobile_repeatability(lab: Lab, cycles: int, attack_duration: int,
         if not lab.dry_run:
             time.sleep(5)  # brief settle between cycles -- not the full --cooldown
 
-    ok_cycles = sum(1 for r in all_rows if r.status in ("OK", "DRY_RUN"))
-    recovered_cycles = sum(1 for r in all_rows if r.traffic_recovered)
+    # Summary covers the WHOLE campaign (cycles completed in earlier
+    # --resume invocations too, via `previous`), not just this
+    # invocation's own `all_rows` -- otherwise a resumed run's summary
+    # would understate how much of the full `cycles` target is actually
+    # done.
+    full_campaign = [
+        r for r in previous
+        if r.domain == "mobile" and r.scenario_mode == "repeatability" and r.iteration <= cycles
+    ]
+    ok_cycles = sum(1 for r in full_campaign if r.status in ("OK", "DRY_RUN"))
+    recovered_cycles = sum(1 for r in full_campaign if r.traffic_recovered)
     print(
         f"\n=== mobile repeatability summary: {ok_cycles}/{cycles} cycles OK, "
         f"{recovered_cycles}/{cycles} confirmed traffic-recovered, "
-        f"{needed_intervention}/{cycles} needed an automated recovery intervention "
+        f"{needed_intervention}/{cycles - len(completed_cycles)} of THIS run's cycles needed "
+        "an automated recovery intervention "
         "between cycles (0 is the stability goal -- any count above that means the "
         "chain did NOT return to its initial state on its own) ===",
         flush=True,
@@ -1360,16 +1595,20 @@ def main() -> int:
     # depth alongside the manifest check above (the manifest stops a
     # whole directory from mixing conditions; this stops a single stale
     # row from ever being mismatched against the wrong condition's
-    # membership test). Item 4 fix: traffic_recovered is not False --
-    # a row whose logged events all completed (status=="OK"/
-    # "NO_DETECTION") but whose post-mitigation probe FAILED must not be
-    # treated as done; --resume should retry it like any other
-    # unfinished row, not silently accept a run that never actually
+    # membership test). Item 4 fix: traffic_recovered is not False, and
+    # (2nd review pass) mitigation_withdrawn is not False either -- a row
+    # whose logged events all completed (status=="OK"/"NO_DETECTION") but
+    # whose post-mitigation probe (HTTP reachability) OR mitigation-
+    # withdrawal check (the trial's own block rule actually gone) FAILED
+    # must not be treated as done; --resume should retry it like any
+    # other unfinished row, not silently accept a run that never actually
     # confirmed real recovery.
     completed = {
         (r.iteration, r.domain, r.vector, r.detection_mode, r.scenario_mode)
         for r in previous
-        if r.status in ("OK", "NO_DETECTION") and r.traffic_recovered is not False
+        if r.status in ("OK", "NO_DETECTION")
+        and r.traffic_recovered is not False
+        and r.mitigation_withdrawn is not False
     }
     lab = Lab(repo, inventory, args.dry_run)
     rng = random.Random(args.seed)
@@ -1384,24 +1623,53 @@ def main() -> int:
     print(f"Detection mode: {args.detection_mode}", flush=True)
 
     lab.startup_healthcheck(tuple(args.domains))
-    lab.cleanup()
+    lab.cleanup(tuple(args.domains))
     lab.wait_for_baseline(args.domains)
 
     if args.repeatability_cycles:
         # Per-cycle checkpointing now happens INSIDE run_mobile_
         # repeatability itself (minor fix) -- previous/checkpoint/out_dir
         # are passed in rather than saved once at the end here.
-        rows = run_mobile_repeatability(lab, args.repeatability_cycles, args.attack_duration,
-                                        args.event_timeout, args.poll, checkpoint, out_dir, previous)
-        lab.cleanup()
+        run_mobile_repeatability(lab, args.repeatability_cycles, args.attack_duration,
+                                 args.event_timeout, args.poll, checkpoint, out_dir, previous)
+        lab.cleanup(tuple(args.domains))
         print(f"\nCompleted. Results: {out_dir / 'trials_table.csv'}")
+        # Evaluated over the FULL campaign (`previous`, which `--resume`
+        # loaded plus whatever this invocation just ran), not just this
+        # invocation's own newly-run cycles -- finding 6's resume fix
+        # means a run that resumed into an already-fully-completed
+        # campaign runs zero NEW cycles, and the exit code must still
+        # reflect the whole campaign's real outcome, not "nothing failed
+        # because nothing ran this time."
+        rows = [r for r in previous
+               if r.domain == "mobile" and r.scenario_mode == "repeatability"
+               and r.iteration <= args.repeatability_cycles]
         # Minor fix: reflect failed cycles in the exit code -- this used
         # to always `return 0` even if every cycle came back INCOMPLETE/
         # ERROR, silently reporting a broken campaign as a success to
         # any script/CI checking $?.
         failed_cycles = [r for r in rows if r.status not in ("OK", "DRY_RUN")]
-        return 2 if failed_cycles else 0
+        if failed_cycles:
+            return 2
+        # 2nd review pass, finding 4: every cycle's own EVENTS completed
+        # (status=="OK"), but a cycle whose recovery probe or mitigation-
+        # withdrawal check came back False must not be reported as a
+        # clean success either -- distinct exit code (3) from a real
+        # failure (2), since the detect/mitigate pipeline itself did work.
+        unconfirmed_recovery = [
+            r for r in rows if r.traffic_recovered is False or r.mitigation_withdrawn is False
+        ]
+        if unconfirmed_recovery:
+            print(
+                f"WARNING: {len(unconfirmed_recovery)}/{len(rows)} cycle(s) completed detection/"
+                "mitigation but recovery was not confirmed (traffic_recovered/mitigation_withdrawn "
+                "== False) -- see trials_long.csv.",
+                file=sys.stderr,
+            )
+            return 3
+        return 0
 
+    recovery_unconfirmed: list[TrialResult] = []
     for iteration in range(1, args.iterations + 1):
         jobs: list[tuple[str, tuple[str, ...]]] = []
         for vector in args.vectors:
@@ -1423,7 +1691,7 @@ def main() -> int:
         for vector, domains in jobs:
             print(f"\n=== iteration={iteration} vector={vector} domains={','.join(domains)} ===", flush=True)
             lab.healthcheck(domains)
-            lab.cleanup()
+            lab.cleanup(domains)
             lab.wait_for_baseline(domains)
             rows = run_trial(lab, iteration, vector, domains, args.attack_duration,
                              args.event_timeout, args.poll, scenario_mode=args.mode)
@@ -1453,12 +1721,33 @@ def main() -> int:
             if failed:
                 print("Trial incomplete; checkpoint saved. Fix the cause and rerun with --resume.", file=sys.stderr)
                 return 2
+            # 2nd review pass, finding 4: a row whose events all
+            # completed (status=="OK") but whose recovery probe or
+            # mitigation-withdrawal check came back False must still
+            # surface -- tracked across the whole campaign so a
+            # genuinely clean run (exit 0) can be told apart from one
+            # that finished but left an unconfirmed recovery somewhere
+            # (exit 3, distinct from a real failure's exit 2).
+            unconfirmed = [r for r in rows if r.traffic_recovered is False or r.mitigation_withdrawn is False]
+            for r in unconfirmed:
+                print(f"  UNCONFIRMED RECOVERY: {r.domain}/{r.vector} -- "
+                      f"traffic_recovered={r.traffic_recovered} mitigation_withdrawn={r.mitigation_withdrawn}",
+                      file=sys.stderr)
+            recovery_unconfirmed.extend(unconfirmed)
             time.sleep(args.cooldown)
 
-    lab.cleanup()
+    lab.cleanup(tuple(args.domains))
     lab.wait_for_baseline(args.domains)
     write_outputs(out_dir, previous)
     print(f"\nCompleted. Results: {out_dir / 'trials_table.csv'}")
+    if recovery_unconfirmed:
+        print(
+            f"WARNING: {len(recovery_unconfirmed)} row(s) completed detection/mitigation but "
+            "recovery was not confirmed (traffic_recovered/mitigation_withdrawn == False) -- "
+            "see trials_long.csv.",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

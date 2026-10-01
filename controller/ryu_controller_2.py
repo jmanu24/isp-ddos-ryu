@@ -104,6 +104,38 @@ def _format_mitigation_message(action) -> str:
     )
 
 
+def _detection_log_lines(d) -> list:
+    """One log_line() message PER CONTRIBUTING DOMAIN for DetectionResult
+    `d`, not just d.domain (the single "representative" event
+    _pick_representative() happened to choose). A DDOS_DISTRIBUTED/
+    MULTIDOMAIN_DISTRIBUTED_ATTACK detection's real per-source domain
+    attribution already lives in d.source_domains -- confirmed on a real
+    review: logging only the representative's domain meant analysis/
+    run_vm_lab_trials.py (which matches a DETECTION line's own [domain]
+    bracket against each trial row's own domain) could see a Mobile/
+    Peering/Broadband row come back with NO detection line at all, even
+    though that domain's own sources genuinely were detected -- the line
+    was simply never written under that domain's own bracket. A plain
+    (non-distributed) detection has no source_domains at all, so this is
+    a single-element, unchanged-behavior list for it. Pulled out as a
+    pure function (no logger/dashboard dependency) so it's unit-testable
+    without a Ryu runtime."""
+    contributing_domains = sorted(set(d.source_domains.values())) if d.source_domains else [d.domain]
+    domains_field = ",".join(contributing_domains)
+    lines = []
+    for domain in contributing_domains:
+        domain_sources = (
+            ",".join(src for src, sd in d.source_domains.items() if sd == domain)
+            if d.source_domains else d.src_ip
+        )
+        lines.append(log_line(
+            domain, "DETECTION", "ATTACK_DETECTED",
+            f"{d.attack_type} source={d.src_ip} destination={d.dst_ip}:{d.dst_port}/{d.protocol} "
+            f"domains={domains_field} domain_sources={domain_sources}",
+        ))
+    return lines
+
+
 class FlowStatsIDS(app_manager.RyuApp):
     """
     Centralized SDN Controller with multidomain DDoS detection.
@@ -516,12 +548,9 @@ class FlowStatsIDS(app_manager.RyuApp):
         # numbers live in Grafana via /metrics instead.
         for d in detections:
 
-            msg = log_line(
-                d.domain, "DETECTION", "ATTACK_DETECTED",
-                f"{d.attack_type} source={d.src_ip} destination={d.dst_ip}:{d.dst_port}/{d.protocol}",
-            )
-            dashboard_state.add_event(msg)
-            self.logger.warning(msg)
+            for msg in _detection_log_lines(d):
+                dashboard_state.add_event(msg)
+                self.logger.warning(msg)
 
             # Dashboard's "attacks" panel (web/api.py, web/socket_server.py,
             # templates/index.html all read dashboard_state.attacks) is
