@@ -904,6 +904,72 @@ def run_trial(lab: Lab, iteration: int, vector: str, domains: tuple[str, ...],
     return parsed
 
 
+def run_mobile_repeatability(lab: Lab, cycles: int, attack_duration: int,
+                             event_timeout: int, poll: int, vector: str = "UDP_FLOOD") -> list[TrialResult]:
+    """Item 3 -- a single successful run only demonstrates the ran(cu1)->
+    du(du1)->ue1 chain's connect->attack->detect->mitigate->release->
+    recover cycle WORKS; it says nothing about whether it's STABLE
+    (repeatable) across many cycles without manual intervention. This:
+
+      1. Validates the chain once up front (mobile_preflight -- if it's
+         not even up at the start, there's nothing to measure stability
+         of; aborts immediately).
+      2. Repeats the full cycle `cycles` times back to back. Each cycle
+         IS one isolated mobile trial (run_trial), reused as-is --
+         mobile_preflight's own bounded, AUTOMATED recovery attempt is
+         exactly "no manual intervention needed" already; what this
+         tracks on top of that is whether it was even NEEDED each time
+         (lab.mobile_chain_healthy() checked BEFORE each cycle -- not
+         healthy there means the previous cycle did not return the chain
+         to its initial state on its own).
+
+    Reports a stability summary at the end: cycles that completed OK,
+    cycles whose traffic was confirmed to actually recover, and cycles
+    that needed an intervention between them. The last number's goal is
+    0 -- anything above that means the chain is not yet self-stabilizing,
+    which a single successful run can never reveal.
+    """
+    print(f"\n=== mobile repeatability: validating the chain before cycling ===", flush=True)
+    ok, reason = mobile_preflight(lab)
+    if not ok:
+        raise LabError(f"mobile repeatability aborted -- chain never came up: {reason}")
+
+    all_rows: list[TrialResult] = []
+    needed_intervention = 0
+    for cycle in range(1, cycles + 1):
+        pre_healthy = lab.dry_run or lab.mobile_chain_healthy()
+        if not pre_healthy:
+            needed_intervention += 1
+        print(
+            f"\n=== mobile repeatability: cycle {cycle}/{cycles} "
+            f"(chain was {'already healthy' if pre_healthy else 'UNHEALTHY -- needed an automated recovery'}) ===",
+            flush=True,
+        )
+        rows = run_trial(lab, cycle, vector, ("mobile",), attack_duration, event_timeout, poll,
+                         scenario_mode="repeatability")
+        all_rows.extend(rows)
+        row = rows[0]
+        print(
+            f"  cycle {cycle}: status={row.status} Td={row.Td_s} Tm={row.Tm_s} Tr={row.Tr_s} "
+            f"traffic_recovered={row.traffic_recovered}",
+            flush=True,
+        )
+        if not lab.dry_run:
+            time.sleep(5)  # brief settle between cycles -- not the full --cooldown
+
+    ok_cycles = sum(1 for r in all_rows if r.status in ("OK", "DRY_RUN"))
+    recovered_cycles = sum(1 for r in all_rows if r.traffic_recovered)
+    print(
+        f"\n=== mobile repeatability summary: {ok_cycles}/{cycles} cycles OK, "
+        f"{recovered_cycles}/{cycles} confirmed traffic-recovered, "
+        f"{needed_intervention}/{cycles} needed an automated recovery intervention "
+        "between cycles (0 is the stability goal -- any count above that means the "
+        "chain did NOT return to its initial state on its own) ===",
+        flush=True,
+    )
+    return all_rows
+
+
 def resolve_effective_vectors(mode: str, vectors: tuple[str, ...], domains: tuple[str, ...],
                               error) -> tuple[str, ...]:
     """Resolves --mode + --vectors into the actual vector set the campaign
@@ -951,8 +1017,20 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20260925)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--repeatability-cycles", type=int, default=0,
+                        help="item 3: instead of the --iterations/--vectors matrix, validate the "
+                             "ran->du->ue1 chain once then repeat its full attack/detect/mitigate/"
+                             "release/recover cycle this many times back to back, to check it "
+                             "self-stabilizes without manual intervention. Requires --domains mobile "
+                             "(exactly that, nothing else) and N>=2 (one run proves it works once, "
+                             "not that it's repeatable).")
     args = parser.parse_args()
-    if args.iterations < 2:
+    if args.repeatability_cycles:
+        if args.repeatability_cycles < 2:
+            parser.error("--repeatability-cycles needs at least 2 (one cycle only shows it works once)")
+        if tuple(args.domains) != ("mobile",):
+            parser.error("--repeatability-cycles requires --domains mobile (exactly that, nothing else)")
+    elif args.iterations < 2:
         parser.error("--iterations must be at least 2; use 30 for the thesis dataset")
     args.vectors = resolve_effective_vectors(args.mode, tuple(args.vectors), tuple(args.domains),
                                              parser.error)
@@ -995,6 +1073,16 @@ def main() -> int:
     lab.startup_healthcheck()
     lab.cleanup()
     lab.wait_for_baseline(args.domains)
+
+    if args.repeatability_cycles:
+        rows = run_mobile_repeatability(lab, args.repeatability_cycles, args.attack_duration,
+                                        args.event_timeout, args.poll)
+        append_checkpoint(checkpoint, rows)
+        previous.extend(rows)
+        write_outputs(out_dir, previous)
+        lab.cleanup()
+        print(f"\nCompleted. Results: {out_dir / 'trials_table.csv'}")
+        return 0
 
     for iteration in range(1, args.iterations + 1):
         jobs: list[tuple[str, tuple[str, ...]]] = []
