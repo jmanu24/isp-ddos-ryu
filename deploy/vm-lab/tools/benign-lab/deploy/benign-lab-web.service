@@ -5,7 +5,7 @@ After=network-online.target
 User=ubuntu
 WorkingDirectory=/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab
 EnvironmentFile=/home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/web.env
-ExecStart=/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab/.venv/bin/benign-lab serve --host 127.0.0.1 --port 8780 --lab /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab/config/lab.connected.yaml --data /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/data
+ExecStart=/home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab/.venv/bin/benign-lab serve --host 192.168.18.154 --port 8780 --lab /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/tools/benign-lab/config/lab.connected.yaml --data /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/data
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target

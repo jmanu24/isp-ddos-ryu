@@ -57,3 +57,10 @@ Para ejecutar el controlador desde otro equipo manteniendo el salto, definir en 
 Respaldos Fixed en `.codex-backups/fixed10-*` y archivos `.before-fixed10` en suscriptor. Victim conserva `.before-benign-route`. No se hicieron commits ni se enviaron cambios al repositorio remoto. Restaurar sólo piezas necesarias y comprobar sesiones/rutas. Secretos/runtime excluidos de Git.
 
 
+
+## Direct dashboard access
+
+The deployed systemd unit listens on `192.168.18.154:8780`. Open
+`http://192.168.18.154:8780` from a host that can reach the controller.
+This binding persists across service and controller restarts.
+SSH tunnels must forward to remote `192.168.18.154:8780`.

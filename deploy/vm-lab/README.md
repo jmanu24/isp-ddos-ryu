@@ -275,8 +275,9 @@ Use that deployment report for the inspected live VM operating systems.
 
 The controller runs on Python 3.8; remote workers also support the inspected
 Python 3.10 and 3.14 environments. Preserve `requirements.lock` when installing.
-The service is `benign-lab-web.service`, listening on controller localhost:8780.
-Access it through an SSH tunnel to `ubuntu@192.168.18.154`.
+The service is `benign-lab-web.service`, listening on port 8780 on the controller
+management interface. Open `http://192.168.18.154:8780` from the laboratory network.
+For an SSH tunnel, forward to `192.168.18.154:8780` on the remote node.
 
 Mobile uses five UE namespaces, Fixed uses ten IPoE subscribers, Enterprise
 uses five sites, and Peering uses the aggregate peer-router generator.
