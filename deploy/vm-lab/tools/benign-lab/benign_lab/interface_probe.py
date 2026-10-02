@@ -37,7 +37,7 @@ def main():
     if args.once:
         print(json.dumps(read_interfaces()),flush=True);return
     namespaces=[x for x in args.namespaces.split(',') if x]
-    if any(not re.fullmatch(r'ue[1-5]',x) for x in namespaces):raise ValueError('Invalid UE namespace')
+    if any(not re.fullmatch(r'(?:ue[1-5]|fixed(?:[1-9]|10))',x) for x in namespaces):raise ValueError('Invalid subscriber namespace')
     previous={}
     while True:
         begin=time.monotonic()

@@ -28,7 +28,7 @@ mediante systemd y en victim mediante OpenRC.
 ## Dominios conectados
 
 - Mobile: cinco namespaces ue1…ue5, distribuidos entre ue y ue2.
-- Fixed: diez macvlans con diez sesiones IPoE activas en accel-ppp/FreeRADIUS.
+- Fixed: diez namespaces fixed1–fixed10, cada uno con su macvlan, DHCP y ruta propios; las sesiones IPoE se verifican en accel-ppp/FreeRADIUS. Véase FIXED_NAMESPACES.md.
   El agente usa `--no-baseline` para mantener DHCP/rutas sin iniciar el anterior
   generador automático TCP_SYN. Las IPs actuales se reconciliaron al aplicar
   las capacidades; pueden cambiar tras nuevas renovaciones.

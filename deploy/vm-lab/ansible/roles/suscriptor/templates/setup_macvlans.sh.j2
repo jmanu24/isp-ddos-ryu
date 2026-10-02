@@ -1,22 +1,24 @@
 #!/bin/sh
-# Managed by Ansible (roles/suscriptor). Creates one macvlan sub-
-# interface per simulated subscriber on top of {{ suscriptor_access_iface }}
-# -- each gets its own MAC, so each looks like a distinct physical
-# subscriber device to accel-ppp's ipoe module on `bng` (which
-# authenticates/accounts by Calling-Station-Id = MAC, see roles/bng's
-# accel-ppp.conf.j2). Run at boot by bng-macvlans.service, before
-# bng-subscriber-agent.service starts driving DHCP leases on these.
-#
-# 02:00:00:00:00:0N -- same locally-administered MAC convention
-# BNGBlaster itself used (session N -> 02:00:00:00:00:0N), kept purely
-# for continuity/readability across this project's Broadband-domain
-# history, not required by accel-ppp itself.
-set -e
-
+set -eu
 PARENT="{{ suscriptor_access_iface }}"
 ip link set "$PARENT" up
-
-{% for n in range(1, bng_subscriber_count + 1) %}
-ip link add link "$PARENT" name macvlan{{ n }} address 02:00:00:00:00:{{ '%02x' % n }} type macvlan mode bridge 2>/dev/null || true
-ip link set macvlan{{ n }} up
-{% endfor %}
+for n in $(seq 1 {{ bng_subscriber_count }}); do
+  ns="fixed$n"
+  iface="macvlan$n"
+  if ! ip netns list | awk '{print $1}' | grep -qx "$ns"; then
+    ip netns add "$ns"
+  fi
+  if ! ip -n "$ns" link show dev "$iface" >/dev/null 2>&1; then
+    if ! ip link show dev "$iface" >/dev/null 2>&1; then
+      hex=$(printf '%02x' "$n")
+      ip link add link "$PARENT" name "$iface" address "02:00:00:00:00:$hex" type macvlan mode bridge
+    fi
+    ip link set "$iface" netns "$ns"
+  fi
+  ip -n "$ns" link set lo up
+  ip -n "$ns" link set "$iface" up
+  mkdir -p "/etc/netns/$ns"
+  if [ ! -f "/etc/netns/$ns/resolv.conf" ]; then
+    printf '# DNS local to %s; populated by DHCP\n' "$ns" > "/etc/netns/$ns/resolv.conf"
+  fi
+done

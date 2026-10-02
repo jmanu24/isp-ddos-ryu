@@ -85,7 +85,9 @@ try:
         raise RuntimeError('Controller calibration mode was not activated')
     # Re-establish leases whose server-side session was terminated by mitigation.
     refresh="""import json,subprocess
-addresses=json.loads(subprocess.check_output(['ip','-j','-4','address']))
+addresses=[]
+for n in range(1,11):
+    addresses.extend(json.loads(subprocess.check_output(['ip','-n','fixed%d'%n,'-j','-4','address'])))
 with open('/run/bng-agent/cmd','w') as fifo:
     for interface in addresses:
         if interface['ifname'].startswith('macvlan'):

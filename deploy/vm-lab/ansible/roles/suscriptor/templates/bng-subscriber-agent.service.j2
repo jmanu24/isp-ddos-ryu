@@ -14,6 +14,7 @@ Requires=bng-macvlans.service
 Type=simple
 WorkingDirectory=/opt/Tesis_Controller
 Environment=PYTHONPATH=/opt/Tesis_Controller
+Environment=BNG_SUBSCRIBER_NAMESPACES=1
 ExecStart=/usr/bin/python3 simulation/bng_subscriber_agent.py \
     --target-ip {{ bng_target_ip }} \
     --gateway-ip {{ bng_access_addr }} \

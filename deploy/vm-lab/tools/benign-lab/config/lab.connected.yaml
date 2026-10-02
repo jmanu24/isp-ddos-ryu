@@ -115,204 +115,224 @@ nodes:
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
   fixed1:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.152
+    source_ip: 10.20.0.167
     interface: macvlan1
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
-    session_id: ipoe0
-    observed_route: true
-    observed_active_session: true
-    auth_mode: password_env
-    password_env: BENIGN_SSH_PASSWORD
-    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed2:
-    configured: true
-    adapter: ssh
-    host: 10.10.0.9
-    user: labadmin
-    port: 22
-    identity_file: null
-    python: /usr/bin/python3
-    agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.153
-    interface: macvlan2
-    expected_gateway: 10.20.0.1
-    check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
     session_id: ipoe1
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed3:
+    namespace: fixed1
+    sudo: true
+  fixed2:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.154
-    interface: macvlan3
+    source_ip: 10.20.0.168
+    interface: macvlan2
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
-    session_id: ipoe2
-    observed_route: true
-    observed_active_session: true
-    auth_mode: password_env
-    password_env: BENIGN_SSH_PASSWORD
-    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed4:
-    configured: true
-    adapter: ssh
-    host: 10.10.0.9
-    user: labadmin
-    port: 22
-    identity_file: null
-    python: /usr/bin/python3
-    agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.155
-    interface: macvlan4
-    expected_gateway: 10.20.0.1
-    check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
     session_id: ipoe3
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed5:
+    namespace: fixed2
+    sudo: true
+  fixed3:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.156
-    interface: macvlan5
+    source_ip: 10.20.0.163
+    interface: macvlan3
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
+    session_id: ipoe2
+    observed_route: true
+    observed_active_session: true
+    auth_mode: password_env
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
+    namespace: fixed3
+    sudo: true
+  fixed4:
+    configured: true
+    adapter: ssh_netns
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/agent.py
+    source_ip: 10.20.0.169
+    interface: macvlan4
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_namespace
     session_id: ipoe4
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed6:
+    namespace: fixed4
+    sudo: true
+  fixed5:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.157
-    interface: macvlan6
+    source_ip: 10.20.0.170
+    interface: macvlan5
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
     session_id: ipoe5
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed7:
+    namespace: fixed5
+    sudo: true
+  fixed6:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.158
-    interface: macvlan7
+    source_ip: 10.20.0.171
+    interface: macvlan6
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
     session_id: ipoe6
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed8:
+    namespace: fixed6
+    sudo: true
+  fixed7:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.159
-    interface: macvlan8
+    source_ip: 10.20.0.172
+    interface: macvlan7
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
     session_id: ipoe7
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
-  fixed9:
+    namespace: fixed7
+    sudo: true
+  fixed8:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.160
+    source_ip: 10.20.0.162
+    interface: macvlan8
+    expected_gateway: 10.20.0.1
+    check_route: true
+    access_mode: ipoe_namespace
+    session_id: ipoe0
+    observed_route: true
+    observed_active_session: true
+    auth_mode: password_env
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
+    namespace: fixed8
+    sudo: true
+  fixed9:
+    configured: true
+    adapter: ssh_netns
+    host: 10.10.0.9
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/agent.py
+    source_ip: 10.20.0.173
     interface: macvlan9
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
     session_id: ipoe8
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
     observed_active_session: true
     observed_route: true
+    namespace: fixed9
+    sudo: true
   fixed10:
     configured: true
-    adapter: ssh
+    adapter: ssh_netns
     host: 10.10.0.9
     user: labadmin
     port: 22
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.161
+    source_ip: 10.20.0.174
     interface: macvlan10
     expected_gateway: 10.20.0.1
     check_route: true
-    access_mode: ipoe_bound
+    access_mode: ipoe_namespace
     session_id: ipoe9
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
     observed_active_session: true
     observed_route: true
+    namespace: fixed10
+    sudo: true
   ent-site-1:
     configured: true
     adapter: ssh
@@ -512,7 +532,17 @@ traffic_monitor:
     known_hosts_file: /home/ubuntu/.ssh/known_hosts
     python: python3
     sudo: true
-    namespaces: []
+    namespaces:
+    - fixed1
+    - fixed2
+    - fixed3
+    - fixed4
+    - fixed5
+    - fixed6
+    - fixed7
+    - fixed8
+    - fixed9
+    - fixed10
     fixed: true
     preferred_interface: ens192
   - name: br

@@ -35,6 +35,20 @@ class BaselineGuard:
     async def status(self):
         return json.loads(await self.controller("from pathlib import Path; print(Path('/run/benign-baseline/status.json').read_text())"))
 
+    async def fixed_addresses(self):
+        namespaces=sorted({n.get('namespace','') for n in self.cfg['nodes'].values() if n.get('access_mode') in ('ipoe_bound','ipoe_namespace')})
+        code="""import json,subprocess
+result=[]
+for ns in NAMESPACES:
+ argv=['ip','-j','-4','address']
+ if ns:argv=['ip','netns','exec',ns]+argv
+ rows=json.loads(subprocess.check_output(argv))
+ for row in rows:row['namespace']=ns
+ result.extend(rows)
+print(json.dumps(result))
+""".replace('NAMESPACES',repr(namespaces))
+        return json.loads(await self.ssh(self.control['fixed_host'],self.control['fixed_user'],'python3 -',root=True,payload=code))
+
     async def enter(self):
         flags=await self.ssh(self.control['host'],self.control['user'],'systemctl show ryu-manager -p Environment')
         if 'LAB_CALIBRATION_MODE=true' in flags:raise RuntimeError('An external calibration session is active')
@@ -87,22 +101,22 @@ print(json.dumps(s))
         active_ips=re.findall(r'\|\s*(10\.20\.0\.\d+)\s*\|\s*ipoe\s*\|.*?active',sessions)
         refresh=r"""import json,subprocess
 healthy=HEALTHY
-addresses=json.loads(subprocess.check_output(['ip','-j','-4','address']))
+addresses=ADDRESSES
 missing=[a['local'] for i in addresses if i['ifname'].startswith('macvlan') for a in i['addr_info'] if a['family']=='inet' and a['local'] not in healthy]
 if missing:
  with open('/run/bng-agent/cmd','w') as fifo:
   for address in missing:fifo.write('kick '+address+'\n');fifo.flush()
-""".replace('HEALTHY',repr(active_ips))
+""".replace('HEALTHY',repr(active_ips)).replace('ADDRESSES',repr(await self.fixed_addresses()))
         await self.ssh(self.control['fixed_host'],self.control['fixed_user'],'python3 -',root=True,payload=refresh)
         stable=None
         for _ in range(40):
             sessions=await self.ssh(self.control['bng_host'],self.control['bng_user'],'accel-cmd -p 2000 show sessions',root=True)
             active_ips=re.findall(r'\|\s*(10\.20\.0\.\d+)\s*\|\s*ipoe\s*\|.*?active',sessions)
-            addresses=json.loads(await self.ssh(self.control['fixed_host'],self.control['fixed_user'],'ip -j -4 address'))
+            addresses=await self.fixed_addresses()
             mapping={}
             for name,node in self.cfg['nodes'].items():
-                if node.get('access_mode')=='ipoe_bound':
-                    matches=[a['local'] for i in addresses if i['ifname']==node['interface'] for a in i['addr_info'] if a['family']=='inet']
+                if node.get('access_mode') in ('ipoe_bound','ipoe_namespace'):
+                    matches=[a['local'] for i in addresses if i['ifname']==node['interface'] and i.get('namespace','')==node.get('namespace','') for a in i['addr_info'] if a['family']=='inet']
                     if len(matches)==1:mapping[name]=matches[0]
             valid=len(mapping)==10 and len(active_ips)==10 and set(mapping.values())==set(active_ips)
             if valid and mapping==stable:break

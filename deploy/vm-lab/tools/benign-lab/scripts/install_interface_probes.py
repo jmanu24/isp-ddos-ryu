@@ -13,7 +13,7 @@ def install(n):
  result=subprocess.run(['sshpass','-e','ssh','-T','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',user+'@'+host,command],env=env,capture_output=True,text=True,timeout=30)
  if result.returncode:raise RuntimeError(n.name+': '+result.stderr[-300:])
  preferred={'core5g':'ens192','pe':'br-ent','victim':'eth1','peer-router':'ens160'}.get(n.name,'ens160' if n.domain=='enterprise' else 'ens192')
- return dict(name=n.name,domain={'broadband':'fixed','bgp':'peering'}.get(n.domain,n.domain),host=host,user=user,password_env='BENIGN_PE_SSH_PASSWORD' if user=='root' else 'BENIGN_SSH_PASSWORD',known_hosts_file='/home/ubuntu/.ssh/known_hosts',python='python3',sudo=user!='root',namespaces=[u.netns for u in UE_NETNS if u.host==n.name],fixed=n.name=='suscriptor',preferred_interface=preferred)
+ return dict(name=n.name,domain={'broadband':'fixed','bgp':'peering'}.get(n.domain,n.domain),host=host,user=user,password_env='BENIGN_PE_SSH_PASSWORD' if user=='root' else 'BENIGN_SSH_PASSWORD',known_hosts_file='/home/ubuntu/.ssh/known_hosts',python='python3',sudo=user!='root',namespaces=[u.netns for u in UE_NETNS if u.host==n.name]+(['fixed%d'%i for i in range(1,11)] if n.name=='suscriptor' else []),fixed=n.name=='suscriptor',preferred_interface=preferred)
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:nodes=list(pool.map(install,NODES))
 nodes.append(dict(name='control',domain='control',adapter='local',preferred_interface='ens160'))
 p=app/'config/lab.connected.yaml';cfg=yaml.safe_load(p.read_text());cfg['traffic_monitor']=dict(interval_s=5,retention_s=21600,nodes=nodes);p.write_text(yaml.safe_dump(cfg,sort_keys=False))

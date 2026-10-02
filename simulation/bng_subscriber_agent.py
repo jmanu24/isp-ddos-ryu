@@ -105,6 +105,11 @@ sys.path.insert(0, REPO_DIR)
 from simulation.bng_ipoe_config import SCENARIOS, SCENARIO_PARAMS, BASELINE_SCENARIO, build_scenario  # noqa: E402
 
 _MAX_SUBSCRIBERS = 10
+_USE_NAMESPACES = os.getenv("BNG_SUBSCRIBER_NAMESPACES", "0") == "1"
+
+def _subscriber_argv(n, argv):
+    return ["ip", "netns", "exec", "fixed%d" % n, *argv] if _USE_NAMESPACES else argv
+
 _DHCP_RUN_DIR = "/run/bng-subscribers"
 _DHCP_WAIT_S = 15
 # How often the background thread (see run()) checks every subscriber's
@@ -157,6 +162,17 @@ def _pidfile(n: int) -> str:
     return f"/run/dhclient-{_iface(n)}.pid"
 
 
+def _dhcp_running(n):
+    if not _USE_NAMESPACES:
+        return False
+    try:
+        with open(_pidfile(n)) as f: pid=int(f.read().strip())
+        with open('/proc/%d/comm' % pid) as f: name=f.read().strip()
+        return name=='dhclient' and os.stat('/proc/%d/ns/net' % pid).st_ino==os.stat('/run/netns/fixed%d' % n).st_ino
+    except (OSError, ValueError):
+        return False
+
+
 def _leasefile(n: int) -> str:
     return f"/run/dhclient-{_iface(n)}.leases"
 
@@ -201,7 +217,7 @@ def _run_ip(args: list) -> None:
 def _read_iface_ip(iface: str) -> str:
     try:
         out = subprocess.run(
-            ["ip", "-4", "-o", "addr", "show", "dev", iface],
+            _subscriber_argv(int(iface[7:]), ["ip", "-4", "-o", "addr", "show", "dev", iface]),
             capture_output=True, text=True, timeout=5,
         ).stdout
     except (subprocess.TimeoutExpired, OSError):
@@ -242,10 +258,11 @@ class Subscriber:
         if self.ip:
             return  # already leased
         os.makedirs(_DHCP_RUN_DIR, exist_ok=True)
-        subprocess.run(
-            ["dhclient", "-nw", "-pf", _pidfile(self.n), "-lf", _leasefile(self.n), self.iface],
-            capture_output=True, text=True, timeout=_DHCP_WAIT_S,
-        )
+        if not _dhcp_running(self.n):
+            subprocess.run(
+                _subscriber_argv(self.n, ["dhclient", "-nw", "-pf", _pidfile(self.n), "-lf", _leasefile(self.n), self.iface]),
+                capture_output=True, text=True, timeout=_DHCP_WAIT_S,
+            )
         deadline = time.time() + _DHCP_WAIT_S
         while time.time() < deadline:
             ip = _read_iface_ip(self.iface)
@@ -270,11 +287,16 @@ class Subscriber:
         routing infrastructure is exactly right for genuine
         kernel-originated traffic, just not for hping3's own raw
         injection.)"""
+        if _USE_NAMESPACES:
+            subprocess.run(["ip", "-n", "fixed%d" % self.n, "route", "replace", "default", "via", self.gateway_ip, "dev", self.iface], check=True, timeout=5)
+            return
         table = _route_table(self.n)
         _run_ip(["route", "replace", "default", "via", self.gateway_ip, "dev", self.iface, "table", str(table)])
         _run_ip(["rule", "add", "from", self.ip, "table", str(table), "priority", str(_rule_priority(self.n))])
 
     def _del_source_route(self) -> None:
+        if _USE_NAMESPACES:
+            return
         if not self.ip:
             return
         _run_ip(["rule", "del", "from", self.ip, "table", str(_route_table(self.n)),
@@ -301,7 +323,8 @@ class Subscriber:
         failure mode). Returns True if the IP changed (caller should
         rewrite the state file)."""
         if not self.ip:
-            return False
+            self.session_up()
+            return bool(self.ip)
         current = _read_iface_ip(self.iface)
         if not current or current == self.ip:
             return False
@@ -324,7 +347,7 @@ class Subscriber:
         # accel-ppp/FreeRADIUS to emit a real Accounting-Stop record
         # for this session (see this module's own docstring).
         subprocess.run(
-            ["dhclient", "-r", "-pf", _pidfile(self.n), "-lf", _leasefile(self.n), self.iface],
+            _subscriber_argv(self.n, ["dhclient", "-r", "-pf", _pidfile(self.n), "-lf", _leasefile(self.n), self.iface]),
             capture_output=True, text=True, timeout=_DHCP_WAIT_S,
         )
         for f in (_pidfile(self.n), _leasefile(self.n)):
@@ -394,7 +417,7 @@ class Subscriber:
         # real failure (see its own comment) -- discarding that here
         # would have made the fix pointless.
         with open(_FLOOD_LOG_PATH, "a") as flood_log:
-            self._attack_proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=flood_log)
+            self._attack_proc = subprocess.Popen(_subscriber_argv(self.n, argv), stdout=subprocess.DEVNULL, stderr=flood_log)
 
     def stop_attack(self) -> None:
         self._attack_params = None
