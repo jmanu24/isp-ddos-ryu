@@ -20,6 +20,7 @@ from .config import ROOT, load_lab, resolve, mapping_issues
 from .ground_truth import windows
 from .planner import DOMAINS, canonical, generate, load_profiles, save_plan, validate
 from .runner import Manager, TERMINAL, csv_text
+from .interface_monitor import InterfaceMonitor
 
 
 class PlanRequest(BaseModel):
@@ -53,13 +54,28 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     plans=data/'plans'
     plans.mkdir(parents=True,exist_ok=True)
     manager=Manager(data/'runs')
+    interfaces=InterfaceMonitor(data/'traffic',load_lab(lab_path))
     previous={}
+    interface_cursors={}
+    def capture_interfaces(rid):
+        r=manager.runs[rid]
+        if r['mode']!='lab' or not r.get('started_at'): return []
+        path=manager.folder(rid)/'interface_metrics.jsonl'
+        if rid not in interface_cursors:
+            interface_cursors[rid]=max((json.loads(line)['id'] for line in path.read_text().splitlines()),default=0) if path.exists() else 0
+        rows=interfaces.rows(r['started_at'],r.get('finished_at') or time.time(),interface_cursors[rid])
+        if rows:
+            with path.open('a') as f:
+                for row in rows:f.write(json.dumps(row)+'\n')
+            interface_cursors[rid]=rows[-1]['id']
+        return rows
     async def monitor():
         tick=0
         while True:
             await asyncio.sleep(1)
             tick+=1
             for rid,r in list(manager.runs.items()):
+                capture_interfaces(rid)
                 if r['status'] in TERMINAL: continue
                 snap=manager.snapshot(rid)
                 now=time.monotonic()
@@ -75,13 +91,26 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
                 if tick%5==0: manager.persist(rid)
     @asynccontextmanager
     async def lifespan(app):
+        interfaces.start()
         task=asyncio.create_task(monitor())
         yield
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError): await task
         await manager.shutdown()
+        await interfaces.stop()
     app=FastAPI(title='BENIGN Lab',version='1.0.0',lifespan=lifespan)
     app.state.manager=manager
+    app.state.interface_monitor=interfaces
+    @app.get('/api/traffic')
+    async def traffic(minutes:int=5,after:int=0):
+        return interfaces.response(max(1,min(minutes,360)),max(0,after))
+    @app.get('/api/runs/{rid}/interface-traffic')
+    async def interface_traffic(rid:str,after:int=0):
+        run_for(rid)
+        capture_interfaces(rid)
+        path=manager.folder(rid)/'interface_metrics.jsonl'
+        rows=[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return dict(metrics_kind='linux_interface_counters',items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),nodes=[],interval_s=5,historical=True,available=bool(rows))
     @app.middleware('http')
     async def guard(request,call_next):
         if request.url.path.startswith('/api'):
@@ -191,6 +220,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     async def export(rid:str):
         run_for(rid)
         manager.persist(rid)
+        capture_interfaces(rid)
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
             for f in manager.folder(rid).iterdir():

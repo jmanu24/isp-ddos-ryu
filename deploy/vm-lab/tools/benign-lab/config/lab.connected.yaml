@@ -478,3 +478,269 @@ baseline_control:
   fixed_user: labadmin
   bng_host: 10.10.0.2
   bng_user: labadmin
+traffic_monitor:
+  interval_s: 5
+  retention_s: 21600
+  nodes:
+  - name: orchestrator
+    domain: shared
+    host: 10.10.0.1
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: bng
+    domain: fixed
+    host: 10.10.0.2
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: suscriptor
+    domain: fixed
+    host: 10.10.0.9
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: true
+    preferred_interface: ens192
+  - name: br
+    domain: peering
+    host: 10.10.0.3
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: peer-router
+    domain: peering
+    host: 10.30.0.2
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens160
+  - name: ric
+    domain: mobile
+    host: 10.10.0.4
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: core5g
+    domain: mobile
+    host: 10.10.0.5
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: ran
+    domain: mobile
+    host: 10.10.0.6
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: cu2
+    domain: mobile
+    host: 10.10.0.15
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: du
+    domain: mobile
+    host: 10.10.0.10
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: du2
+    domain: mobile
+    host: 10.10.0.11
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: du3
+    domain: mobile
+    host: 10.10.0.12
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: du4
+    domain: mobile
+    host: 10.10.0.13
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: du5
+    domain: mobile
+    host: 10.10.0.14
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens192
+  - name: ue
+    domain: mobile
+    host: 10.10.0.8
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces:
+    - ue1
+    - ue2
+    - ue3
+    fixed: false
+    preferred_interface: ens192
+  - name: ue2
+    domain: mobile
+    host: 10.10.0.16
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces:
+    - ue4
+    - ue5
+    fixed: false
+    preferred_interface: ens192
+  - name: pe
+    domain: shared
+    host: 10.10.0.7
+    user: root
+    password_env: BENIGN_PE_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: false
+    namespaces: []
+    fixed: false
+    preferred_interface: br-ent
+  - name: ent-site-1
+    domain: enterprise
+    host: 10.10.0.21
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens160
+  - name: ent-site-2
+    domain: enterprise
+    host: 10.10.0.22
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens160
+  - name: ent-site-3
+    domain: enterprise
+    host: 10.10.0.23
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens160
+  - name: ent-site-4
+    domain: enterprise
+    host: 10.10.0.24
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens160
+  - name: ent-site-5
+    domain: enterprise
+    host: 10.10.0.25
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens160
+  - name: victim
+    domain: shared
+    host: 10.10.0.100
+    user: root
+    password_env: BENIGN_PE_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: false
+    namespaces: []
+    fixed: false
+    preferred_interface: eth1
+  - name: control
+    domain: control
+    adapter: local
+    preferred_interface: ens160
