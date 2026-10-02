@@ -297,9 +297,17 @@ async def worker():
         emit(dict(type='fatal',error=f'Receiver preflight: {exc}'))
         return
     emit(dict(type='ready', unix=time.time(),evidence=evidence))
-    raw = await reader.readline()
-    if not raw: return
-    start = json.loads(raw)['start_unix']
+    while True:
+        raw = await reader.readline()
+        received = time.time()
+        if not raw: return
+        message = json.loads(raw)
+        if message.get('type') == 'clock':
+            emit(dict(type='clock',nonce=message['nonce'],received_unix=received,sent_unix=time.time()))
+            continue
+        if 'start_unix' not in message: return
+        start = message['start_unix']
+        break
     origin = loop.time() + start-time.time()
     active = {}
     async def control():

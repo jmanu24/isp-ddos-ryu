@@ -35,6 +35,10 @@ def test_real_tcp_udp_http_bidirectional_and_worker_cancellation():
             await proc.stdin.drain()
             ready=json.loads(await asyncio.wait_for(proc.stdout.readline(),5))
             assert ready['type']=='ready',ready
+            from benign_lab.clock_sync import probe_clock
+            clock=await probe_clock(proc,.25)
+            assert clock['status']=='synchronized',clock
+            assert len(clock['samples'])==5
             proc.stdin.write((json.dumps(dict(start_unix=time.time()+.1))+'\nSTOP\n').encode())
             await proc.stdin.drain()
             output=await asyncio.wait_for(proc.stdout.read(),3)

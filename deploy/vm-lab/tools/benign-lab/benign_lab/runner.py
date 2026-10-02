@@ -12,6 +12,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from .config import resolve
+from .clock_sync import probe_clock
 from .ground_truth import windows
 from .planner import canonical, digest, validate
 
@@ -127,7 +128,7 @@ class Manager:
         self.logs[rid]=[]
         self.stops[rid]=asyncio.Event()
         self.processes[rid]=[]
-        self.log(rid,f'{scenario} · {mode} · immutable plan {plan["plan_hash"]}')
+        self.log(rid,f'{scenario} Â· {mode} Â· immutable plan {plan["plan_hash"]}')
         try:
             self.persist(rid)
         except Exception as exc:
@@ -206,8 +207,6 @@ class Manager:
                 raise RuntimeError(f'Agent {key} did not start: {err}')
             reply=json.loads(line)
             if reply['type']!='ready': raise RuntimeError(f'Agent {key}: {reply.get("error",reply)}')
-            if abs(reply['unix']-time.time())>cfg.get('max_clock_skew_s',.5):
-                raise RuntimeError(f'Agent {key} clock differs by more than allowed skew; synchronize NTP')
             group['evidence']=reply.get('evidence',{})
             self.runs[rid].setdefault('agents',{})[key]=dict(sources=sorted(group['sources']),context=group['context'],evidence=group['evidence'],status='ready')
             atomic_json(self.folder(rid)/'execution_mapping.json',self.runs[rid]['agents'])
@@ -217,6 +216,21 @@ class Manager:
         prepared=await asyncio.gather(*(prepare(k,g) for k,g in groups.items()),return_exceptions=True)
         errors=[p for p in prepared if isinstance(p,Exception)]
         if errors: raise errors[0]
+        # Probe only after all plan uploads/preflights finish; the ready message
+        # may have waited in SSH or in the controller's event loop.
+        for key,(proc,group) in zip(groups,prepared):
+            if self.stops[rid].is_set(): return
+            clock=await probe_clock(proc,cfg.get('max_clock_skew_s',.5))
+            r['agents'][key]['clock']=clock
+            r['agents'][key]['status']='ready' if clock['status']=='synchronized' else 'clock_'+clock['status']
+            atomic_json(self.folder(rid)/'execution_mapping.json',r['agents'])
+            sources=', '.join(sorted(group['sources']))
+            detail=f"offset={clock['offset_s']:.6f}s, uncertainty={clock['uncertainty_s']:.6f}s, RTT={clock['round_trip_s']:.6f}s"
+            self.log(rid,f'Clock {sources}: {clock["status"]}; {detail}')
+            if clock['status']=='skewed':
+                raise RuntimeError(f'Agent {sources} clock exceeds allowed skew; synchronize NTP ({detail})')
+            if clock['status']=='inconclusive':
+                raise RuntimeError(f'Agent {sources} clock check inconclusive due to communication latency; retry when load is lower ({detail})')
         if self.stops[rid].is_set(): return
         start=time.time()+cfg.get('start_lead_s',3)
         self.origins[rid]=time.monotonic()+start-time.time()
