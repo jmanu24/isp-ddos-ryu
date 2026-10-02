@@ -60,6 +60,7 @@ class Node:
     domain: str
     ip: str                                  # MGMT/ansible_host address
     interfaces: List[Dict[str, Optional[str]]] = field(default_factory=list)  # [{network, ip}]
+    placement: Dict[str, str] = field(default_factory=dict)
     govc_name: Optional[str] = None
 
 
@@ -77,7 +78,7 @@ def _build_nodes() -> List[Node]:
         domain = ROLE_TO_DOMAIN.get(role, "shared")
         ifaces = [{"network": i["network"], "ip": i.get("ip")} for i in vm.get("interfaces", [])]
         mgmt_ip = next((i["ip"] for i in ifaces if i["network"] == "MGMT" and i.get("ip")), None)
-        nodes.append(Node(name=vm["name"], role=role, domain=domain, ip=mgmt_ip, interfaces=ifaces))
+        nodes.append(Node(name=vm["name"], role=role, domain=domain, ip=mgmt_ip, interfaces=ifaces, placement=vm.get("placement", {"hypervisor": "esxi", "host": "192.168.18.135"})))
     return nodes, networks
 
 
@@ -136,7 +137,7 @@ def to_topology_dict() -> dict:
     domains = {}
     for d in DOMAINS:
         domains[d] = [
-            {"name": n.name, "role": n.role, "ip": n.ip, "interfaces": n.interfaces}
+            {"name": n.name, "role": n.role, "ip": n.ip, "interfaces": n.interfaces, "placement": n.placement}
             for n in nodes_by_domain(d)
         ]
     return {

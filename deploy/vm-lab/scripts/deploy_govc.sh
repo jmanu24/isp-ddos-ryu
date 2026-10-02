@@ -123,6 +123,7 @@ networks = t["networks"]
 out = {}
 for vm in t["vms"]:
     out[vm["name"]] = {
+        "placement": vm.get("placement", {}).get("hypervisor", "esxi"),
         "os_family": templates[vm["template"]]["os_family"],
         "source_vm": templates[vm["template"]]["source_vm"],
         "cpu_shares": vm.get("cpu_shares", "normal"),
@@ -139,6 +140,11 @@ PYEOF
 deploy_one() {
   local name="$1" template_key="$2" vcpu="$3" ram_mb="$4" disk_gb="$5"
 
+  # Protect migrated MAC/IP identities: workstation deployment belongs to its backend.
+  if [ "$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['$name'].get('placement', 'esxi'))" "$VM_META_JSON")" = "workstation" ]; then
+    echo "  $name pertenece a VMware Player; no se crea ni enciende en ESXi"
+    return
+  fi
   local os_family source_vm
   os_family="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['$name']['os_family'])" "$VM_META_JSON")"
   source_vm="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['$name']['source_vm'])" "$VM_META_JSON")"

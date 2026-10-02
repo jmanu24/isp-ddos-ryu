@@ -26,3 +26,14 @@ def test_ssh_password_is_not_in_arguments(tmp_path,monkeypatch):
  assert 'private-secret' not in ' '.join(argv)
  assert 'StrictHostKeyChecking=yes' in argv
  monitor.db.close()
+
+
+def test_ssh_identity_without_password(tmp_path):
+ monitor=InterfaceMonitor(tmp_path,{})
+ argv=monitor.argv(dict(host='10.10.0.253',user='root',known_hosts_file='/tmp/known',identity_file='/tmp/key'))
+ assert argv[0]=='ssh'
+ assert 'sshpass' not in argv
+ assert 'BatchMode=yes' in argv
+ assert '/tmp/key' in argv
+ assert 'StrictHostKeyChecking=yes' in argv
+ monitor.db.close()

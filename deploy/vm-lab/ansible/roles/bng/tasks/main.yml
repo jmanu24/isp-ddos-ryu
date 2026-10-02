@@ -295,6 +295,28 @@
         accel-ppp starts
   ansible.builtin.meta: flush_handlers
 
+- name: Install IPoE kernel compatibility guard
+  ansible.builtin.copy:
+    src: ensure_ipoe_module.sh
+    dest: /usr/local/sbin/ensure-ipoe-module
+    mode: "0755"
+  notify: restart accel-ppp
+
+- name: Create accel-pppd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/accel-pppd.service.d
+    state: directory
+    mode: "0755"
+
+- name: Require the running kernel IPoE module before accel-pppd
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/accel-pppd.service.d/ipoe-kernel.conf
+    mode: "0644"
+    content: |
+      [Service]
+      ExecStartPre=/usr/local/sbin/ensure-ipoe-module
+  notify: restart accel-ppp
+
 - name: Enable and start accel-ppp
   ansible.builtin.systemd:
     name: accel-pppd.service

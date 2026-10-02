@@ -1,0 +1,370 @@
+{
+  "timestamp": 1790980245.7950082,
+  "status": "migrated",
+  "source_originals": [
+    {
+      "name": "victim",
+      "state": "poweredOff",
+      "vcpus": 4,
+      "memory_mb": 1024
+    },
+    {
+      "name": "pe",
+      "state": "poweredOff",
+      "vcpus": 1,
+      "memory_mb": 1024
+    },
+    {
+      "name": "ent-site-1",
+      "state": "poweredOff",
+      "vcpus": 1,
+      "memory_mb": 2048
+    },
+    {
+      "name": "ent-site-2",
+      "state": "poweredOff",
+      "vcpus": 1,
+      "memory_mb": 2048
+    },
+    {
+      "name": "ent-site-3",
+      "state": "poweredOff",
+      "vcpus": 1,
+      "memory_mb": 2048
+    },
+    {
+      "name": "ent-site-4",
+      "state": "poweredOff",
+      "vcpus": 1,
+      "memory_mb": 2048
+    },
+    {
+      "name": "ent-site-5",
+      "state": "poweredOff",
+      "vcpus": 1,
+      "memory_mb": 2048
+    },
+    {
+      "name": "bng",
+      "state": "poweredOff",
+      "vcpus": 1,
+      "memory_mb": 1536
+    },
+    {
+      "name": "suscriptor",
+      "state": "poweredOff",
+      "vcpus": 2,
+      "memory_mb": 1024
+    }
+  ],
+  "destination_states": {
+    "victim": "poweredOn",
+    "pe": "poweredOn",
+    "ent-site-1": "poweredOn",
+    "ent-site-2": "poweredOn",
+    "ent-site-3": "poweredOn",
+    "ent-site-4": "poweredOn",
+    "ent-site-5": "poweredOn",
+    "bng": "poweredOn",
+    "suscriptor": "poweredOn"
+  },
+  "dashboard_states": {
+    "victim": "poweredOn",
+    "pe": "poweredOn",
+    "ent-site-1": "poweredOn",
+    "ent-site-2": "poweredOn",
+    "ent-site-3": "poweredOn",
+    "ent-site-4": "poweredOn",
+    "ent-site-5": "poweredOn",
+    "bng": "poweredOn",
+    "suscriptor": "poweredOn",
+    "core5g": "poweredOn",
+    "ric": "poweredOn",
+    "ran": "poweredOn",
+    "cu2": "poweredOn",
+    "du": "poweredOn",
+    "du2": "poweredOn",
+    "du3": "poweredOn",
+    "du4": "poweredOn",
+    "du5": "poweredOn",
+    "ue": "poweredOn",
+    "ue2": "poweredOn"
+  },
+  "radio_esxi_states": {
+    "core5g": "poweredOn",
+    "ric": "poweredOn",
+    "ran": "poweredOn",
+    "cu2": "poweredOn",
+    "du": "poweredOn",
+    "du2": "poweredOn",
+    "du3": "poweredOn",
+    "du4": "poweredOn",
+    "du5": "poweredOn",
+    "ue": "poweredOn",
+    "ue2": "poweredOn"
+  },
+  "esxi_powered_on": [
+    "Ubuntu_20.04",
+    "br",
+    "ric",
+    "core5g",
+    "ran",
+    "ue",
+    "orchestrator",
+    "peer-router",
+    "du",
+    "du2",
+    "du3",
+    "ue2",
+    "cu2",
+    "du4",
+    "du5",
+    "lab-wifi-relay"
+  ],
+  "traffic_monitor_nodes": [
+    {
+      "name": "orchestrator",
+      "domain": "shared",
+      "status": "connected",
+      "received_at": 1790980235.3552272,
+      "namespace_errors": {},
+      "interfaces": 1
+    },
+    {
+      "name": "bng",
+      "domain": "fixed",
+      "status": "connected",
+      "received_at": 1790980235.3465357,
+      "namespace_errors": {},
+      "interfaces": 13
+    },
+    {
+      "name": "suscriptor",
+      "domain": "fixed",
+      "status": "connected",
+      "received_at": 1790980235.3776548,
+      "namespace_errors": {},
+      "interfaces": 12
+    },
+    {
+      "name": "br",
+      "domain": "peering",
+      "status": "connected",
+      "received_at": 1790980235.37629,
+      "namespace_errors": {},
+      "interfaces": 3
+    },
+    {
+      "name": "peer-router",
+      "domain": "peering",
+      "status": "connected",
+      "received_at": 1790980230.3770163,
+      "namespace_errors": {},
+      "interfaces": 1
+    },
+    {
+      "name": "ric",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980235.3698492,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "core5g",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980235.3865001,
+      "namespace_errors": {},
+      "interfaces": 25
+    },
+    {
+      "name": "ran",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980230.8769119,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "cu2",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980230.8492377,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "du",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980235.3980734,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "du2",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980235.3943076,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "du3",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980235.4004736,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "du4",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980230.7315288,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "du5",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980230.5690074,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "ue",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980235.314815,
+      "namespace_errors": {},
+      "interfaces": 5
+    },
+    {
+      "name": "ue2",
+      "domain": "mobile",
+      "status": "connected",
+      "received_at": 1790980230.9898431,
+      "namespace_errors": {},
+      "interfaces": 4
+    },
+    {
+      "name": "pe",
+      "domain": "shared",
+      "status": "connected",
+      "received_at": 1790980235.31884,
+      "namespace_errors": {},
+      "interfaces": 8
+    },
+    {
+      "name": "ent-site-1",
+      "domain": "enterprise",
+      "status": "connected",
+      "received_at": 1790980230.594821,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "ent-site-2",
+      "domain": "enterprise",
+      "status": "connected",
+      "received_at": 1790980230.6258245,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "ent-site-3",
+      "domain": "enterprise",
+      "status": "connected",
+      "received_at": 1790980230.7285013,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "ent-site-4",
+      "domain": "enterprise",
+      "status": "connected",
+      "received_at": 1790980230.8793035,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "ent-site-5",
+      "domain": "enterprise",
+      "status": "connected",
+      "received_at": 1790980230.8384607,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "victim",
+      "domain": "shared",
+      "status": "connected",
+      "received_at": 1790980235.3517814,
+      "namespace_errors": {},
+      "interfaces": 2
+    },
+    {
+      "name": "control",
+      "domain": "control",
+      "status": "connected",
+      "received_at": 1790980230.4364674,
+      "namespace_errors": {},
+      "interfaces": 8
+    },
+    {
+      "name": "lab-wifi-relay",
+      "domain": "shared",
+      "status": "connected",
+      "received_at": 1790980235.3716693,
+      "namespace_errors": {},
+      "interfaces": 23
+    },
+    {
+      "name": "lab-wifi-gateway",
+      "domain": "shared",
+      "status": "connected",
+      "received_at": 1790980235.3602073,
+      "namespace_errors": {},
+      "interfaces": 23
+    }
+  ],
+  "traffic_items": 9223,
+  "original_plan_sha256": "3a2b8445f025bd6e1625baf6901f024b10d07567beac12d633e09e665b1fa9dc",
+  "plan_hash": "2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245",
+  "overlay_segments": [
+    800,
+    801,
+    804,
+    805,
+    806,
+    807,
+    808
+  ],
+  "connectivity_smoke": {
+    "run_id": "20261002T182530-5fa2bd19",
+    "purpose": "Post-migration low-volume connectivity smoke test; separate from scientific baseline",
+    "status": "completed",
+    "agents": 21,
+    "events": 126,
+    "counts": {
+      "completed": 126
+    },
+    "bytes_tx": 75600,
+    "bytes_rx": 75600,
+    "failed": [],
+    "original_plan_sha256": "3a2b8445f025bd6e1625baf6901f024b10d07567beac12d633e09e665b1fa9dc",
+    "pipeline_restored": true
+  },
+  "tests": {
+    "tool": 39,
+    "backend": 5
+  },
+  "overlay_tcp_probe": {
+    "bytes": 67108864,
+    "mbps": 177.89204401986387
+  },
+  "initial_smoke_note": "The 3-second trial completed 126 events with seven Mobile scheduled-volume warnings; the final 6-second valid trial delivered all planned bytes."
+}

@@ -147,6 +147,7 @@ vms:
       - {network: MGMT, ip: "10.10.0.1"}
 
   - name: bng
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: bng
     # ubuntu, not alpine -- REPLACES the BNGBlaster-era dnsmasq-only
     # design (see bngblaster_broadband_pipeline_status memory: BNGBlaster
@@ -176,6 +177,7 @@ vms:
       - {network: BACKBONE_FIXED, ip: "10.92.0.2"}
 
   - name: suscriptor
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: suscriptor
     template: ubuntu
     vcpu: 2
@@ -476,6 +478,7 @@ vms:
       - {network: RAN, ip: "10.40.0.10"}
 
   - name: pe
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: pe_ovs
     template: alpine
     vcpu: 1
@@ -503,6 +506,7 @@ vms:
       - {network: BACKBONE_PEERING, ip: null}
 
   - name: ent-site-1
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: enterprise_site
     # ubuntu, not alpine -- see peer-router's comment above (hping3
     # unavailable on Alpine 3.24 stable).
@@ -519,6 +523,7 @@ vms:
       - {network: ENT_LAN, ip: "10.70.0.11"}
 
   - name: ent-site-2
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: enterprise_site
     template: ubuntu
     vcpu: 1
@@ -529,6 +534,7 @@ vms:
       - {network: ENT_LAN, ip: "10.70.0.12"}
 
   - name: ent-site-3
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: enterprise_site
     template: ubuntu
     vcpu: 1
@@ -539,6 +545,7 @@ vms:
       - {network: ENT_LAN, ip: "10.70.0.13"}
 
   - name: ent-site-4
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: enterprise_site
     template: ubuntu
     vcpu: 1
@@ -549,6 +556,7 @@ vms:
       - {network: ENT_LAN, ip: "10.70.0.14"}
 
   - name: ent-site-5
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: enterprise_site
     template: ubuntu
     vcpu: 1
@@ -559,6 +567,7 @@ vms:
       - {network: ENT_LAN, ip: "10.70.0.15"}
 
   - name: victim
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: victim
     template: alpine
     vcpu: 4

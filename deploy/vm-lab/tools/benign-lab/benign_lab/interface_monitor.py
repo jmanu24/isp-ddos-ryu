@@ -51,7 +51,12 @@ class InterfaceMonitor:
         args=[node.get('python','python3'),'-u',path,'--interval',str(self.cfg.get('interval_s',5)),'--namespaces',','.join(node.get('namespaces',[]))]
         if node.get('adapter')=='local':return [sys.executable,'-u',str(Path(__file__).with_name('interface_probe.py'))]+args[3:]
         command=('sudo -n ' if node.get('sudo') else '')+' '.join(shlex.quote(a) for a in args)
-        return ['sshpass','-e','ssh','-T','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=2','-o','UserKnownHostsFile='+node['known_hosts_file'],node['user']+'@'+node['host'],command]
+        ssh=['ssh','-T','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=2','-o','UserKnownHostsFile='+node['known_hosts_file']]
+        if node.get('identity_file'):
+            ssh+=['-i',node['identity_file'],'-o','BatchMode=yes']
+        else:
+            ssh=['sshpass','-e']+ssh
+        return ssh+[node['user']+'@'+node['host'],command]
 
     async def collect(self,node):
         delay=5
@@ -59,7 +64,7 @@ class InterfaceMonitor:
             proc=None;stderr_task=None
             try:
                 env=os.environ.copy()
-                if node.get('adapter')!='local':
+                if node.get('adapter')!='local' and not node.get('identity_file'):
                     secret=env.get(node.get('password_env','BENIGN_SSH_PASSWORD'))
                     if not secret:raise RuntimeError('SSH credential unavailable')
                     env['SSHPASS']=secret

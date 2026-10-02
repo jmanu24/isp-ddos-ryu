@@ -774,3 +774,27 @@ traffic_monitor:
     domain: control
     adapter: local
     preferred_interface: ens160
+
+  - name: lab-wifi-relay
+    domain: shared
+    host: 10.10.0.252
+    user: root
+    identity_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/migration/control-overlay-ed25519
+    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/migration/overlay-known-hosts
+    python: python3
+    sudo: false
+    namespaces: []
+    fixed: false
+    preferred_interface: wg0
+
+  - name: lab-wifi-gateway
+    domain: shared
+    host: 10.10.0.253
+    user: root
+    identity_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/migration/control-overlay-ed25519
+    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/migration/overlay-known-hosts
+    python: python3
+    sudo: false
+    namespaces: []
+    fixed: false
+    preferred_interface: wg0
