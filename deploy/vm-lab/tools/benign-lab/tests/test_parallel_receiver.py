@@ -27,6 +27,10 @@ def test_parallel_receiver_protocols_and_failure_cleanup():
       assert b'200 OK' in data and len(data.split(b'\r\n\r\n',1)[1])==1200
      s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(2);s.sendto(b'BLDL:800',('127.0.0.1',19002));assert len(s.recv(2000))==800;s.close()
      os.kill(children[-1],signal.SIGTERM);assert p.wait(timeout=10)!=0
+     # The resource tracker exits asynchronously on pipe EOF after its parent.
+     cleanup_deadline=time.monotonic()+3
+     while any(os.path.exists('/proc/'+str(pid)) for pid in children) and time.monotonic()<cleanup_deadline:
+      time.sleep(.02)
      assert not any(os.path.exists('/proc/'+str(pid)) for pid in children),'Orphan worker'
      print('PASS: four workers, 40 TCP transfers, HTTP, UDP, worker failure and cleanup')
     finally:

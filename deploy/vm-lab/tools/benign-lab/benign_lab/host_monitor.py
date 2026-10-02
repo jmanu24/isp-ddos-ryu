@@ -17,7 +17,7 @@ class HostMonitor:
         self.tasks=[];self.nodes={n['name']:dict(name=n['name'],status='connecting') for n in self.cfg.get('hosts',[])}
     def accept(self,node,row):
         if not 0<=float(row['cpu_pct'])<=100:raise ValueError('Invalid CPU percentage')
-        now=time.time();row=dict(row,host=node['name'],received_at=now,metrics_kind='host_cpu')
+        now=time.time();row=dict(row,host=node['name'],received_at=now,metrics_kind=row.get('metrics_kind','host_cpu'))
         self.db.execute('INSERT OR IGNORE INTO samples(ts,host,body) VALUES(?,?,?)',(row['timestamp'],node['name'],json.dumps(row)))
         self.db.execute('DELETE FROM samples WHERE ts<?',(now-self.cfg.get('retention_s',21600),));self.db.commit()
         self.nodes[node['name']]=dict(name=node['name'],status='connected',received_at=now,timestamp=row['timestamp'],interval_s=row['interval_s'])
@@ -42,10 +42,11 @@ class HostMonitor:
         return esxi_sample(json.loads(out),n['name'])
     async def collect(self,n):
         while True:
+            begin=asyncio.get_running_loop().time()
             try:self.accept(n,await self.sample(n))
             except asyncio.CancelledError:raise
             except Exception:self.nodes[n['name']]=dict(self.nodes[n['name']],status='disconnected',error='No se pudo obtener CPU del host')
-            await asyncio.sleep(n.get('poll_s',5 if n['adapter']=='workstation' else 20))
+            await asyncio.sleep(max(.1,n.get('poll_s',5 if n['adapter']=='workstation' else 20)-(asyncio.get_running_loop().time()-begin)))
     def start(self):self.tasks=[asyncio.create_task(self.collect(n)) for n in self.cfg.get('hosts',[])]
     async def stop(self):
         for t in self.tasks:t.cancel()

@@ -22,6 +22,7 @@ from .planner import DOMAINS, canonical, generate, load_profiles, save_plan, val
 from .runner import Manager, TERMINAL, csv_text
 from .interface_monitor import InterfaceMonitor
 from .host_monitor import HostMonitor
+from .vm_resources import VmResourceMonitor
 
 
 class PlanRequest(BaseModel):
@@ -57,6 +58,20 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     manager=Manager(data/'runs')
     interfaces=InterfaceMonitor(data/'traffic',load_lab(lab_path))
     hosts=HostMonitor(data/'resources',load_lab(lab_path))
+    guests=VmResourceMonitor(data/'vm_resources',load_lab(lab_path))
+    interfaces.resources=guests
+    guest_cursors={}
+    def capture_guests(rid):
+        r=manager.runs[rid]
+        if r['mode']!='lab' or not r.get('started_at'):return
+        path=manager.folder(rid)/'vm_resources.jsonl'
+        if rid not in guest_cursors:
+            guest_cursors[rid]=max((json.loads(l)['id'] for l in path.read_text().splitlines()),default=0) if path.exists() else 0
+        rows=guests.rows(r['started_at'],r.get('finished_at') or time.time(),guest_cursors[rid])
+        if rows:
+            with path.open('a') as f:
+                for row in rows:f.write(json.dumps(row)+'\n')
+            guest_cursors[rid]=rows[-1]['id']
     host_cursors={}
     def capture_hosts(rid):
         r=manager.runs[rid]
@@ -91,6 +106,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             for rid,r in list(manager.runs.items()):
                 capture_interfaces(rid)
                 capture_hosts(rid)
+                capture_guests(rid)
                 if r['status'] in TERMINAL: continue
                 snap=manager.snapshot(rid)
                 now=time.monotonic()
@@ -108,6 +124,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     async def lifespan(app):
         interfaces.start()
         hosts.start()
+        guests.start()
         task=asyncio.create_task(monitor())
         yield
         task.cancel()
@@ -115,10 +132,21 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         await manager.shutdown()
         await interfaces.stop()
         await hosts.stop()
+        await guests.stop()
     app=FastAPI(title='DDOS PUCP LAB',version='1.0.0',lifespan=lifespan)
     app.state.manager=manager
     app.state.interface_monitor=interfaces
     app.state.host_monitor=hosts
+    app.state.vm_resources=guests
+    @app.get('/api/vm-resources')
+    async def vm_resources(minutes:int=5,after:int=0):
+        return guests.response(max(1,min(minutes,360)),max(0,after))
+    @app.get('/api/runs/{rid}/vm-resources')
+    async def run_vm_resources(rid:str,after:int=0):
+        run_for(rid);capture_guests(rid)
+        path=manager.folder(rid)/'vm_resources.jsonl'
+        rows=[json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return dict(items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),hosts=[],historical=True,available=bool(rows))
     @app.get('/api/resources')
     async def resources(minutes:int=5,after:int=0):
         return hosts.response(max(1,min(minutes,360)),max(0,after))
@@ -249,6 +277,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         manager.persist(rid)
         capture_interfaces(rid)
         capture_hosts(rid)
+        capture_guests(rid)
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
             for f in manager.folder(rid).iterdir():

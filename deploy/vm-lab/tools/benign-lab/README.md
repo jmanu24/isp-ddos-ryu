@@ -160,3 +160,7 @@ Implementación apoyada en la documentación oficial de [FastAPI lifespan](https
 ## CPU de hosts
 
 Vista CPU de hosts para ESXi y Windows, historial persistente de 6 horas y host_metrics.jsonl en las nuevas exportaciones. Configuración y escalas: [docs/HOST_CPU_MONITOR.md](docs/HOST_CPU_MONITOR.md).
+
+## Recursos por VM y proceso
+
+Monitoreo continuo de CPU, memoria, disco y procesos de los invitados Linux, con CPU Ready de ESXi y exportación vm_resources.jsonl. [Configuración, escalas y despliegue](docs/VM_RESOURCE_MONITOR.md).

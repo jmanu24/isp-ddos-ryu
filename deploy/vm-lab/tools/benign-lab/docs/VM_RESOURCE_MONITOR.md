@@ -1,0 +1,21 @@
+# Recursos por VM y proceso
+
+La vista Recursos por VM recoge Linux CPU, memoria, I/O wait, steal, carga, disco y procesos a través de las 26 conexiones de interfaces existentes. No abre una sesión SSH adicional por VM. Código compatible con Python 3.6+ en los invitados y Python 3.8 en el servidor web; no requiere paquetes nuevos. Incluye las VMs de Enterprise, Fixed, Mobile, Peering, control y pasarelas.
+
+CPU Linux se obtiene por diferencia de /proc/stat (primeros ocho campos, para no duplicar guest), y usa una escala 0–100 % para toda la VM. Memoria usa MemAvailable, con fallback MemFree+Buffers+Cached. Se conservan CPU iowait y steal y carga de 1/5/15 minutos.
+
+CPU de cada proceso proviene de utime+stime dividido por SC_CLK_TCK y tiempo monotónico: 100 % equivale a una CPU lógica ocupada. Puede superar 100 % en procesos multihilo. Se conserva RSS, PPID, nombre corto, PID, start_ticks e I/O de /proc/PID/io cuando los permisos lo permiten. No se leen argumentos de comandos ni entornos. PID+start_ticks evita mezclar un PID reutilizado. Nuevos procesos requieren dos muestras; procesos que nacen y terminan entre muestras pueden no aparecer. Se conserva la unión de los 15 procesos con más CPU y los 8 con más RSS; no es un inventario exhaustivo. La tabla muestra los 10 primeros por CPU de la última muestra. Los namespaces se identifican por inode de red cuando coinciden con /var/run/netns.
+
+Disco: /proc/diskstats para dispositivos de /sys/block (excluye loop, ram, sr y fd). Tasas de lectura/escritura, IOPS y porcentaje de tiempo ocupado dentro del invitado. No equivale a latencia de datastore. No sumar discos físicos, particiones y capas dm como tráfico único. Campos inaccesibles se presentan sin datos, nunca como consumo cero.
+
+CPU Ready: una consulta govc conjunta cada 20 s para las 16 VMs activas en ESXi. Se filtra por identificador de inventario y configuración explícita de vCPU. Fórmula ready_vcpu_pct = ready_ms/(interval_s*1000*vcpus)*100. También conserva ready_ms agregado y porcentajes por vCPU. No sumar Ready a CPU usada. Las instancias CPU Ready de VMware Player no existen en esta integración; los invitados Linux de Windows sí están cubiertos por sus recursos. Actualizar la configuración si cambian vCPU o se recrean VMs.
+
+Configuración: vm_resource_monitor.retention_s (21600) y esxi_vms, cada una con name, domain, object, entity, vcpus y govc_env. El instalador scripts/install_vm_resource_monitors.py descubre el inventario encendido, excluye los originales migrados y configura esos valores. Debe ejecutarse con el Python de la .venv en el control, sin experimentos activos, con las credenciales existentes y known_hosts ya fijados. Copia interface_probe.py y resource_probe.py a /opt/benign-lab en cada invitado. Después reiniciar benign-lab-web sin experimentos activos. No se crean credenciales ni se cambian recursos de las VMs.
+
+API autenticada: /api/vm-resources?minutes=5&after=0 y /api/runs/{id}/vm-resources?after=0. Historial persistente de seis horas, cursores y huecos ante desconexiones. Las nuevas ejecuciones reales y exportaciones incluyen vm_resources.jsonl, además de host_metrics.jsonl. Las filas contienen timestamp, received_at, interval_s, host, domain, metrics_kind y datos del invitado o del hipervisor. No se reconstruyen registros antiguos inexistentes.
+
+Correlación: unir timestamp UTC de recursos con start_timestamp/stop_timestamp, actual_start_s/actual_end_s y lateness_s de event_states.json y events.jsonl. Los tiempos de eventos ya existían y se mantienen. El intervalo del muestreo limita el diagnóstico de eventos inferiores a un segundo. Mantener NTP y considerar el retraso de recepción y los huecos; una correlación por ventanas no demuestra causalidad.
+
+La frecuencia objetivo Linux es 5 s; el tiempo de lectura de namespaces puede producir huecos. CPU Ready mantiene el intervalo nativo de 20 s. Se corrigió también el temporizador de CPU de hosts para descontar la duración de la consulta del periodo de sondeo.
+
+El monitoreo consume recursos y disco; la consulta ESXi conjunta reduce la carga frente a lanzar una consulta por VM. Su consumo aparece en las muestras de control. Se mantiene BENIGN_V1, plan_hash, semillas y ground truth. No se modifica la detección ni mitigación.

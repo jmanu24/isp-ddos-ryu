@@ -20,9 +20,12 @@ class InterfaceMonitor:
         self.db.commit()
         self.tasks=[];self.processes=set();self.nodes={n['name']:dict(name=n['name'],domain=n['domain'],status='connecting') for n in self.cfg.get('nodes',[])};self.last_prune=0
         self.running=False
+        self.resources=None
 
     def accept(self,node,message):
         received=time.time();rows=[]
+        if self.resources and message.get('resources') and message['resources'].get('cpu_pct') is not None:
+            self.resources.accept(node,message['resources'])
         for raw in message['items']:
             namespace=raw.get('namespace','')
             element=namespace or (('fixed'+raw['interface'][7:]) if node.get('fixed') and raw['interface'].startswith('macvlan') else (node['name']+' (VM)' if node.get('namespaces') else node['name']))

@@ -7,6 +7,11 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    from .resource_probe import snapshot, difference
+except ImportError:
+    from resource_probe import snapshot, difference
+
 FIELDS=('rx_bytes','tx_bytes','rx_packets','tx_packets','rx_dropped','tx_dropped','rx_errors','tx_errors')
 
 
@@ -39,6 +44,8 @@ def main():
     namespaces=[x for x in args.namespaces.split(',') if x]
     if any(not re.fullmatch(r'(?:ue[1-5]|fixed(?:[1-9]|10))',x) for x in namespaces):raise ValueError('Invalid subscriber namespace')
     previous={}
+    try:resources_before=snapshot()
+    except (OSError,ValueError,KeyError):resources_before=None
     while True:
         begin=time.monotonic()
         items=[dict(namespace='',**row) for row in read_interfaces()]
@@ -57,7 +64,15 @@ def main():
             previous[key]=(now,dict(row))
         present={(r['namespace'],r['interface']) for r in items}
         previous={k:v for k,v in previous.items() if k in present}
-        print(json.dumps(dict(timestamp=time.time(),items=items,errors=errors)),flush=True)
+        resources=None
+        try:
+            resources_now=snapshot()
+            if resources_before is not None:resources=difference(resources_before,resources_now)
+            resources_before=resources_now
+        except (OSError,ValueError,KeyError):
+            errors['resources']='Resource counters unavailable'
+            resources_before=None
+        print(json.dumps(dict(timestamp=time.time(),items=items,errors=errors,resources=resources)),flush=True)
         time.sleep(max(.1,args.interval-(time.monotonic()-begin)))
 
 if __name__=='__main__':

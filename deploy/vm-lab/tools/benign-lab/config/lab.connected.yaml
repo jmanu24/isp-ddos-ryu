@@ -808,3 +808,102 @@ host_monitor:
     adapter: workstation
     config_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/workstation.json
     poll_s: 5
+vm_resource_monitor:
+  retention_s: 21600
+  esxi_vms:
+  - name: Ubuntu_20.04
+    domain: shared
+    vcpus: 4
+    object: /ha-datacenter/vm/Ubuntu_20.04
+    entity: '34'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: br
+    domain: peering
+    vcpus: 2
+    object: /ha-datacenter/vm/br
+    entity: '51'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: ric
+    domain: mobile
+    vcpus: 2
+    object: /ha-datacenter/vm/ric
+    entity: '52'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: core5g
+    domain: mobile
+    vcpus: 2
+    object: /ha-datacenter/vm/core5g
+    entity: '53'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: ran
+    domain: mobile
+    vcpus: 4
+    object: /ha-datacenter/vm/ran
+    entity: '54'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: ue
+    domain: mobile
+    vcpus: 8
+    object: /ha-datacenter/vm/ue
+    entity: '55'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: orchestrator
+    domain: shared
+    vcpus: 2
+    object: /ha-datacenter/vm/orchestrator
+    entity: '56'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: peer-router
+    domain: peering
+    vcpus: 1
+    object: /ha-datacenter/vm/peer-router
+    entity: '57'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: du
+    domain: mobile
+    vcpus: 8
+    object: /ha-datacenter/vm/du
+    entity: '65'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: du2
+    domain: mobile
+    vcpus: 8
+    object: /ha-datacenter/vm/du2
+    entity: '66'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: du3
+    domain: mobile
+    vcpus: 8
+    object: /ha-datacenter/vm/du3
+    entity: '67'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: ue2
+    domain: mobile
+    vcpus: 8
+    object: /ha-datacenter/vm/ue2
+    entity: '71'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: cu2
+    domain: mobile
+    vcpus: 4
+    object: /ha-datacenter/vm/cu2
+    entity: '72'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: du4
+    domain: mobile
+    vcpus: 8
+    object: /ha-datacenter/vm/du4
+    entity: '73'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: du5
+    domain: mobile
+    vcpus: 8
+    object: /ha-datacenter/vm/du5
+    entity: '74'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+  - name: lab-wifi-relay
+    domain: shared
+    vcpus: 2
+    object: /ha-datacenter/vm/lab-wifi-relay
+    entity: '75'
+    govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
