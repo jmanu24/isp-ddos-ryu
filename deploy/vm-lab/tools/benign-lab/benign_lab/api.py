@@ -36,6 +36,7 @@ class RunRequest(BaseModel):
     plan_hash: str
     mode: str = 'simulation'
     scenario: str = 'B0'
+    pipeline: str = 'enabled'
     speed: float = Field(default=20,ge=.1,le=100)
     attack_windows: List[AttackWindow] = Field(default_factory=list,max_length=100)
 
@@ -153,7 +154,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @app.post('/api/runs')
     async def start_run(body:RunRequest):
         p=read_plan(body.plan_hash)
-        return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows])
+        return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows],body.pipeline)
     @app.get('/api/runs/{rid}')
     async def get_run(rid:str):
         run_for(rid)

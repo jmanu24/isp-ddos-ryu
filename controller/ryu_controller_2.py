@@ -1,4 +1,5 @@
 import logging
+from config.baseline import baseline_active
 from collections import defaultdict
 from typing import Dict
 
@@ -432,7 +433,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         correlated = self.correlator.correlate()
 
         # Keep telemetry and forwarding while isolated capacity probes run.
-        if settings.LAB_CALIBRATION_MODE:
+        if settings.LAB_CALIBRATION_MODE or baseline_active(self.orchestrator):
             self.orchestrator.validate(correlated, [])
             return
 

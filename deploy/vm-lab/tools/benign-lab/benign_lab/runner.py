@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 from .config import resolve
 from .clock_sync import probe_clock
+from .baseline import BaselineGuard
 from .ground_truth import windows
 from .planner import canonical, digest, validate
 
@@ -97,8 +98,13 @@ class Manager:
         (self.folder(rid)/'ground_truth_windows.csv').write_text(csv_text(windows(p,r)))
         (self.folder(rid)/'generated_events.csv').write_text(csv_text(list(self.events[rid].values())))
 
-    async def start(self,plan,plan_file,cfg,mode='simulation',scenario='B0',speed=20,attack_windows=None):
+    async def start(self,plan,plan_file,cfg,mode='simulation',scenario='B0',speed=20,attack_windows=None,pipeline='enabled'):
         validate(plan)
+        if pipeline not in ('enabled','baseline'): raise ValueError('Invalid pipeline option')
+        if pipeline=='baseline' and (mode!='lab' or scenario!='B0' or attack_windows):
+            raise ValueError('Baseline requires laboratory B0 without attacks')
+        if pipeline=='baseline' and not cfg.get('baseline_control'):
+            raise ValueError('Baseline controller mapping is not configured')
         if any(r['status'] not in TERMINAL for r in self.runs.values()):
             raise ValueError('An experiment is already active; concurrent runs would contaminate the baseline')
         if mode not in ('simulation','lab') or scenario not in ('B0','B0+attack'):
@@ -120,7 +126,7 @@ class Manager:
                plan_hash=plan['plan_hash'],plan_file_sha256=__import__('hashlib').sha256(Path(plan_file).read_bytes()).hexdigest(),
                lab_hash=digest(cfg),seed=plan['seed'],duration_s=plan['duration_s'],mode=mode,scenario=scenario,speed=speed,
                elapsed_s=0,attack_windows=attack_windows,observed_attacks=[],error=None,
-               metrics_kind='simulated_payload' if mode=='simulation' else 'application_payload')
+               pipeline=pipeline,baseline_control={},metrics_kind='simulated_payload' if mode=='simulation' else 'application_payload')
         self.runs[rid]=r
         self.events[rid]={e['event_id']:dict(e,status='pending',bytes_tx=0,bytes_rx=0,chunks_tx=0,chunks_rx=0,
                          icmp_replies=0,src_port=None,dst_port=None,actual_start_s=None,actual_end_s=None,
@@ -139,11 +145,34 @@ class Manager:
 
     async def execute(self,rid,plan,cfg,groups):
         r=self.runs[rid]
+        guard=None
         try:
+            if r['pipeline']=='baseline':
+                cfg=copy.deepcopy(cfg)
+                guard=BaselineGuard(cfg,rid,plan['duration_s'])
+                self.log(rid,'Suspending detection and mitigation for baseline')
+                r['baseline_control']['preflight']=await guard.enter()
+                groups=resolve(cfg,plan)
+                r['lab_hash']=digest(cfg)
+                atomic_json(self.folder(rid)/'lab_snapshot.json',cfg)
+                self.persist(rid)
+                self.log(rid,'Baseline acknowledged; UE budgets restored and ten Fixed sessions verified')
             if r['mode']=='simulation':
                 await self.simulate(rid,plan)
             else:
-                await self.real(rid,plan,cfg,groups)
+                if guard:
+                    traffic=asyncio.create_task(self.real(rid,plan,cfg,groups))
+                    monitor=asyncio.create_task(guard.monitor())
+                    try:
+                        done,_=await asyncio.wait((traffic,monitor),return_when=asyncio.FIRST_COMPLETED)
+                        if monitor in done:await monitor
+                        await traffic
+                    finally:
+                        for task in (traffic,monitor):
+                            if not task.done():task.cancel()
+                        await asyncio.gather(traffic,monitor,return_exceptions=True)
+                else:
+                    await self.real(rid,plan,cfg,groups)
             if self.stops[rid].is_set(): r['status']='stopped'
             else:
                 r['status']='completed_with_errors' if any(e['status']=='failed' or e.get('error') for e in self.events[rid].values()) else 'completed'
@@ -156,6 +185,14 @@ class Manager:
                 factor=r['speed'] if r['mode']=='simulation' else 1
                 r['elapsed_s']=min(r['duration_s'],max(0,(time.monotonic()-self.origins[rid])*factor))
             await self.kill_processes(rid)
+            if guard:
+                try:
+                    r['baseline_control']['restoration']=await guard.leave()
+                    self.log(rid,'Detection and mitigation restored after baseline')
+                except Exception as exc:
+                    r.update(status='failed',error='Baseline restoration failed: '+str(exc))
+                    r['baseline_control']['restoration']=dict(restored=False,error=str(exc))
+                    self.log(rid,r['error'],'error')
             for e in self.events[rid].values():
                 if e['status'] in ('pending','running'):
                     e['status']='cancelled' if r['status']=='stopped' else 'failed'
