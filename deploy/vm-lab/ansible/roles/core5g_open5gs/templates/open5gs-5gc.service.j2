@@ -13,9 +13,11 @@ WorkingDirectory=/opt/srsRAN_Project/docker
 # it's still there from the previous run. Force a clean slate before every
 # start; "-" ignores the exit code when ogstun doesn't exist yet.
 ExecStartPre=-/sbin/ip link delete ogstun
-ExecStart=/usr/bin/docker compose up --build 5gc
+# Build the image during provisioning; boot must only run the existing image.
+ExecStart=/usr/bin/docker compose up --no-build --pull never 5gc
 ExecStop=/usr/bin/docker compose down
 Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

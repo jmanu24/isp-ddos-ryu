@@ -99,6 +99,18 @@
     dest: /opt/srsRAN_Project/docker/open5gs/open5gs.env
     mode: "0644"
 
+- name: Check whether the Open5GS image is already available
+  ansible.builtin.command: docker image inspect docker-5gc:latest
+  register: open5gs_image
+  changed_when: false
+  failed_when: false
+
+- name: Build the initial Open5GS image during provisioning
+  ansible.builtin.command: docker compose build 5gc
+  args:
+    chdir: /opt/srsRAN_Project/docker
+  when: open5gs_image.rc != 0
+
 - name: Deploy systemd unit for the 5GC docker-compose stack
   ansible.builtin.template:
     src: open5gs-5gc.service.j2
