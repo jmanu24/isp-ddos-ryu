@@ -21,6 +21,7 @@ from .ground_truth import windows
 from .planner import DOMAINS, canonical, generate, load_profiles, save_plan, validate
 from .runner import Manager, TERMINAL, csv_text
 from .interface_monitor import InterfaceMonitor
+from .host_monitor import HostMonitor
 
 
 class PlanRequest(BaseModel):
@@ -55,6 +56,19 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     plans.mkdir(parents=True,exist_ok=True)
     manager=Manager(data/'runs')
     interfaces=InterfaceMonitor(data/'traffic',load_lab(lab_path))
+    hosts=HostMonitor(data/'resources',load_lab(lab_path))
+    host_cursors={}
+    def capture_hosts(rid):
+        r=manager.runs[rid]
+        if r['mode']!='lab' or not r.get('started_at'):return
+        path=manager.folder(rid)/'host_metrics.jsonl'
+        if rid not in host_cursors:
+            host_cursors[rid]=max((json.loads(l)['id'] for l in path.read_text().splitlines()),default=0) if path.exists() else 0
+        rows=hosts.rows(r['started_at'],r.get('finished_at') or time.time(),host_cursors[rid])
+        if rows:
+            with path.open('a') as f:
+                for row in rows:f.write(json.dumps(row)+'\n')
+            host_cursors[rid]=rows[-1]['id']
     previous={}
     interface_cursors={}
     def capture_interfaces(rid):
@@ -76,6 +90,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             tick+=1
             for rid,r in list(manager.runs.items()):
                 capture_interfaces(rid)
+                capture_hosts(rid)
                 if r['status'] in TERMINAL: continue
                 snap=manager.snapshot(rid)
                 now=time.monotonic()
@@ -92,15 +107,27 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @asynccontextmanager
     async def lifespan(app):
         interfaces.start()
+        hosts.start()
         task=asyncio.create_task(monitor())
         yield
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError): await task
         await manager.shutdown()
         await interfaces.stop()
-    app=FastAPI(title='BENIGN Lab',version='1.0.0',lifespan=lifespan)
+        await hosts.stop()
+    app=FastAPI(title='DDOS PUCP LAB',version='1.0.0',lifespan=lifespan)
     app.state.manager=manager
     app.state.interface_monitor=interfaces
+    app.state.host_monitor=hosts
+    @app.get('/api/resources')
+    async def resources(minutes:int=5,after:int=0):
+        return hosts.response(max(1,min(minutes,360)),max(0,after))
+    @app.get('/api/runs/{rid}/resources')
+    async def run_resources(rid:str,after:int=0):
+        run_for(rid);capture_hosts(rid)
+        path=manager.folder(rid)/'host_metrics.jsonl'
+        rows=[json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return dict(items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),hosts=[],historical=True,available=bool(rows))
     @app.get('/api/traffic')
     async def traffic(minutes:int=5,after:int=0):
         return interfaces.response(max(1,min(minutes,360)),max(0,after))
@@ -221,6 +248,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         run_for(rid)
         manager.persist(rid)
         capture_interfaces(rid)
+        capture_hosts(rid)
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
             for f in manager.folder(rid).iterdir():

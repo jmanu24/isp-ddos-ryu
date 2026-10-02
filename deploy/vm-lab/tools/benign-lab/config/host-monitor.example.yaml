@@ -1,0 +1,12 @@
+host_monitor:
+  retention_s: 21600
+  hosts:
+    - name: ESXi · 192.168.18.135
+      adapter: esxi
+      object: /ha-datacenter/host/localhost./localhost.localdomain
+      govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+      poll_s: 20
+    - name: Windows · 192.168.18.45
+      adapter: workstation
+      config_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/workstation.json
+      poll_s: 5

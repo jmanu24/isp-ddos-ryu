@@ -1,4 +1,4 @@
-# BENIGN Lab
+# DDOS PUCP LAB
 
 ## Instalación conectada en isp-ddos-ryu
 
@@ -156,3 +156,7 @@ Pruebas de determinismo, independencia por dominio, integridad, límites exactos
 [docs/API.md](docs/API.md) documenta los endpoints. El esquema OpenAPI se sirve en `/docs`.
 
 Implementación apoyada en la documentación oficial de [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/), [archivos estáticos](https://fastapi.tiangolo.com/tutorial/static-files/) y [subprocesos asyncio](https://docs.python.org/3/library/asyncio-subprocess.html).
+
+## CPU de hosts
+
+Vista CPU de hosts para ESXi y Windows, historial persistente de 6 horas y host_metrics.jsonl en las nuevas exportaciones. Configuración y escalas: [docs/HOST_CPU_MONITOR.md](docs/HOST_CPU_MONITOR.md).

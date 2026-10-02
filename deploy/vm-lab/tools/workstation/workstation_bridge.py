@@ -1,9 +1,32 @@
 """Loopback-only VMware Player control endpoint, reached through SSH reverse forwarding."""
-import argparse,json,hmac,subprocess
+import argparse,json,hmac,subprocess,ctypes,threading,time,os
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 p=argparse.ArgumentParser();p.add_argument('--config',required=True);args=p.parse_args()
 cfg=json.loads(Path(args.config).read_text());token=cfg['token'];vms=cfg['vms'];vmrun=cfg['vmrun']
+
+_cpu_lock=threading.Lock();_cpu_sample=None
+class FileTime(ctypes.Structure):
+ _fields_=[('low',ctypes.c_ulong),('high',ctypes.c_ulong)]
+def cpu_times():
+ idle,kernel,user=FileTime(),FileTime(),FileTime()
+ if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle),ctypes.byref(kernel),ctypes.byref(user)):raise OSError('CPU counters unavailable')
+ value=lambda v:(v.high<<32)|v.low
+ return value(idle),value(kernel)+value(user)
+def collect_cpu():
+ global _cpu_sample
+ old=cpu_times();before=time.monotonic()
+ while True:
+  time.sleep(5)
+  try:
+   current=cpu_times();now=time.monotonic();total=current[1]-old[1];idle=current[0]-old[0]
+   if total>0:
+    row=dict(platform='windows',timestamp=time.time(),interval_s=now-before,cpu_pct=max(0,min(100,100*(total-idle)/total)),logical_cpus=os.cpu_count(),metrics_kind='host_cpu')
+    with _cpu_lock:_cpu_sample=row
+   old=current;before=now
+  except OSError:pass
+threading.Thread(target=collect_cpu,daemon=True).start()
+
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*args):pass
  def authorized(self):return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
@@ -11,6 +34,9 @@ class Handler(BaseHTTPRequestHandler):
   body=json.dumps(data).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   if not self.authorized():return self.respond(401,{'error':'unauthorized'})
+  if self.path=='/resources':
+   with _cpu_lock:row=_cpu_sample
+   return self.respond(200,row) if row and time.time()-row['timestamp']<20 else self.respond(503,{'error':'CPU sample unavailable'})
   if self.path!='/states':return self.respond(404,{'error':'not found'})
   try:
    r=subprocess.run([vmrun,'-T','player','list'],capture_output=True,text=True,timeout=15,creationflags=subprocess.CREATE_NO_WINDOW)
