@@ -1,4 +1,4 @@
-"""Dependency-free worker and bounded TCP/UDP/HTTP receiver, Python >=3.11.
+"""Dependency-free worker and bounded TCP/UDP/HTTP receiver, Python >=3.8.
 
 stdin: prepare JSON, then {start_unix: ...}; EOF or STOP cancels every task.
 stdout: newline-delimited JSON. Keep stdout free of human diagnostics.
@@ -9,6 +9,8 @@ import asyncio
 from asyncio import TimeoutError
 import json
 import math
+import multiprocessing
+import os
 import shutil
 import signal
 import socket
@@ -118,10 +120,10 @@ class UDPReceiver(asyncio.DatagramProtocol):
                 pass
 
 
-async def receiver(host, tcp, udp, http):
-    servers = [await asyncio.start_server(receive_client, host, port) for port in (tcp,http)]
-    transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(UDPReceiver, local_addr=(host,udp))
-    print(f'Receiver ready: {host} TCP={tcp}, UDP={udp}, HTTP={http}', flush=True)
+async def receiver(host, tcp, udp, http, reuse_port=False):
+    servers = [await asyncio.start_server(receive_client, host, port, reuse_port=reuse_port) for port in (tcp,http)]
+    transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(UDPReceiver, local_addr=(host,udp), reuse_port=reuse_port)
+    print(f'Receiver ready: pid={os.getpid()} {host} TCP={tcp}, UDP={udp}, HTTP={http}', flush=True)
     try:
         await asyncio.Event().wait()
     finally:
@@ -365,6 +367,39 @@ async def worker():
     emit(dict(type='done'))
 
 
+def receiver_process(host, tcp, udp, http):
+    asyncio.run(receiver(host, tcp, udp, http, reuse_port=True))
+
+
+def parallel_receiver(args):
+    """Supervise independent event loops sharing Linux SO_REUSEPORT sockets."""
+    ctx = multiprocessing.get_context('spawn')
+    children = [ctx.Process(target=receiver_process,
+                args=(args.host,args.tcp_port,args.udp_port,args.http_port))
+                for _ in range(args.workers)]
+    def stop(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        for child in children:
+            child.start()
+        while True:
+            for child in children:
+                child.join(timeout=.2)
+                if child.exitcode is not None:
+                    raise RuntimeError('Receiver worker exited: %s' % child.exitcode)
+    finally:
+        for child in children:
+            if child.is_alive():
+                child.terminate()
+        for child in children:
+            if child.pid is not None:
+                child.join(timeout=5)
+                if child.is_alive():
+                    child.kill()
+                    child.join()
+
+
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest='command',required=True)
@@ -374,9 +409,15 @@ def main():
     r.add_argument('--tcp-port',type=int,default=9001)
     r.add_argument('--udp-port',type=int,default=9002)
     r.add_argument('--http-port',type=int,default=8088)
+    r.add_argument('--workers',type=int,default=1,help='Independent receiver processes (Linux SO_REUSEPORT)')
     args = p.parse_args()
+    if args.command=='receiver' and not 1 <= args.workers <= 64:
+        p.error('--workers must be between 1 and 64')
     try:
-        asyncio.run(worker() if args.command=='worker' else receiver(args.host,args.tcp_port,args.udp_port,args.http_port))
+        if args.command=='receiver' and args.workers > 1:
+            parallel_receiver(args)
+        else:
+            asyncio.run(worker() if args.command=='worker' else receiver(args.host,args.tcp_port,args.udp_port,args.http_port))
     except KeyboardInterrupt:
         pass
 

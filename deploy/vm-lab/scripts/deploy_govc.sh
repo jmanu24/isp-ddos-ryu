@@ -125,6 +125,8 @@ for vm in t["vms"]:
     out[vm["name"]] = {
         "os_family": templates[vm["template"]]["os_family"],
         "source_vm": templates[vm["template"]]["source_vm"],
+        "cpu_shares": vm.get("cpu_shares", "normal"),
+        "latency_sensitivity": vm.get("latency_sensitivity", "normal"),
         "interfaces": [
             {"portgroup": networks[i["network"]]["portgroup"]}
             for i in vm["interfaces"]
@@ -163,7 +165,11 @@ deploy_one() {
     echo 'answer.msg.uuid.altered = \"I copied it\"' >> /vmfs/volumes/${DATASTORE}/${name}/${name}.vmx
   "
   govc vm.register "${name}/${name}.vmx"
-  govc vm.change -vm "$name" -c "$vcpu" -m "$ram_mb"
+  # Shared-host policy: do not inherit exclusive CPU scheduling from templates.
+  local cpu_shares latency
+  cpu_shares="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['$name']['cpu_shares'])" "$VM_META_JSON")"
+  latency="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['$name']['latency_sensitivity'])" "$VM_META_JSON")"
+  govc vm.change -vm "$name" -c "$vcpu" -m "$ram_mb" -cpu.shares "$cpu_shares" -latency "$latency"
   govc vm.disk.change -vm "$name" -disk.name disk-1000-0 -size "${disk_gb}G" 2>/dev/null \
     || echo "  (aviso: no se pudo redimensionar el disco automaticamente -- ajustalo a mano si hace falta)"
 
