@@ -344,7 +344,7 @@ vms:
     # bug as originally assumed).
     vcpu: 8
     cpu_shares: normal
-    latency_sensitivity: normal
+    latency_sensitivity: high
     ram_mb: 8192
     # 20, matching `ran` -- this VM clones + builds the full srsRAN
     # Project source tree itself (same as ran_srsran), not just runs a
@@ -375,7 +375,7 @@ vms:
     template: ubuntu
     vcpu: 8
     cpu_shares: normal
-    latency_sensitivity: normal
+    latency_sensitivity: high
     ram_mb: 8192
     disk_gb: 20
     # du2/du3 pair with cu1 (`ran`), same as `du` -- only du4/du5 move to
@@ -392,7 +392,7 @@ vms:
     template: ubuntu
     vcpu: 8
     cpu_shares: normal
-    latency_sensitivity: normal
+    latency_sensitivity: high
     ram_mb: 8192
     disk_gb: 20
     cu: ran
@@ -406,7 +406,7 @@ vms:
     template: ubuntu
     vcpu: 8
     cpu_shares: normal
-    latency_sensitivity: normal
+    latency_sensitivity: high
     ram_mb: 8192
     disk_gb: 20
     # du4/du5 pair with cu2, and their UE processes run on ue2 -- NOT
@@ -422,7 +422,7 @@ vms:
     template: ubuntu
     vcpu: 8
     cpu_shares: normal
-    latency_sensitivity: normal
+    latency_sensitivity: high
     ram_mb: 8192
     disk_gb: 20
     cu: cu2
@@ -445,7 +445,7 @@ vms:
     # guessing at a smaller number.
     vcpu: 8
     cpu_shares: normal
-    latency_sensitivity: normal
+    latency_sensitivity: high
     # 2048 was a real undersize -- confirmed on a real run -- each srsue
     # instance uses ~600-900MB RSS, and running just 3 (of the then-
     # planned 5) concurrently made the kernel OOM-killer kill one
@@ -470,7 +470,7 @@ vms:
     template: ubuntu
     vcpu: 8
     cpu_shares: normal
-    latency_sensitivity: normal
+    latency_sensitivity: high
     ram_mb: 8192
     disk_gb: 15
     interfaces:

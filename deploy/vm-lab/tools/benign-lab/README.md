@@ -167,6 +167,3 @@ Monitoreo continuo de CPU, memoria, disco y procesos de los invitados Linux, con
 
 
 La ejecución optimizada ofrece supervisores por VM, métricas agrupadas y un perfil TCP/HTTP persistente seleccionable. Consulta [OPTIMIZED_EXECUTION.md](docs/OPTIMIZED_EXECUTION.md) para despliegue y comparaciones reproducibles.
-
-
-Peering puede repartirse entre procesos sin modificar el plan; la configuración conectada usa dos. Ver [PEERING_PARALLEL_SCHEDULING.md](docs/PEERING_PARALLEL_SCHEDULING.md) para la política física y el diseño de las tres pruebas baseline.
