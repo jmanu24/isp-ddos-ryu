@@ -76,8 +76,8 @@ def resolve(cfg, plan):
     if cfg.get('require_explicit_mapping'):
         issues = mapping_issues(cfg)
         if issues: raise ValueError('Incomplete laboratory mapping: ' + '; '.join(issues))
-        if cfg.get('capacity_mbps') != plan['capacity_mbps']:
-            raise ValueError('Plan capacities differ from the laboratory; reuse the paired plan with its original capacities')
+        if cfg.get('require_matching_plan_capacities',False) and cfg.get('capacity_mbps') != plan['capacity_mbps']:
+            raise ValueError('Strict capacity policy: plan capacities differ from the laboratory reference')
     networks = [ipaddress.ip_network(x) for x in cfg.get('allowed_target_cidrs',['127.0.0.0/8','10.0.0.0/8'])]
     for event in plan['events']:
         node = executor_for(cfg,event)

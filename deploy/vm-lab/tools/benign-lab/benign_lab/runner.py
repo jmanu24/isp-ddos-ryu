@@ -165,6 +165,8 @@ class Manager:
         r=dict(id=rid,status='preparing',created_at=time.time(),started_at=None,finished_at=None,
                plan_hash=plan['plan_hash'],plan_file_sha256=__import__('hashlib').sha256(Path(plan_file).read_bytes()).hexdigest(),
                lab_hash=digest(cfg),seed=plan['seed'],duration_s=plan['duration_s'],mode=mode,scenario=scenario,speed=speed,
+               plan_capacity_mbps=copy.deepcopy(plan['capacity_mbps']),lab_reference_capacity_mbps=copy.deepcopy(cfg.get('capacity_mbps')),
+               capacities_differ=cfg.get('capacity_mbps')!=plan['capacity_mbps'],
                elapsed_s=0,attack_windows=attack_windows,observed_attacks=[],error=None,
                pipeline=pipeline,execution_profile=options['profile'],execution_options=options,execution_hash=digest(options),baseline_control={},metrics_kind='simulated_payload' if mode=='simulation' else 'application_payload')
         self.runs[rid]=r
@@ -177,6 +179,8 @@ class Manager:
         self.stops[rid]=asyncio.Event()
         self.processes[rid]=[]
         self.log(rid,f'{scenario} | {mode} | immutable plan {plan["plan_hash"]}')
+        if r['capacities_differ']:
+            self.log(rid,'Custom plan capacities (Mbps): '+json.dumps(r['plan_capacity_mbps'],sort_keys=True)+'; unchanged lab reference: '+json.dumps(r['lab_reference_capacity_mbps'],sort_keys=True))
         try:
             await self.persist_async(rid)
         except Exception as exc:
