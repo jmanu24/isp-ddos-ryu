@@ -63,11 +63,11 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     guest_cursors={}
     def capture_guests(rid):
         r=manager.runs[rid]
-        if r['mode']!='lab' or not r.get('started_at'):return
+        if r['mode']!='lab':return
         path=manager.folder(rid)/'vm_resources.jsonl'
         if rid not in guest_cursors:
             guest_cursors[rid]=max((json.loads(l)['id'] for l in path.read_text().splitlines()),default=0) if path.exists() else 0
-        rows=guests.rows(r['started_at'],r.get('finished_at') or time.time(),guest_cursors[rid])
+        rows=guests.rows(r.get('started_at') or r['created_at'],r.get('finished_at') or time.time(),guest_cursors[rid])
         if rows:
             with path.open('a') as f:
                 for row in rows:f.write(json.dumps(row)+'\n')
@@ -75,11 +75,11 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     host_cursors={}
     def capture_hosts(rid):
         r=manager.runs[rid]
-        if r['mode']!='lab' or not r.get('started_at'):return
+        if r['mode']!='lab':return
         path=manager.folder(rid)/'host_metrics.jsonl'
         if rid not in host_cursors:
             host_cursors[rid]=max((json.loads(l)['id'] for l in path.read_text().splitlines()),default=0) if path.exists() else 0
-        rows=hosts.rows(r['started_at'],r.get('finished_at') or time.time(),host_cursors[rid])
+        rows=hosts.rows(r.get('started_at') or r['created_at'],r.get('finished_at') or time.time(),host_cursors[rid])
         if rows:
             with path.open('a') as f:
                 for row in rows:f.write(json.dumps(row)+'\n')
@@ -88,26 +88,30 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     interface_cursors={}
     def capture_interfaces(rid):
         r=manager.runs[rid]
-        if r['mode']!='lab' or not r.get('started_at'): return []
+        if r['mode']!='lab': return []
         path=manager.folder(rid)/'interface_metrics.jsonl'
         if rid not in interface_cursors:
             interface_cursors[rid]=max((json.loads(line)['id'] for line in path.read_text().splitlines()),default=0) if path.exists() else 0
-        rows=interfaces.rows(r['started_at'],r.get('finished_at') or time.time(),interface_cursors[rid])
+        rows=interfaces.rows(r.get('started_at') or r['created_at'],r.get('finished_at') or time.time(),interface_cursors[rid])
         if rows:
             with path.open('a') as f:
                 for row in rows:f.write(json.dumps(row)+'\n')
             interface_cursors[rid]=rows[-1]['id']
         return rows
+    finalized=set(manager.runs)
     async def monitor():
         tick=0
         while True:
             await asyncio.sleep(1)
             tick+=1
             for rid,r in list(manager.runs.items()):
+                if r['status'] in TERMINAL and rid in finalized: continue
                 capture_interfaces(rid)
                 capture_hosts(rid)
                 capture_guests(rid)
-                if r['status'] in TERMINAL: continue
+                if r['status'] in TERMINAL:
+                    if r.get('finished_at'): finalized.add(rid)
+                    continue
                 snap=manager.snapshot(rid)
                 now=time.monotonic()
                 total=snap['bytes_tx']+snap['bytes_rx']
@@ -140,7 +144,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     app.state.vm_resources=guests
     @app.get('/api/vm-resources')
     async def vm_resources(minutes:int=5,after:int=0):
-        return guests.response(max(1,min(minutes,360)),max(0,after))
+        return await asyncio.get_running_loop().run_in_executor(None,lambda: JSONResponse(guests.response(max(1,min(minutes,360)),max(0,after))))
     @app.get('/api/runs/{rid}/vm-resources')
     async def run_vm_resources(rid:str,after:int=0):
         run_for(rid);capture_guests(rid)
@@ -149,7 +153,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         return dict(items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),hosts=[],historical=True,available=bool(rows))
     @app.get('/api/resources')
     async def resources(minutes:int=5,after:int=0):
-        return hosts.response(max(1,min(minutes,360)),max(0,after))
+        return await asyncio.get_running_loop().run_in_executor(None,lambda: JSONResponse(hosts.response(max(1,min(minutes,360)),max(0,after))))
     @app.get('/api/runs/{rid}/resources')
     async def run_resources(rid:str,after:int=0):
         run_for(rid);capture_hosts(rid)
@@ -158,7 +162,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         return dict(items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),hosts=[],historical=True,available=bool(rows))
     @app.get('/api/traffic')
     async def traffic(minutes:int=5,after:int=0):
-        return interfaces.response(max(1,min(minutes,360)),max(0,after))
+        return await asyncio.get_running_loop().run_in_executor(None,lambda: JSONResponse(interfaces.response(max(1,min(minutes,360)),max(0,after))))
     @app.get('/api/runs/{rid}/interface-traffic')
     async def interface_traffic(rid:str,after:int=0):
         run_for(rid)
@@ -192,7 +196,16 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         path=plans/f'{ph}.json'
         if not path.exists(): raise HTTPException(404,'Plan not found')
         return path
-    def read_plan(ph): return validate(json.loads(path_for(ph).read_text()))
+    plan_cache={}
+    def read_plan(ph):
+        path=path_for(ph)
+        stat=path.stat()
+        signature=(stat.st_mtime_ns,stat.st_size)
+        cached=plan_cache.get(ph)
+        if cached is None or cached[0]!=signature:
+            cached=(signature,validate(json.loads(path.read_text())))
+            plan_cache[ph]=cached
+        return cached[1]
     def run_for(rid):
         if rid not in manager.runs: raise HTTPException(404,'Experiment not found')
         return manager.runs[rid]
@@ -281,7 +294,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
             for f in manager.folder(rid).iterdir():
-                if f.suffix in ('.json','.jsonl','.csv'): z.write(f,f.name)
+                if f.suffix in ('.json','.jsonl','.csv') or f.name=='failure_traceback.txt': z.write(f,f.name)
         return Response(buffer.getvalue(),media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{rid}.zip"'})
     app.mount('/static',StaticFiles(directory=ROOT/'benign_lab/static'),name='static')
     @app.get('/')

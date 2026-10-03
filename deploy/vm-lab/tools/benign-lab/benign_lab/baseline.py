@@ -24,6 +24,9 @@ class BaselineGuard:
         proc=await asyncio.create_subprocess_exec(*argv,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env)
         try:
             out,err=await asyncio.wait_for(proc.communicate(payload.encode() if payload else None),25)
+        except asyncio.TimeoutError as exc:
+            proc.kill();await proc.wait()
+            raise RuntimeError('Baseline remote operation timed out after 25s on '+host) from exc
         except BaseException:
             proc.kill();await proc.wait();raise
         if proc.returncode:raise RuntimeError('Baseline remote operation failed on '+host+': '+err.decode(errors='replace')[-500:])

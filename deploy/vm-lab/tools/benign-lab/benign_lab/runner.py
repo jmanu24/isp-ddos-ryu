@@ -47,6 +47,7 @@ class Manager:
         self.events={}
         self.logs={}
         self.origins={}
+        self.terminal_metrics={}
         for file in sorted(self.root.glob('*/run.json')):
             run=json.loads(file.read_text())
             eid=run['id']
@@ -71,16 +72,22 @@ class Manager:
     def snapshot(self,rid):
         r=copy.deepcopy(self.runs[rid])
         r['elapsed_s']=self.elapsed(rid)
-        r['counts']=dict(Counter(e['status'] for e in self.events[rid].values()))
-        r['bytes_tx']=sum(e.get('bytes_tx',0) for e in self.events[rid].values())
-        r['bytes_rx']=sum(e.get('bytes_rx',0) for e in self.events[rid].values())
-        r['shortfall_bytes']=sum(e.get('shortfall_bytes',0) for e in self.events[rid].values())
-        r['active_planned_mbps']=sum(e['rate_bps'] for e in self.events[rid].values() if e['status']=='running')/1e6
+        cached=self.terminal_metrics.get(rid) if r['status'] in TERMINAL and r.get('finished_at') else None
+        if cached is not None:
+            r.update(copy.deepcopy(cached))
+        else:
+            r['counts']=dict(Counter(e['status'] for e in self.events[rid].values()))
+            r['bytes_tx']=sum(e.get('bytes_tx',0) for e in self.events[rid].values())
+            r['bytes_rx']=sum(e.get('bytes_rx',0) for e in self.events[rid].values())
+            r['shortfall_bytes']=sum(e.get('shortfall_bytes',0) for e in self.events[rid].values())
+            r['active_planned_mbps']=sum(e['rate_bps'] for e in self.events[rid].values() if e['status']=='running')/1e6
+            r['domains']={}
+            for domain in ('mobile','fixed','enterprise','peering'):
+                es=[e for e in self.events[rid].values() if e['domain']==domain]
+                r['domains'][domain]=dict(counts=dict(Counter(e['status'] for e in es)),bytes_tx=sum(e.get('bytes_tx',0) for e in es),bytes_rx=sum(e.get('bytes_rx',0) for e in es),active_planned_mbps=sum(e['rate_bps'] for e in es if e['status']=='running')/1e6)
+            if r['status'] in TERMINAL and r.get('finished_at'):
+                self.terminal_metrics[rid]={k:copy.deepcopy(r[k]) for k in ('counts','bytes_tx','bytes_rx','shortfall_bytes','active_planned_mbps','domains')}
         r['logs']=self.logs[rid][-100:]
-        r['domains']={}
-        for domain in ('mobile','fixed','enterprise','peering'):
-            es=[e for e in self.events[rid].values() if e['domain']==domain]
-            r['domains'][domain]=dict(counts=dict(Counter(e['status'] for e in es)),bytes_tx=sum(e.get('bytes_tx',0) for e in es),bytes_rx=sum(e.get('bytes_rx',0) for e in es),active_planned_mbps=sum(e['rate_bps'] for e in es if e['status']=='running')/1e6)
         return r
 
     def log(self,rid,message,level='info'):
@@ -177,8 +184,10 @@ class Manager:
             else:
                 r['status']='completed_with_errors' if any(e['status']=='failed' or e.get('error') for e in self.events[rid].values()) else 'completed'
         except Exception as exc:
-            r.update(status='failed',error=str(exc))
-            self.log(rid,str(exc),'error')
+            r.update(status='failed',error='%s: %s' % (type(exc).__name__,str(exc) or 'Operation timed out during preparation/execution'))
+            import traceback
+            (self.folder(rid)/'failure_traceback.txt').write_text(traceback.format_exc())
+            self.log(rid,r['error'],'error')
         finally:
             # Freeze the elapsed value before removing the monotonic clock.
             if rid in self.origins:
@@ -257,7 +266,10 @@ class Manager:
         # may have waited in SSH or in the controller's event loop.
         for key,(proc,group) in zip(groups,prepared):
             if self.stops[rid].is_set(): return
-            clock=await probe_clock(proc,cfg.get('max_clock_skew_s',.5))
+            try:
+                clock=await probe_clock(proc,cfg.get('max_clock_skew_s',.5))
+            except Exception as exc:
+                raise RuntimeError('Clock probe for '+', '.join(sorted(group['sources']))+': '+(str(exc) or type(exc).__name__)) from exc
             r['agents'][key]['clock']=clock
             r['agents'][key]['status']='ready' if clock['status']=='synchronized' else 'clock_'+clock['status']
             atomic_json(self.folder(rid)/'execution_mapping.json',r['agents'])
