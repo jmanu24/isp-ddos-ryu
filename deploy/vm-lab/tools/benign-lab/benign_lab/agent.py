@@ -18,6 +18,11 @@ import sys
 import time
 from urllib.parse import urlparse, parse_qs
 
+try:
+    from .connection_pool import ConnectionPool, close_writer
+except ImportError:
+    from connection_pool import ConnectionPool, close_writer
+
 MAX_BYTES = 100_000_000_000
 
 
@@ -66,45 +71,48 @@ async def paced_send(writer, size, rate, packet, deadline, on_chunk=None):
 
 async def receive_client(reader, writer):
     try:
-        line = await asyncio.wait_for(reader.readline(), 3)
-        is_http = line.startswith((b'GET ', b'POST '))
-        if is_http:
-            method, target, _ = line.decode().split()
-            headers = {}
-            while True:
-                raw = await asyncio.wait_for(reader.readline(), 3)
-                if raw in (b'\r\n', b'\n', b''): break
-                k,v = raw.decode().split(':', 1)
-                headers[k.lower()] = v.strip()
-            query = parse_qs(urlparse(target).query)
-            cfg = dict(direction='dl' if method == 'GET' else 'ul', bytes=int(query.get('n', [headers.get('content-length', 0)])[0]),
-                       rate_bps=float(query.get('rate', [1e6])[0]), duration_s=float(query.get('duration', [30])[0]), packet=1200)
-        else:
-            cfg = json.loads(line)
-        size, rate, duration = int(cfg['bytes']), float(cfg['rate_bps']), float(cfg['duration_s'])
-        if not (0 <= size <= MAX_BYTES and 0 < rate <= 1e11 and 0 < duration <= 3600):
-            raise ValueError('Transfer limits exceeded')
-        deadline = time.monotonic() + duration
-        async with AsyncTimeout(duration + 2):
-            if cfg['direction'] == 'dl':
-                if is_http:
-                    writer.write(f'HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n'.encode())
-                await paced_send(writer, size, rate, min(1400,max(28,int(cfg.get('packet',1200)))), deadline)
+        while True:
+            line = await asyncio.wait_for(reader.readline(),30)
+            if not line: return
+            is_http = line.startswith((b'GET ', b'POST '))
+            if is_http:
+                method,target,_=line.decode().split()
+                headers={}
+                while True:
+                    raw=await asyncio.wait_for(reader.readline(),3)
+                    if raw in (b'\r\n',b'\n',b''):break
+                    k,v=raw.decode().split(':',1);headers[k.lower()]=v.strip()
+                query=parse_qs(urlparse(target).query)
+                cfg=dict(direction='dl' if method=='GET' else 'ul',bytes=int(query.get('n',[headers.get('content-length',0)])[0]),rate_bps=float(query.get('rate',[1e6])[0]),duration_s=float(query.get('duration',[30])[0]),packet=1200)
+                keep=headers.get('connection','').lower()=='keep-alive'
             else:
-                got = 0
-                while got < size:
-                    data = await reader.read(min(65536, size-got))
-                    if not data: break
-                    got += len(data)
-                if is_http:
-                    writer.write(b'HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
-                    await writer.drain()
-    except (ValueError, KeyError, ConnectionError, TimeoutError, OSError):
+                cfg=json.loads(line)
+                if cfg.get('op')=='capabilities':
+                    writer.write(b'{"protocol_version":2,"persistent":true}\n');await writer.drain();return
+                keep=bool(cfg.get('keepalive'))
+            size,rate,duration=int(cfg['bytes']),float(cfg['rate_bps']),float(cfg['duration_s'])
+            if not (0<=size<=MAX_BYTES and 0<rate<=1e11 and 0<duration<=3600):raise ValueError('Transfer limits exceeded')
+            deadline=time.monotonic()+duration
+            connection='keep-alive' if keep else 'close'
+            async with AsyncTimeout(duration+2):
+                if cfg['direction']=='dl':
+                    if is_http:writer.write(('HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n' % (size,connection)).encode())
+                    got=await paced_send(writer,size,rate,min(1400,max(28,int(cfg.get('packet',1200)))),deadline)
+                else:
+                    got=0
+                    while got<size:
+                        data=await reader.read(min(65536,size-got))
+                        if not data:break
+                        got+=len(data)
+                    if is_http and (got==size or not keep):
+                        writer.write(('HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: %s\r\n\r\n' % connection).encode())
+                if keep and not is_http and got==size:writer.write(('BLACK %d\n' % got).encode())
+                await writer.drain()
+            if not keep or got!=size:return
+    except (ValueError,KeyError,ConnectionError,TimeoutError,OSError):
         pass
     finally:
-        writer.close()
-        try: await writer.wait_closed()
-        except (OSError, ConnectionError): pass
+        await close_writer(writer)
 
 
 class UDPReceiver(asyncio.DatagramProtocol):
@@ -133,7 +141,7 @@ async def receiver(host, tcp, udp, http, reuse_port=False):
             await s.wait_closed()
 
 
-async def traffic(e, target, metrics, deadline, context=None):
+async def traffic(e, target, metrics, deadline, context=None, pool=None):
     context=context or {}
     source=context.get('source_ip')
     interface=context.get('interface')
@@ -144,11 +152,15 @@ async def traffic(e, target, metrics, deadline, context=None):
     def add(kind, n):
         metrics[f'bytes_{kind}'] += n
         metrics[f'chunks_{kind}'] += 1
+    if pool is not None and proto in ('tcp','http'):
+        return await pooled_traffic(e,target,metrics,deadline,context,pool)
     if proto in ('tcp','http'):
         port = target['http_port' if proto == 'http' else 'tcp_port']
         reader, writer = await asyncio.wait_for(asyncio.open_connection(target['host'], port,local_addr=(source,0) if source else None), 3)
         metrics['source_ip'],metrics['src_port'] = writer.get_extra_info('sockname')[:2]
         metrics['dst_port'] = port
+        metrics['connections_opened']=1
+        metrics['connection_reused']=False
         try:
             remaining = max(.001, deadline-time.monotonic())
             if proto == 'http':
@@ -229,6 +241,58 @@ async def traffic(e, target, metrics, deadline, context=None):
                     await proc.wait()
 
 
+async def http_response(reader,expected,size):
+    status=await reader.readline()
+    if (' %d ' % expected).encode() not in status:raise ValueError('Unexpected HTTP response')
+    headers={}
+    while True:
+        line=await reader.readline()
+        if not line:raise ConnectionError('Incomplete HTTP headers')
+        if line in (b'\r\n',b'\n'):break
+        k,v=line.decode().split(':',1);headers[k.lower()]=v.strip()
+    if int(headers.get('content-length',-1))!=size:raise ValueError('HTTP response length differs from event quota')
+    return headers.get('connection','').lower()=='keep-alive'
+
+
+async def pooled_traffic(e,target,metrics,deadline,context,pool):
+    key=pool.key(e,target,context.get('source_ip'))
+    reader,writer,reused=await pool.acquire(key)
+    metrics['source_ip'],metrics['src_port']=writer.get_extra_info('sockname')[:2]
+    metrics['dst_port']=key[4];metrics['connections_opened']=0 if reused else 1;metrics['connection_reused']=reused
+    size,rate,packet=e['planned_bytes'],e['rate_bps'],e['packet_size_bytes']
+    http=e['wire_protocol']=='http';direction=e['direction'];reusable=False
+    def add(kind,n):metrics['bytes_'+kind]+=n;metrics['chunks_'+kind]+=1
+    try:
+        remaining=max(.001,deadline-time.monotonic())
+        if http:
+            request='%s /bytes?n=%d&rate=%s&duration=%s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n' % ('GET' if direction=='dl' else 'POST',size,rate,remaining,target['host'],0 if direction=='dl' else size)
+            writer.write(request.encode())
+        else:writer.write((json.dumps(dict(direction=direction,bytes=size,rate_bps=rate,duration_s=remaining,packet=packet,keepalive=True))+'\n').encode())
+        await writer.drain()
+        keep=True
+        if direction=='ul':
+            sent=await paced_send(writer,size,rate,packet,deadline,lambda n:add('tx',n))
+            if sent!=size:return
+            if http:keep=await http_response(reader,204,0);metrics['receiver_bytes']=size
+        else:
+            if http:keep=await http_response(reader,200,size)
+            while metrics['bytes_rx']<size:
+                data=await reader.read(min(65536,size-metrics['bytes_rx']))
+                if not data:
+                    if time.monotonic()<deadline-.1:raise ConnectionError('Receiver closed before completing payload')
+                    return  # Preserve legacy near-deadline shortfall classification; discard socket.
+                add('rx',len(data))
+            if http:metrics['receiver_bytes']=size
+        if not http:
+            ack=await reader.readline()
+            if ack!=('BLACK %d\n' % size).encode():raise ConnectionError('Persistent transfer acknowledgement missing')
+            metrics['receiver_bytes']=size
+        reusable=keep
+    finally:
+        if reusable:await pool.release(key,reader,writer)
+        else:await pool.discard(writer)
+
+
 async def ip_json(*args):
     proc=await asyncio.create_subprocess_exec('ip','-j',*args,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
     try:
@@ -278,6 +342,8 @@ async def worker():
         emit(dict(type='fatal',error='ping not found'))
         return
     context=cfg.get('context',{})
+    options=cfg.get('execution',{})
+    pool=ConnectionPool(options) if options.get('connection_reuse') else None
     evidence={}
     # Connectivity checks happen before the shared start time is selected.
     endpoints = {(cfg['targets'][e['destination']]['host'], cfg['targets'][e['destination']]['http_port' if e['wire_protocol']=='http' else 'tcp_port'])
@@ -287,27 +353,53 @@ async def worker():
         for host,port in endpoints:
             for attempt in range(3):
                 try:
-                    _, w = await asyncio.wait_for(asyncio.open_connection(host,port,local_addr=(context['source_ip'],0) if context.get('source_ip') else None),3)
-                    w.close()
-                    await w.wait_closed()
+                    preflight_reader, w = await asyncio.wait_for(asyncio.open_connection(host,port,local_addr=(context['source_ip'],0) if context.get('source_ip') else None),3)
+                    try:
+                        if pool is not None:
+                            w.write(b'{"op":"capabilities"}\n');await w.drain()
+                            capabilities=json.loads(await asyncio.wait_for(preflight_reader.readline(),3))
+                            if capabilities.get('protocol_version')!=2 or not capabilities.get('persistent'):raise ValueError('Receiver lacks persistent protocol v2')
+                    finally:
+                        await close_writer(w)
                     break
                 except (OSError, TimeoutError) as exc:
                     if attempt==2:
                         raise ValueError('Cannot connect to %s:%s from %s: %s %s' % (host,port,context.get('source_ip'),type(exc).__name__,exc)) from exc
                     await asyncio.sleep(.2)
     except (OSError, TimeoutError, ValueError) as exc:
+        if pool:await pool.close()
         emit(dict(type='fatal',error=f'Receiver preflight: {exc}'))
         return
-    emit(dict(type='ready', unix=time.time(),evidence=evidence))
+    if pool is not None:
+        keys=[]
+        for e in cfg['events']:
+            if e['wire_protocol'] not in ('tcp','http'):continue
+            key=pool.key(e,cfg['targets'][e['destination']],context.get('source_ip'))
+            if key not in keys:keys.append(key)
+            if len(keys)>=options.get('preconnect_limit',8):break
+        async def warm(key):
+            reader,writer,_=await pool.acquire(key)
+            await pool.release(key,reader,writer)
+        try:
+            results=await asyncio.gather(*(warm(key) for key in keys),return_exceptions=True)
+            failures=[result for result in results if isinstance(result,Exception)]
+            if failures:raise failures[0]
+        except Exception as exc:
+            await pool.close();emit(dict(type='fatal',error='Connection preparation: '+str(exc)));return
+    emit(dict(type='ready',unix=time.time(),evidence=evidence,protocol_version=2,pid=os.getpid(),python_version=sys.version.split()[0],capabilities=['metrics_batch','persistent']))
     while True:
         raw = await reader.readline()
         received = time.time()
-        if not raw: return
+        if not raw or raw.strip()==b'STOP':
+            if pool:await pool.close()
+            return
         message = json.loads(raw)
         if message.get('type') == 'clock':
             emit(dict(type='clock',nonce=message['nonce'],received_unix=received,sent_unix=time.time()))
             continue
-        if 'start_unix' not in message: return
+        if 'start_unix' not in message:
+            if pool:await pool.close()
+            return
         start = message['start_unix']
         break
     origin = loop.time() + start-time.time()
@@ -317,9 +409,13 @@ async def worker():
         stop.set()
     async def reporter():
         while True:
-            await asyncio.sleep(1)
-            for eid,metrics in list(active.items()):
-                emit(dict(type='metrics',event_id=eid,**metrics))
+            await asyncio.sleep(options.get('metrics_interval_s',1))
+            items=[dict(event_id=eid,**metrics) for eid,metrics in list(active.items())]
+            if options.get('metrics_batch'):
+                if items:emit(dict(type='metrics_batch',timestamp=time.time(),items=items))
+            else:
+                for item in items:emit(dict(type='metrics',**item))
+            if pool:emit(dict(type='worker_stats',connections=pool.stats()))
     async def event(e):
         metrics = dict(bytes_tx=0,bytes_rx=0,chunks_tx=0,chunks_rx=0,icmp_replies=0,src_port=None,dst_port=None)
         started = False
@@ -336,7 +432,7 @@ async def worker():
             else:
                 try:
                     async with AsyncTimeout(deadline=end+.05):
-                        await traffic(e,cfg['targets'][e['destination']],metrics,end,context)
+                        await traffic(e,cfg['targets'][e['destination']],metrics,end,context,pool)
                 except TimeoutError:
                     status = 'completed' if metrics['bytes_tx']+metrics['bytes_rx'] > 0 else 'failed'
                     error = 'Deadline reached; compare actual and planned bytes'
@@ -364,6 +460,9 @@ async def worker():
     finally:
         for task in (stopper,ctl,rpt): task.cancel()
         await asyncio.gather(stopper,ctl,rpt,return_exceptions=True)
+    if pool:
+        await pool.close()
+        emit(dict(type='worker_stats',connections=pool.stats()))
     emit(dict(type='done'))
 
 

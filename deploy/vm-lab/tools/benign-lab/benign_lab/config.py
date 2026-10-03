@@ -29,7 +29,7 @@ def node_for(cfg, source):
     return matches[0]
 
 
-def command(node):
+def command(node, supervisor=False):
     adapter = node.get('adapter','local')
     if adapter not in ('local','netns','ssh','ssh_netns'):
         raise ValueError(f'Unknown adapter {adapter}')
@@ -37,7 +37,12 @@ def command(node):
     python = node.get('python','python3' if remote else sys.executable)
     agent = node.get('agent_path','/opt/benign-lab/benign_lab/agent.py' if remote else str(ROOT/'benign_lab/agent.py'))
     inner = [python,agent,'worker']
-    if adapter in ('netns','ssh_netns'):
+    if supervisor:
+        agent=node.get('supervisor_path',str(Path(agent).with_name('supervisor.py')))
+        inner=[python,agent,'supervisor']
+        if adapter in ('netns','ssh_netns') and node.get('sudo',False):
+            inner=['sudo','-n',*inner]
+    elif adapter in ('netns','ssh_netns'):
         namespace = node.get('namespace','')
         if not re.fullmatch(r'[A-Za-z0-9_.-]+',namespace):
             raise ValueError('Invalid namespace')
@@ -88,10 +93,27 @@ def resolve(cfg, plan):
             if not 1 <= int(target[key]) <= 65535: raise ValueError(f'Invalid {key}')
         context = {k:node.get(k) for k in ('source_ip','interface','expected_gateway','check_route','session_id','access_mode','domain')}
         key = hashlib.sha256(canonical([argv,context])).hexdigest()[:12]
-        groups.setdefault(key,dict(argv=argv,context=context,events=[],sources=set()))
+        groups.setdefault(key,dict(argv=argv,node=node,context=context,events=[],sources=set()))
         groups[key]['events'].append(event)
         groups[key]['sources'].add(event['source'])
     return groups
+
+
+def supervisor_groups(groups):
+    """Share only identical host/security/interpreter supervisor commands."""
+    sessions={}
+    for key,group in groups.items():
+        argv=command(group['node'],supervisor=True)
+        sid=hashlib.sha256(canonical(argv)).hexdigest()[:12]
+        node=dict(group['node'])
+        node['adapter']='netns' if node.get('adapter') in ('netns','ssh_netns') else 'local'
+        child=command(node)
+        # The namespace supervisor already runs as root, matching the old
+        # privileged namespace worker without a second sudo process.
+        if node['adapter']=='netns' and node.get('sudo') and child[:2]==['sudo','-n']:
+            child=child[2:]
+        sessions.setdefault(sid,dict(argv=argv,workers=[]))['workers'].append(dict(key=key,argv=child,group=group))
+    return sessions
 
 
 def executor_for(cfg, event):

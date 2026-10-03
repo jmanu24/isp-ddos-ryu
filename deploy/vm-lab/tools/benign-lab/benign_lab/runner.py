@@ -11,7 +11,9 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from .config import resolve
+from .config import resolve, supervisor_groups
+from .execution import execution_options
+from .transport import SupervisorSession
 from .clock_sync import probe_clock
 from .baseline import BaselineGuard
 from .ground_truth import windows
@@ -44,9 +46,12 @@ class Manager:
         self.tasks={}
         self.stops={}
         self.processes={}
+        self.supervisors={}
         self.events={}
         self.logs={}
         self.origins={}
+        self.plan_cache={}
+        self.checkpoint_lock=None
         self.terminal_metrics={}
         for file in sorted(self.root.glob('*/run.json')):
             run=json.loads(file.read_text())
@@ -96,17 +101,45 @@ class Manager:
         self.logs[rid]=self.logs[rid][-200:]
         with (self.folder(rid)/'logs.jsonl').open('a') as f: f.write(json.dumps(row)+'\n')
 
-    def persist(self,rid):
-        r=self.runs[rid]
-        r['elapsed_s']=self.elapsed(rid)
-        atomic_json(self.folder(rid)/'run.json',r)
-        atomic_json(self.folder(rid)/'event_states.json',self.events[rid])
-        p=json.loads((self.folder(rid)/'benign_plan.json').read_text())
-        (self.folder(rid)/'ground_truth_windows.csv').write_text(csv_text(windows(p,r)))
-        (self.folder(rid)/'generated_events.csv').write_text(csv_text(list(self.events[rid].values())))
+    def checkpoint(self,rid):
+        self.runs[rid]['elapsed_s']=self.elapsed(rid)
+        if rid not in self.plan_cache:
+            self.plan_cache[rid]=json.loads((self.folder(rid)/'benign_plan.json').read_text())
+        return (self.folder(rid),copy.deepcopy(self.runs[rid]),copy.deepcopy(self.events[rid]),self.plan_cache[rid])
 
-    async def start(self,plan,plan_file,cfg,mode='simulation',scenario='B0',speed=20,attack_windows=None,pipeline='enabled'):
+    @staticmethod
+    def write_checkpoint(snapshot):
+        folder,r,events,plan=snapshot
+        atomic_json(folder/'run.json',r)
+        atomic_json(folder/'event_states.json',events)
+        for name,rows in (('ground_truth_windows.csv',windows(plan,r)),('generated_events.csv',list(events.values()))):
+            target=folder/name;tmp=target.with_suffix('.tmp')
+            tmp.write_text(csv_text(rows));tmp.replace(target)
+
+    def persist(self,rid):
+        # Synchronous recovery before the event loop starts.
+        self.write_checkpoint(self.checkpoint(rid))
+
+    async def persist_async(self,rid,after=None):
+        if self.checkpoint_lock is None:self.checkpoint_lock=asyncio.Lock()
+        async with self.checkpoint_lock:
+            snapshot=self.checkpoint(rid)
+            def work():
+                self.write_checkpoint(snapshot)
+                return after() if after else None
+            future=asyncio.get_running_loop().run_in_executor(None,work)
+            try:return await asyncio.shield(future)
+            except asyncio.CancelledError:
+                # Threads cannot be canceled. Keep the lock until the writer
+                # has finished so shutdown cannot overlap a newer checkpoint.
+                await future
+                raise
+
+    async def start(self,plan,plan_file,cfg,mode='simulation',scenario='B0',speed=20,attack_windows=None,pipeline='enabled',execution_profile=None):
         validate(plan)
+        cfg=copy.deepcopy(cfg)
+        options=execution_options(cfg,execution_profile)
+        cfg['execution_options']=options
         if pipeline not in ('enabled','baseline'): raise ValueError('Invalid pipeline option')
         if pipeline=='baseline' and (mode!='lab' or scenario!='B0' or attack_windows):
             raise ValueError('Baseline requires laboratory B0 without attacks')
@@ -133,17 +166,19 @@ class Manager:
                plan_hash=plan['plan_hash'],plan_file_sha256=__import__('hashlib').sha256(Path(plan_file).read_bytes()).hexdigest(),
                lab_hash=digest(cfg),seed=plan['seed'],duration_s=plan['duration_s'],mode=mode,scenario=scenario,speed=speed,
                elapsed_s=0,attack_windows=attack_windows,observed_attacks=[],error=None,
-               pipeline=pipeline,baseline_control={},metrics_kind='simulated_payload' if mode=='simulation' else 'application_payload')
+               pipeline=pipeline,execution_profile=options['profile'],execution_options=options,execution_hash=digest(options),baseline_control={},metrics_kind='simulated_payload' if mode=='simulation' else 'application_payload')
         self.runs[rid]=r
+        self.plan_cache[rid]=plan
+        atomic_json(folder/'execution_profile.json',dict(execution_hash=r['execution_hash'],options=options,plan_hash=plan['plan_hash']))
         self.events[rid]={e['event_id']:dict(e,status='pending',bytes_tx=0,bytes_rx=0,chunks_tx=0,chunks_rx=0,
                          icmp_replies=0,src_port=None,dst_port=None,actual_start_s=None,actual_end_s=None,
                          start_timestamp=None,stop_timestamp=None,lateness_s=None,error=None) for e in plan['events']}
         self.logs[rid]=[]
         self.stops[rid]=asyncio.Event()
         self.processes[rid]=[]
-        self.log(rid,f'{scenario} Â· {mode} Â· immutable plan {plan["plan_hash"]}')
+        self.log(rid,f'{scenario} | {mode} | immutable plan {plan["plan_hash"]}')
         try:
-            self.persist(rid)
+            await self.persist_async(rid)
         except Exception as exc:
             r.update(status='failed',error=f'Could not initialize artifacts: {exc}',finished_at=time.time())
             raise ValueError(r['error']) from exc
@@ -162,7 +197,7 @@ class Manager:
                 groups=resolve(cfg,plan)
                 r['lab_hash']=digest(cfg)
                 atomic_json(self.folder(rid)/'lab_snapshot.json',cfg)
-                self.persist(rid)
+                await self.persist_async(rid)
                 self.log(rid,'Baseline acknowledged; UE budgets restored and ten Fixed sessions verified')
             if r['mode']=='simulation':
                 await self.simulate(rid,plan)
@@ -213,7 +248,7 @@ class Manager:
             r['payload_mbps']=0
             r['finished_at']=time.time()
             self.log(rid,f'Run {r["status"]}')
-            self.persist(rid)
+            await self.persist_async(rid)
 
     async def simulate(self,rid,plan):
         r=self.runs[rid]
@@ -241,20 +276,46 @@ class Manager:
 
     async def real(self,rid,plan,cfg,groups):
         r=self.runs[rid]
+        options=cfg.get('execution_options',execution_options(cfg))
+        sessions=[];channels={}
+        if options['supervisor_per_vm']:
+            bundles=supervisor_groups(groups)
+            async def launch(sid,bundle):
+                proc=await asyncio.create_subprocess_exec(*bundle['argv'],stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True,limit=32*1024*1024)
+                self.processes[rid].append(proc)
+                session=SupervisorSession(proc,[w['key'] for w in bundle['workers']]);sessions.append(session)
+                self.supervisors.setdefault(rid,[]).append(session)
+                workers=[]
+                for worker in bundle['workers']:
+                    key,group=worker['key'],worker['group']
+                    group['supervisor_id']=sid
+                    workers.append(dict(key=key,argv=worker['argv'],config=dict(events=group['events'],targets=cfg['targets'],duration_s=plan['duration_s'],context=group['context'],execution=options)))
+                proc.stdin.write(canonical(dict(workers=workers))+b'\n');await proc.stdin.drain()
+                channels.update(session.channels)
+            results=await asyncio.gather(*(launch(sid,bundle) for sid,bundle in bundles.items()),return_exceptions=True)
+            errors=[e for e in results if isinstance(e,Exception)]
+            if errors:raise errors[0]
+            r['execution_transport']=dict(kind='supervisor_per_vm',sessions=len(bundles),workers=len(groups))
+        else:r['execution_transport']=dict(kind='ssh_per_worker',sessions=len(groups),workers=len(groups))
         async def prepare(key,group):
-            proc=await asyncio.create_subprocess_exec(*group['argv'],stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True,limit=32*1024*1024)
-            self.processes[rid].append(proc)
-            payload=dict(events=group['events'],targets=cfg['targets'],duration_s=plan['duration_s'],context=group['context'])
-            proc.stdin.write(canonical(payload)+b'\n')
-            await proc.stdin.drain()
+            group['key']=key
+            if options['supervisor_per_vm']:
+                proc=channels[key]
+            else:
+                proc=await asyncio.create_subprocess_exec(*group['argv'],stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True,limit=32*1024*1024)
+                self.processes[rid].append(proc)
+                payload=dict(events=group['events'],targets=cfg['targets'],duration_s=plan['duration_s'],context=group['context'],execution=options)
+                proc.stdin.write(canonical(payload)+b'\n');await proc.stdin.drain()
             line=await asyncio.wait_for(proc.stdout.readline(),30)
             if not line:
                 err=(await proc.stderr.read(2000)).decode(errors='replace')
                 raise RuntimeError(f'Agent {key} did not start: {err}')
             reply=json.loads(line)
             if reply['type']!='ready': raise RuntimeError(f'Agent {key}: {reply.get("error",reply)}')
+            if (options['metrics_batch'] or options['connection_reuse']) and reply.get('protocol_version')!=2:
+                raise RuntimeError('Worker protocol v2 required; deploy updated agents')
             group['evidence']=reply.get('evidence',{})
-            self.runs[rid].setdefault('agents',{})[key]=dict(sources=sorted(group['sources']),context=group['context'],evidence=group['evidence'],status='ready')
+            self.runs[rid].setdefault('agents',{})[key]=dict(sources=sorted(group['sources']),context=group['context'],evidence=group['evidence'],status='ready',supervisor_id=group.get('supervisor_id'),python_version=reply.get('python_version'),pid=reply.get('pid'))
             atomic_json(self.folder(rid)/'execution_mapping.json',self.runs[rid]['agents'])
             self.log(rid,f'Agent ready: {", ".join(sorted(group["sources"]))}')
             return proc,group
@@ -288,6 +349,7 @@ class Manager:
             proc.stdin.write(canonical(dict(start_unix=start))+b'\n')
             await proc.stdin.drain()
         self.log(rid,f'All agents scheduled for epoch {start:.6f}')
+        r['worker_messages']=dict(total=0,metric_batches=0,metrics=0)
         async def read(proc,group):
             done=False
             async def stderr():
@@ -296,12 +358,20 @@ class Manager:
             errtask=asyncio.create_task(stderr())
             try:
                 while line:=await proc.stdout.readline():
-                    msg=json.loads(line)
-                    if msg['type']=='done': done=True
-                    if msg['type'] in ('event','metrics'):
+                    envelope=json.loads(line)
+                    r['worker_messages']['total']+=1
+                    if envelope['type']=='metrics_batch':r['worker_messages']['metric_batches']+=1
+                    if envelope['type'] in ('metrics','metrics_batch'):
+                        r['worker_messages']['metrics']+=len(envelope['items']) if envelope['type']=='metrics_batch' else 1
+                    if envelope['type']=='done': done=True
+                    if envelope['type']=='worker_stats':
+                        r['agents'][group['key']]['connections']=envelope['connections']
+                    messages=[dict(type='metrics',**item) for item in envelope['items']] if envelope['type']=='metrics_batch' else [envelope]
+                    for msg in messages:
+                        if msg['type'] not in ('event','metrics'):continue
                         e=self.events[rid].get(msg['event_id'])
                         if e is None: raise ValueError('Agent returned unknown event')
-                        for key in ('status','bytes_tx','bytes_rx','chunks_tx','chunks_rx','icmp_replies','src_port','dst_port','actual_start_s','actual_end_s','start_timestamp','stop_timestamp','lateness_s','error','source_ip','source_interface','shortfall_bytes'):
+                        for key in ('status','bytes_tx','bytes_rx','chunks_tx','chunks_rx','icmp_replies','src_port','dst_port','actual_start_s','actual_end_s','start_timestamp','stop_timestamp','lateness_s','error','source_ip','source_interface','shortfall_bytes','receiver_bytes','connections_opened','connection_reused'):
                             if key in msg: e[key]=msg[key]
                         if msg['type']=='event':
                             with (self.folder(rid)/'events.jsonl').open('a') as f: f.write(json.dumps(msg)+'\n')
@@ -332,6 +402,7 @@ class Manager:
             await asyncio.gather(*reads,stop,deadline,return_exceptions=True)
             if not joined.done(): joined.cancel()
             await asyncio.gather(joined,return_exceptions=True)
+            await asyncio.gather(*(session.task for session in sessions),return_exceptions=True)
 
     async def kill_processes(self,rid):
         live=[p for p in self.processes.get(rid,[]) if p.returncode is None]
@@ -351,6 +422,10 @@ class Manager:
                     try: os.killpg(p.pid,signal.SIGKILL)
                     except ProcessLookupError: pass
                     await p.wait()
+        for session in self.supervisors.get(rid,[]):
+            await asyncio.gather(session.task,session.error_task,return_exceptions=True)
+        if self.supervisors.get(rid) and rid in self.runs:
+            self.runs[rid]['supervisor_transport_stats']=[session.stats for session in self.supervisors[rid]]
 
     async def stop(self,rid):
         if self.runs[rid]['status'] not in TERMINAL:
@@ -376,7 +451,6 @@ class Manager:
             matches[-1]['end_s']=elapsed
         else: raise ValueError('Invalid annotation action')
         self.log(rid,f'External attack {name}: {action} at {elapsed:.3f} s')
-        self.persist(rid)
         return self.snapshot(rid)
 
 

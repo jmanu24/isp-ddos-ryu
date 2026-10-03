@@ -24,7 +24,9 @@ def test_resource_api_and_export(tmp_path):
   assert c.get('/api/resources').json()['items'][0]['cpu_pct']==20
   manager=app.state.manager;rid='export-test';manager.folder(rid).mkdir(parents=True)
   manager.runs[rid]={'id':rid,'mode':'lab','started_at':now-1,'finished_at':now+1,'status':'completed','duration_s':1}
-  manager.persist=lambda rid:None
+  async def persist_mock(rid,after=None):
+   return after() if after else None
+  manager.persist_async=persist_mock
   assert c.get('/api/runs/'+rid+'/resources').json()['items'][0]['cpu_pct']==20
   z=zipfile.ZipFile(io.BytesIO(c.get('/api/runs/'+rid+'/export').content));assert json.loads(z.read('host_metrics.jsonl'))['cpu_pct']==20
   assert c.get('/api/runs/missing/resources').status_code==404

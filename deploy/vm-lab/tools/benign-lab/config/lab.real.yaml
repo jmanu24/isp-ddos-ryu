@@ -353,3 +353,7 @@ targets:
     tcp_port: 9001
     udp_port: 9002
     http_port: 8088
+
+execution:
+  default_profile: persistent
+  metrics_interval_s: 2

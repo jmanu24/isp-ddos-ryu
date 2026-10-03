@@ -46,3 +46,8 @@ No se aprovisionan DHCP/IPoE, BNG, RADIUS, UE, rutas ni namespaces. `session_id`
 Los nombres de aplicaciones describen aproximaciones de carga del generador original. SSH/DNS/mail no son implementaciones reales de esos protocolos; peering no reproduce PCAP MAWI. Las métricas son payload/chunks, no paquetes TCP observados. Una corrida completada no implica ajuste volumétrico perfecto: revisar bytes reales, desfases y errores del CSV.
 
 Antes de campaña: completar host/user/clave, IP/interfaz/namespace, session_id/access_mode, gateway Peering, IPs de sitios y capacidades; desplegar agentes/receptores; ejecutar pytest en Linux; piloto por dominio con capturas; finalmente usar el mismo benign_plan.json y lab_hash para el par experimental.
+
+
+## Actualización de ejecución optimizada (2 de octubre de 2026)
+
+La plataforma conectada ya incorpora supervisores por VM, métricas agrupadas, persistencia en segundo plano y perfiles TCP/HTTP persistentes. La validación actual en Linux y el laboratorio real se documenta en [OPTIMIZATION_VALIDATION.md](OPTIMIZATION_VALIDATION.md); las instrucciones están en [OPTIMIZED_EXECUTION.md](OPTIMIZED_EXECUTION.md). Se conservaron BENIGN_V1 y el plan materializado original.

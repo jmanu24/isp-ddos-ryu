@@ -164,3 +164,6 @@ Vista CPU de hosts para ESXi y Windows, historial persistente de 6 horas y host_
 ## Recursos por VM y proceso
 
 Monitoreo continuo de CPU, memoria, disco y procesos de los invitados Linux, con CPU Ready de ESXi y exportación vm_resources.jsonl. [Configuración, escalas y despliegue](docs/VM_RESOURCE_MONITOR.md).
+
+
+La ejecución optimizada ofrece supervisores por VM, métricas agrupadas y un perfil TCP/HTTP persistente seleccionable. Consulta [OPTIMIZED_EXECUTION.md](docs/OPTIMIZED_EXECUTION.md) para despliegue y comparaciones reproducibles.

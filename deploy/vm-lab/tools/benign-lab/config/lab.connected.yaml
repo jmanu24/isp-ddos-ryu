@@ -907,3 +907,7 @@ vm_resource_monitor:
     object: /ha-datacenter/vm/lab-wifi-relay
     entity: '75'
     govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
+
+execution:
+  default_profile: persistent
+  metrics_interval_s: 2

@@ -12,7 +12,9 @@ def main():
     base=['sshpass','-e','ssh','-T','-o','StrictHostKeyChecking=yes',user+'@10.10.0.100']
     subprocess.run(base+['mkdir -p /opt/benign-lab'],env=env,check=True)
     agent=Path(__file__).resolve().parents[1]/'benign_lab/agent.py'
-    subprocess.run(['sshpass','-e','scp','-o','StrictHostKeyChecking=yes',str(agent),user+'@10.10.0.100:/opt/benign-lab/agent.py'],env=env,check=True)
+    for filename in ('connection_pool.py','agent.py'):
+        source=agent.with_name(filename)
+        subprocess.run(['sshpass','-e','scp','-o','StrictHostKeyChecking=yes',str(source),user+'@10.10.0.100:/opt/benign-lab/'+filename],env=env,check=True)
     service='''#!/sbin/openrc-run
 description="BENIGN Lab receiver"
 command="/usr/bin/python3"

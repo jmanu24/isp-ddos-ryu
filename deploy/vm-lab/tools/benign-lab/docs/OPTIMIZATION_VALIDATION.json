@@ -1,0 +1,718 @@
+{
+  "optimized": {
+    "run_id": "20261003T002223-6d0ce1fa",
+    "status": "completed_with_errors",
+    "duration_s": 600.0,
+    "elapsed_s": 600.0,
+    "started_at": 1791001379.2698824,
+    "finished_at": 1791001981.6434243,
+    "plan_hash": "2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245",
+    "execution_hash": "d9049fdb3ef74c1502601180cced14174d5141da00d53338f5f3405301e9a268",
+    "execution_profile": "persistent",
+    "plan_file_sha256": "3a2b8445f025bd6e1625baf6901f024b10d07567beac12d633e09e665b1fa9dc",
+    "ground_truth_windows": 120,
+    "ground_truth_window_lengths": [
+      5.0
+    ],
+    "baseline_restored": true,
+    "counts": {
+      "completed": 7113,
+      "failed": 791
+    },
+    "domains": {
+      "mobile": {
+        "events": 134,
+        "planned_bytes": 49949924,
+        "actual_bytes": 41804179,
+        "delivery_pct": 83.69217738949914,
+        "failed": 41,
+        "shortfall_events": 120,
+        "lateness_p95_ms": 4.267341411832604,
+        "lateness_max_ms": 7.095607408757587
+      },
+      "fixed": {
+        "events": 3110,
+        "planned_bytes": 5617348449,
+        "actual_bytes": 4566168284,
+        "delivery_pct": 81.28689764319087,
+        "failed": 414,
+        "shortfall_events": 2339,
+        "lateness_p95_ms": 7.094978604754942,
+        "lateness_max_ms": 229.56292718797755
+      },
+      "enterprise": {
+        "events": 416,
+        "planned_bytes": 7838099795,
+        "actual_bytes": 6776682764,
+        "delivery_pct": 86.45823530242511,
+        "failed": 49,
+        "shortfall_events": 326,
+        "lateness_p95_ms": 2.665281569875333,
+        "lateness_max_ms": 4.929947843606897
+      },
+      "peering": {
+        "events": 4244,
+        "planned_bytes": 3012897899,
+        "actual_bytes": 2815512884,
+        "delivery_pct": 93.44866564958895,
+        "failed": 287,
+        "shortfall_events": 4231,
+        "lateness_p95_ms": 59.73542815809196,
+        "lateness_max_ms": 127.92348615789706
+      }
+    },
+    "cpu": {
+      "bng": {
+        "samples": 121,
+        "mean_pct": 29.899622020669117,
+        "p95_pct": 54.11764705882353,
+        "max_pct": 64.60554371002132
+      },
+      "suscriptor": {
+        "samples": 121,
+        "mean_pct": 39.61735907239928,
+        "p95_pct": 62.146341463414636,
+        "max_pct": 71.06299212598425
+      },
+      "orchestrator": {
+        "samples": 120,
+        "mean_pct": 43.37374218484676,
+        "p95_pct": 63.84065372829418,
+        "max_pct": 80.0203873598369
+      },
+      "br": {
+        "samples": 120,
+        "mean_pct": 30.9756115544717,
+        "p95_pct": 50.327510917030565,
+        "max_pct": 58.18373812038015
+      },
+      "peer-router": {
+        "samples": 120,
+        "mean_pct": 60.006271948493556,
+        "p95_pct": 68.57727737973389,
+        "max_pct": 72.19917012448133
+      },
+      "ric": {
+        "samples": 120,
+        "mean_pct": 61.60936842410273,
+        "p95_pct": 75.9545923632611,
+        "max_pct": 78.65168539325843
+      },
+      "core5g": {
+        "samples": 120,
+        "mean_pct": 26.70490142592926,
+        "p95_pct": 42.78242677824268,
+        "max_pct": 52.35042735042735
+      },
+      "pe": {
+        "samples": 120,
+        "mean_pct": 52.1967418904704,
+        "p95_pct": 67.47474747474747,
+        "max_pct": 69.52573158425832
+      },
+      "ent-site-1": {
+        "samples": 120,
+        "mean_pct": 15.830506928838531,
+        "p95_pct": 29.613733905579398,
+        "max_pct": 44.82029598308668
+      },
+      "du2": {
+        "samples": 120,
+        "mean_pct": 24.42248164028529,
+        "p95_pct": 28.680634201585505,
+        "max_pct": 29.907068431427767
+      },
+      "cu2": {
+        "samples": 120,
+        "mean_pct": 18.361114851766853,
+        "p95_pct": 29.37219730941704,
+        "max_pct": 32.421875
+      },
+      "ran": {
+        "samples": 120,
+        "mean_pct": 17.06361814343959,
+        "p95_pct": 29.621380846325167,
+        "max_pct": 32.57328990228013
+      },
+      "ent-site-2": {
+        "samples": 120,
+        "mean_pct": 22.578810793043473,
+        "p95_pct": 42.430703624733475,
+        "max_pct": 80.56155507559396
+      },
+      "ent-site-3": {
+        "samples": 120,
+        "mean_pct": 20.259019803869304,
+        "p95_pct": 35.44303797468354,
+        "max_pct": 66.37744034707158
+      },
+      "du3": {
+        "samples": 120,
+        "mean_pct": 26.380156581550768,
+        "p95_pct": 31.07834634287366,
+        "max_pct": 32.117191818684354
+      },
+      "ent-site-4": {
+        "samples": 120,
+        "mean_pct": 17.918658837534174,
+        "p95_pct": 38.004246284501065,
+        "max_pct": 85.16260162601625
+      },
+      "du": {
+        "samples": 120,
+        "mean_pct": 26.107172368795634,
+        "p95_pct": 30.5770887166236,
+        "max_pct": 34.53461975028377
+      },
+      "ent-site-5": {
+        "samples": 120,
+        "mean_pct": 20.51660065169953,
+        "p95_pct": 35.82089552238806,
+        "max_pct": 61.82212581344903
+      },
+      "du4": {
+        "samples": 120,
+        "mean_pct": 28.76516800860643,
+        "p95_pct": 34.34745521751493,
+        "max_pct": 37.17114568599717
+      },
+      "victim": {
+        "samples": 120,
+        "mean_pct": 42.35335786344413,
+        "p95_pct": 59.927611168562564,
+        "max_pct": 62.44834710743802
+      },
+      "du5": {
+        "samples": 120,
+        "mean_pct": 30.346825148955784,
+        "p95_pct": 35.766836445953594,
+        "max_pct": 37.83323879750425
+      },
+      "control": {
+        "samples": 120,
+        "mean_pct": 41.23726890103419,
+        "p95_pct": 66.0919540229885,
+        "max_pct": 81.38686131386861
+      },
+      "ue2": {
+        "samples": 120,
+        "mean_pct": 31.82358608113294,
+        "p95_pct": 36.15660184237461,
+        "max_pct": 37.04594017094017
+      },
+      "lab-wifi-gateway": {
+        "samples": 120,
+        "mean_pct": 42.97067265386494,
+        "p95_pct": 57.196969696969695,
+        "max_pct": 60.50895381715363
+      },
+      "lab-wifi-relay": {
+        "samples": 120,
+        "mean_pct": 50.20247358081554,
+        "p95_pct": 56.8762278978389,
+        "max_pct": 58.25049701789264
+      },
+      "ue": {
+        "samples": 120,
+        "mean_pct": 41.051981569906566,
+        "p95_pct": 45.63970166379805,
+        "max_pct": 47.336010709504684
+      }
+    },
+    "execution_transport": {
+      "kind": "supervisor_per_vm",
+      "sessions": 9,
+      "workers": 21
+    },
+    "worker_messages": {
+      "metric_batches": 4595,
+      "metrics": 19995,
+      "total": 26769
+    },
+    "supervisor_transport_stats": [
+      {
+        "bytes": 6339960,
+        "envelopes": 9097,
+        "frames": 2053
+      },
+      {
+        "bytes": 375819,
+        "envelopes": 749,
+        "frames": 374
+      },
+      {
+        "bytes": 4265685,
+        "envelopes": 11460,
+        "frames": 2514
+      },
+      {
+        "bytes": 537922,
+        "envelopes": 1569,
+        "frames": 765
+      },
+      {
+        "bytes": 365166,
+        "envelopes": 800,
+        "frames": 419
+      },
+      {
+        "bytes": 388071,
+        "envelopes": 1080,
+        "frames": 390
+      },
+      {
+        "bytes": 357717,
+        "envelopes": 777,
+        "frames": 403
+      },
+      {
+        "bytes": 302169,
+        "envelopes": 687,
+        "frames": 396
+      },
+      {
+        "bytes": 330323,
+        "envelopes": 697,
+        "frames": 389
+      }
+    ],
+    "connections": {
+      "opened": 5514,
+      "reused": 742,
+      "tcp_http_events": 6904,
+      "events_using_reused_connection": 742
+    },
+    "terminal_connections": 0
+  },
+  "classic_reference": {
+    "run_id": "20261002T223041-0273f3ea",
+    "status": "completed_with_errors",
+    "duration_s": 600.0,
+    "elapsed_s": 600.0,
+    "started_at": 1790994668.4943438,
+    "finished_at": 1790995270.700679,
+    "plan_hash": "2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245",
+    "execution_hash": null,
+    "execution_profile": "classic-historical",
+    "plan_file_sha256": "3a2b8445f025bd6e1625baf6901f024b10d07567beac12d633e09e665b1fa9dc",
+    "ground_truth_windows": 120,
+    "ground_truth_window_lengths": [
+      5.0
+    ],
+    "baseline_restored": true,
+    "counts": {
+      "completed": 7122,
+      "failed": 782
+    },
+    "domains": {
+      "mobile": {
+        "events": 134,
+        "planned_bytes": 49949924,
+        "actual_bytes": 42638055,
+        "delivery_pct": 85.36160135098504,
+        "failed": 40,
+        "shortfall_events": 120,
+        "lateness_p95_ms": 6.158269173852204,
+        "lateness_max_ms": 13.494899186980547
+      },
+      "fixed": {
+        "events": 3110,
+        "planned_bytes": 5617348449,
+        "actual_bytes": 4552578329,
+        "delivery_pct": 81.0449693540099,
+        "failed": 369,
+        "shortfall_events": 2528,
+        "lateness_p95_ms": 7.562666704586718,
+        "lateness_max_ms": 20.709670705002736
+      },
+      "enterprise": {
+        "events": 416,
+        "planned_bytes": 7838099795,
+        "actual_bytes": 5984157605,
+        "delivery_pct": 76.34704534914638,
+        "failed": 64,
+        "shortfall_events": 330,
+        "lateness_p95_ms": 2.3994323779561455,
+        "lateness_max_ms": 5.5850827824315274
+      },
+      "peering": {
+        "events": 4244,
+        "planned_bytes": 3012897899,
+        "actual_bytes": 2824715090,
+        "delivery_pct": 93.7540927270566,
+        "failed": 309,
+        "shortfall_events": 4226,
+        "lateness_p95_ms": 46.66057325903239,
+        "lateness_max_ms": 126.18180125900835
+      }
+    },
+    "cpu": {
+      "du5": {
+        "samples": 121,
+        "mean_pct": 28.86900070185274,
+        "p95_pct": 34.5679012345679,
+        "max_pct": 36.87641723356009
+      },
+      "pe": {
+        "samples": 121,
+        "mean_pct": 49.01268678672613,
+        "p95_pct": 68.58006042296073,
+        "max_pct": 70.83333333333333
+      },
+      "lab-wifi-relay": {
+        "samples": 121,
+        "mean_pct": 47.1588411562247,
+        "p95_pct": 54.32835820895522,
+        "max_pct": 57.25646123260437
+      },
+      "victim": {
+        "samples": 121,
+        "mean_pct": 38.484718453513004,
+        "p95_pct": 60.66252587991718,
+        "max_pct": 64.83007209062822
+      },
+      "lab-wifi-gateway": {
+        "samples": 121,
+        "mean_pct": 41.18679517775594,
+        "p95_pct": 58.68945868945869,
+        "max_pct": 61.04761904761905
+      },
+      "orchestrator": {
+        "samples": 120,
+        "mean_pct": 46.41491161491346,
+        "p95_pct": 66.18106139438085,
+        "max_pct": 79.21810699588477
+      },
+      "ric": {
+        "samples": 120,
+        "mean_pct": 60.779684081961214,
+        "p95_pct": 72.86742034943474,
+        "max_pct": 76.07361963190183
+      },
+      "bng": {
+        "samples": 120,
+        "mean_pct": 27.40585741245233,
+        "p95_pct": 52.95508274231678,
+        "max_pct": 56.03644646924829
+      },
+      "du3": {
+        "samples": 120,
+        "mean_pct": 27.135090121311293,
+        "p95_pct": 31.224957069261592,
+        "max_pct": 32.00682205798749
+      },
+      "du2": {
+        "samples": 120,
+        "mean_pct": 25.224282292331157,
+        "p95_pct": 28.97808141189866,
+        "max_pct": 31.422083451603747
+      },
+      "br": {
+        "samples": 120,
+        "mean_pct": 27.77727332362421,
+        "p95_pct": 48.9432703003337,
+        "max_pct": 55.027027027027025
+      },
+      "du": {
+        "samples": 120,
+        "mean_pct": 26.3212254232146,
+        "p95_pct": 31.06082036775106,
+        "max_pct": 32.59195893926433
+      },
+      "core5g": {
+        "samples": 120,
+        "mean_pct": 24.96602774445408,
+        "p95_pct": 39.270833333333336,
+        "max_pct": 47.302904564315355
+      },
+      "du4": {
+        "samples": 120,
+        "mean_pct": 29.335755997208047,
+        "p95_pct": 34.38119512885868,
+        "max_pct": 35.669869983041266
+      },
+      "suscriptor": {
+        "samples": 120,
+        "mean_pct": 37.09843590194073,
+        "p95_pct": 62.315550510783204,
+        "max_pct": 71.51106833493743
+      },
+      "cu2": {
+        "samples": 120,
+        "mean_pct": 19.50253701520932,
+        "p95_pct": 32.42475865985236,
+        "max_pct": 33.9622641509434
+      },
+      "control": {
+        "samples": 120,
+        "mean_pct": 33.32141039561228,
+        "p95_pct": 52.804232804232804,
+        "max_pct": 60.83769633507853
+      },
+      "ue2": {
+        "samples": 120,
+        "mean_pct": 29.57263706705647,
+        "p95_pct": 33.239074550128535,
+        "max_pct": 35.142857142857146
+      },
+      "ran": {
+        "samples": 120,
+        "mean_pct": 18.96438662616271,
+        "p95_pct": 32.23981900452489,
+        "max_pct": 35.750421585160204
+      },
+      "ue": {
+        "samples": 120,
+        "mean_pct": 43.55472145915747,
+        "p95_pct": 48.2812909997376,
+        "max_pct": 51.20657650490586
+      },
+      "ent-site-1": {
+        "samples": 120,
+        "mean_pct": 14.367123064886075,
+        "p95_pct": 29.550321199143468,
+        "max_pct": 34.85838779956427
+      },
+      "peer-router": {
+        "samples": 120,
+        "mean_pct": 58.281454864448285,
+        "p95_pct": 67.07692307692308,
+        "max_pct": 70.48008171603678
+      },
+      "ent-site-2": {
+        "samples": 120,
+        "mean_pct": 17.126258435412684,
+        "p95_pct": 36.575052854122625,
+        "max_pct": 79.32489451476793
+      },
+      "ent-site-3": {
+        "samples": 120,
+        "mean_pct": 18.88337889551979,
+        "p95_pct": 31.182795698924732,
+        "max_pct": 60.348583877995644
+      },
+      "ent-site-4": {
+        "samples": 120,
+        "mean_pct": 16.394755232181225,
+        "p95_pct": 36.67377398720682,
+        "max_pct": 85.51020408163265
+      },
+      "ent-site-5": {
+        "samples": 120,
+        "mean_pct": 15.45206243743415,
+        "p95_pct": 31.982942430703623,
+        "max_pct": 60.50955414012739
+      }
+    },
+    "execution_transport": null,
+    "worker_messages": null,
+    "supervisor_transport_stats": null,
+    "connections": {
+      "opened": 0,
+      "reused": 0,
+      "tcp_http_events": 6904,
+      "events_using_reused_connection": 0
+    },
+    "terminal_connections": 0
+  },
+  "comparison_limit": "Same immutable plan and 10 Fixed sources; execution profile and time differ. Indicative comparison, not isolated randomized A/B.",
+  "process_validation": {
+    "guests": {
+      "ue": [
+        {
+          "pid": 1674492,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 1674496,
+          "role": "worker",
+          "network_namespace": "net:[4026532642]"
+        },
+        {
+          "pid": 1674498,
+          "role": "worker",
+          "network_namespace": "net:[4026532532]"
+        },
+        {
+          "pid": 1674500,
+          "role": "worker",
+          "network_namespace": "net:[4026532587]"
+        }
+      ],
+      "ue2": [
+        {
+          "pid": 1245558,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 1245560,
+          "role": "worker",
+          "network_namespace": "net:[4026532697]"
+        },
+        {
+          "pid": 1245562,
+          "role": "worker",
+          "network_namespace": "net:[4026532752]"
+        }
+      ],
+      "suscriptor": [
+        {
+          "pid": 325834,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 325999,
+          "role": "worker",
+          "network_namespace": "net:[4026532729]"
+        },
+        {
+          "pid": 326001,
+          "role": "worker",
+          "network_namespace": "net:[4026533065]"
+        },
+        {
+          "pid": 326003,
+          "role": "worker",
+          "network_namespace": "net:[4026532841]"
+        },
+        {
+          "pid": 326005,
+          "role": "worker",
+          "network_namespace": "net:[4026533009]"
+        },
+        {
+          "pid": 326007,
+          "role": "worker",
+          "network_namespace": "net:[4026532785]"
+        },
+        {
+          "pid": 326009,
+          "role": "worker",
+          "network_namespace": "net:[4026532613]"
+        },
+        {
+          "pid": 326011,
+          "role": "worker",
+          "network_namespace": "net:[4026533121]"
+        },
+        {
+          "pid": 326013,
+          "role": "worker",
+          "network_namespace": "net:[4026532953]"
+        },
+        {
+          "pid": 326015,
+          "role": "worker",
+          "network_namespace": "net:[4026532897]"
+        },
+        {
+          "pid": 326017,
+          "role": "worker",
+          "network_namespace": "net:[4026532673]"
+        }
+      ],
+      "peer-router": [
+        {
+          "pid": 3476,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 3477,
+          "role": "worker",
+          "network_namespace": "net:[4026531840]"
+        }
+      ],
+      "ent-site-1": [
+        {
+          "pid": 186872,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 186873,
+          "role": "worker",
+          "network_namespace": "net:[4026531840]"
+        }
+      ],
+      "ent-site-2": [
+        {
+          "pid": 186510,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 186511,
+          "role": "worker",
+          "network_namespace": "net:[4026531840]"
+        }
+      ],
+      "ent-site-3": [
+        {
+          "pid": 186806,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 186807,
+          "role": "worker",
+          "network_namespace": "net:[4026531840]"
+        }
+      ],
+      "ent-site-4": [
+        {
+          "pid": 183966,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 183967,
+          "role": "worker",
+          "network_namespace": "net:[4026531840]"
+        }
+      ],
+      "ent-site-5": [
+        {
+          "pid": 196542,
+          "role": "supervisor",
+          "network_namespace": "net:[4026531840]"
+        },
+        {
+          "pid": 196543,
+          "role": "worker",
+          "network_namespace": "net:[4026531840]"
+        }
+      ]
+    },
+    "supervisors": 9,
+    "workers": 21,
+    "generator_ssh_sessions": 9,
+    "fixed_distinct_network_namespaces": 10
+  },
+  "export_validation": {
+    "run_id": "20261003T002223-6d0ce1fa",
+    "state_latencies_s": [
+      0.1103694390039891,
+      2.6540151209919713,
+      0.9096029089996591,
+      0.12435518100392073,
+      0.18618918198626488,
+      2.418154400016647
+    ],
+    "observed_status": "running",
+    "export_s": 4.93129708597553,
+    "zip_valid": true,
+    "plan_hash": "2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245",
+    "execution_profile": "persistent",
+    "zip_bytes": 913791,
+    "max_state_s": 2.6540151209919713
+  },
+  "api_validation": {
+    "plan_unchanged": true,
+    "poll_errors": [],
+    "poll_max_s": 5.457854515989311
+  }
+}

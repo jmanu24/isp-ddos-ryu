@@ -93,3 +93,6 @@ Datos, credenciales y respaldos están excluidos de Git. Las copias previas de
 la configuración de calibración se conservan en `.codex-backups/benign-capacity`
 y `.runtime/benign-lab/lab.before-calibration.yaml`. Los cambios del proyecto
 se versionan en el repositorio del nodo control.
+
+
+La versión optimizada incorpora supervisores por VM y perfiles de ejecución seleccionables. Ver [OPTIMIZED_EXECUTION.md](OPTIMIZED_EXECUTION.md). Los módulos agent.py, connection_pool.py y supervisor.py deben desplegarse juntos; los receptores Enterprise y Victim requieren reinicio para activar keep-alive.

@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Literal
 from .config import ROOT, load_lab, resolve, mapping_issues
 from .ground_truth import windows
 from .planner import DOMAINS, canonical, generate, load_profiles, save_plan, validate
@@ -40,6 +40,7 @@ class RunRequest(BaseModel):
     mode: str = 'simulation'
     scenario: str = 'B0'
     pipeline: str = 'enabled'
+    execution_profile: Optional[Literal['classic','coordinated','persistent']] = None
     speed: float = Field(default=20,ge=.1,le=100)
     attack_windows: List[AttackWindow] = Field(default_factory=list,max_length=100)
 
@@ -98,6 +99,28 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
                 for row in rows:f.write(json.dumps(row)+'\n')
             interface_cursors[rid]=rows[-1]['id']
         return rows
+    capture_locks={}
+    async def background(fn):
+        future=asyncio.get_running_loop().run_in_executor(None,fn)
+        try:return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            await future
+            raise
+    def capture_lock(rid):
+        return capture_locks.setdefault(rid,asyncio.Lock())
+    def capture_sync(rid):
+        capture_interfaces(rid);capture_hosts(rid);capture_guests(rid)
+    async def capture_run(rid):
+        async with capture_lock(rid):
+            await background(lambda:capture_sync(rid))
+    async def history_response(rid,filename,after,metadata):
+        async with capture_lock(rid):
+            def work():
+                capture_sync(rid)
+                path=manager.folder(rid)/filename
+                rows=[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+                return JSONResponse(dict(items=[row for row in rows if row['id']>after],cursor=max((row['id'] for row in rows),default=after),historical=True,available=bool(rows),**metadata))
+            return await background(work)
     finalized=set(manager.runs)
     async def monitor():
         tick=0
@@ -106,9 +129,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             tick+=1
             for rid,r in list(manager.runs.items()):
                 if r['status'] in TERMINAL and rid in finalized: continue
-                capture_interfaces(rid)
-                capture_hosts(rid)
-                capture_guests(rid)
+                await capture_run(rid)
                 if r['status'] in TERMINAL:
                     if r.get('finished_at'): finalized.add(rid)
                     continue
@@ -123,7 +144,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
                 row=dict(timestamp=time.time(),elapsed_s=snap['elapsed_s'],bytes_tx=snap['bytes_tx'],bytes_rx=snap['bytes_rx'],
                          payload_mbps=r['payload_mbps'],active_planned_mbps=snap['active_planned_mbps'],metrics_kind=r['metrics_kind'],domains=snap['domains'])
                 with (manager.folder(rid)/'metrics.jsonl').open('a') as f: f.write(json.dumps(row)+'\n')
-                if tick%5==0: manager.persist(rid)
+                if tick%5==0: await manager.persist_async(rid)
     @asynccontextmanager
     async def lifespan(app):
         interfaces.start()
@@ -147,29 +168,22 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         return await asyncio.get_running_loop().run_in_executor(None,lambda: JSONResponse(guests.response(max(1,min(minutes,360)),max(0,after))))
     @app.get('/api/runs/{rid}/vm-resources')
     async def run_vm_resources(rid:str,after:int=0):
-        run_for(rid);capture_guests(rid)
-        path=manager.folder(rid)/'vm_resources.jsonl'
-        rows=[json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
-        return dict(items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),hosts=[],historical=True,available=bool(rows))
+        run_for(rid)
+        return await history_response(rid,'vm_resources.jsonl',after,dict(hosts=[]))
     @app.get('/api/resources')
     async def resources(minutes:int=5,after:int=0):
         return await asyncio.get_running_loop().run_in_executor(None,lambda: JSONResponse(hosts.response(max(1,min(minutes,360)),max(0,after))))
     @app.get('/api/runs/{rid}/resources')
     async def run_resources(rid:str,after:int=0):
-        run_for(rid);capture_hosts(rid)
-        path=manager.folder(rid)/'host_metrics.jsonl'
-        rows=[json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
-        return dict(items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),hosts=[],historical=True,available=bool(rows))
+        run_for(rid)
+        return await history_response(rid,'host_metrics.jsonl',after,dict(hosts=[]))
     @app.get('/api/traffic')
     async def traffic(minutes:int=5,after:int=0):
         return await asyncio.get_running_loop().run_in_executor(None,lambda: JSONResponse(interfaces.response(max(1,min(minutes,360)),max(0,after))))
     @app.get('/api/runs/{rid}/interface-traffic')
     async def interface_traffic(rid:str,after:int=0):
         run_for(rid)
-        capture_interfaces(rid)
-        path=manager.folder(rid)/'interface_metrics.jsonl'
-        rows=[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
-        return dict(metrics_kind='linux_interface_counters',items=[r for r in rows if r['id']>after],cursor=max((r['id'] for r in rows),default=after),nodes=[],interval_s=5,historical=True,available=bool(rows))
+        return await history_response(rid,'interface_metrics.jsonl',after,dict(metrics_kind='linux_interface_counters',nodes=[],interval_s=5))
     @app.middleware('http')
     async def guard(request,call_next):
         if request.url.path.startswith('/api'):
@@ -251,7 +265,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @app.post('/api/runs')
     async def start_run(body:RunRequest):
         p=read_plan(body.plan_hash)
-        return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows],body.pipeline)
+        return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows],body.pipeline,body.execution_profile)
     @app.get('/api/runs/{rid}')
     async def get_run(rid:str):
         run_for(rid)
@@ -263,7 +277,9 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @app.post('/api/runs/{rid}/attack')
     async def annotate(rid:str,body:Annotation):
         run_for(rid)
-        return manager.annotate(rid,body.name,body.action)
+        result=manager.annotate(rid,body.name,body.action)
+        await manager.persist_async(rid)
+        return result
     @app.get('/api/runs/{rid}/events')
     async def events(rid:str,domain:str='',status:str='',offset:int=0,limit:int=100):
         run_for(rid)
@@ -287,15 +303,16 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @app.get('/api/runs/{rid}/export')
     async def export(rid:str):
         run_for(rid)
-        manager.persist(rid)
-        capture_interfaces(rid)
-        capture_hosts(rid)
-        capture_guests(rid)
-        buffer=io.BytesIO()
-        with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
-            for f in manager.folder(rid).iterdir():
-                if f.suffix in ('.json','.jsonl','.csv') or f.name=='failure_traceback.txt': z.write(f,f.name)
-        return Response(buffer.getvalue(),media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{rid}.zip"'})
+        def build_zip():
+            buffer=io.BytesIO()
+            with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
+                for f in manager.folder(rid).iterdir():
+                    if f.suffix in ('.json','.jsonl','.csv') or f.name=='failure_traceback.txt':z.write(f,f.name)
+            return buffer.getvalue()
+        async with capture_lock(rid):
+            await background(lambda:capture_sync(rid))
+            content=await manager.persist_async(rid,after=build_zip)
+        return Response(content,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{rid}.zip"'})
     app.mount('/static',StaticFiles(directory=ROOT/'benign_lab/static'),name='static')
     @app.get('/')
     def index(): return FileResponse(ROOT/'benign_lab/static/index.html')

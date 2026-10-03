@@ -24,7 +24,10 @@ def test_vm_export_and_empty_old_run(tmp_path):
  with TestClient(app) as c:
   now=time.time();app.state.vm_resources.accept({'name':'node','domain':'fixed'},{'timestamp':now,'cpu_pct':30,'interval_s':5,'metrics_kind':'guest_resources'})
   assert c.get('/api/vm-resources').json()['items'][0]['metrics_kind']=='guest_resources'
-  m=app.state.manager;rid='vm-export';m.folder(rid).mkdir(parents=True);m.runs[rid]={'id':rid,'mode':'lab','started_at':now-1,'finished_at':now+1,'status':'completed','duration_s':1};m.persist=lambda rid:None
+  m=app.state.manager;rid='vm-export';m.folder(rid).mkdir(parents=True);m.runs[rid]={'id':rid,'mode':'lab','started_at':now-1,'finished_at':now+1,'status':'completed','duration_s':1};
+  async def persist_mock(rid,after=None):
+   return after() if after else None
+  m.persist_async=persist_mock
   assert c.get('/api/runs/'+rid+'/vm-resources').json()['items'][0]['cpu_pct']==30
   z=zipfile.ZipFile(io.BytesIO(c.get('/api/runs/'+rid+'/export').content));assert 'vm_resources.jsonl' in z.namelist()
   assert c.get('/api/runs/missing/vm-resources').status_code==404
