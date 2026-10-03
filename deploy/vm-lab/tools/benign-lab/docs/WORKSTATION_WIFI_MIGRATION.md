@@ -1,3 +1,5 @@
+> Transporte actualizado el 2026-10-03: ver [migración Ethernet](../../workstation/WORKSTATION_ETHERNET_MIGRATION.md). WiFi queda como respaldo manual.
+
 # Laboratorio distribuido: ESXi y VMware Player por Wi-Fi
 
 El traslado conserva las IP de las VMs, MAC, claves SSH, nombres de interfaces, namespaces y configuración de servicios. Las direcciones DHCP de Fixed se renuevan y se resuelven por MAC y namespace al preparar cada ejecución. Se exportan apagadas, se verifica el manifiesto SHA-256 y se convierte únicamente la copia de hardware virtual 19 a 18. Los originales permanecen apagados en ESXi para reversión.

@@ -10,4 +10,4 @@ relay=byname['lab-wifi-relay'];ips=[ip for nic in relay.get('guest',{}).get('net
 try:
  s=socket.create_connection(('127.0.0.1',18781),2);s.close();tunnel=True
 except OSError:tunnel=False
-print(json.dumps({'permitted':permitted,'relay_ip':ips[0] if ips else None,'tunnel_up':tunnel}))
+print(json.dumps({'permitted':permitted,'relay_ip':str(ipaddress.IPv4Address(c['relay_endpoint'])) if c.get('relay_endpoint') else (ips[0] if ips else None),'tunnel_up':tunnel}))
