@@ -14,11 +14,12 @@ La configuración conectada usa persistent por defecto. El selector permite volv
 execution:
   default_profile: persistent
   metrics_interval_s: 2
+  peering_workers: 2
 ```
 
 ## Transporte y aislamiento
 
-En la topología actual hay 9 transportes de generación: dos VMs UE, una Fixed, cinco Enterprise y un peer-router. Mantienen 21 trabajadores: cinco UE, diez namespaces Fixed, cinco Enterprise y un generador Peering. Los flujos lógicos de Peering conservan su identidad. Los recolectores de monitoreo usan sus propias conexiones y no están incluidos en estos nueve transportes.
+En la topología actual hay 9 transportes de generación: dos VMs UE, una Fixed, cinco Enterprise y un peer-router. Mantienen 22 trabajadores: cinco UE, diez namespaces Fixed, cinco Enterprise y dos generadores Peering. El reparto por fuente lógica está documentado en PEERING_PARALLEL_SCHEDULING.md. Los flujos lógicos de Peering conservan su identidad. Los recolectores de monitoreo usan sus propias conexiones y no están incluidos en estos nueve transportes.
 
 Cada supervisor lanza los trabajadores en sus namespaces originales y transmite controles, estados y métricas por una sesión SSH. Antes del comienzo común verifica receptor, rutas, identidad de origen y reloj. La parada, fin de SSH o señales terminan los procesos descendientes. No se modifica el límite de reloj ni se amplían las fechas límite de los eventos.
 

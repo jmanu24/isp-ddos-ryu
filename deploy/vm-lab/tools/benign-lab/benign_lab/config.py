@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 import yaml
 from .planner import canonical
+from .execution import execution_options
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -96,7 +97,27 @@ def resolve(cfg, plan):
         groups.setdefault(key,dict(argv=argv,node=node,context=context,events=[],sources=set()))
         groups[key]['events'].append(event)
         groups[key]['sources'].add(event['source'])
-    return groups
+    options=cfg.get('execution_options') or execution_options(cfg)
+    count=options['peering_workers']
+    if count==1:return groups
+    result={}
+    for key,group in groups.items():
+        if group['context']['domain']!='peering':
+            result[key]=group;continue
+        totals={source:sum(e['planned_bytes'] for e in group['events'] if e['source']==source) for source in group['sources']}
+        loads=[0]*count;assignment={}
+        # Whole logical sources stay together; greedy byte balance is stable
+        # across event ordering and does not rewrite the scientific plan.
+        for source in sorted(totals,key=lambda source:(-totals[source],source)):
+            shard=min(range(count),key=lambda shard:(loads[shard],shard))
+            assignment[source]=shard;loads[shard]+=totals[source]
+        for shard in range(count):
+            events=[e for e in group['events'] if assignment[e['source']]==shard]
+            if not events:continue
+            context=dict(group['context'],worker_shard=shard,worker_shards=count)
+            shard_key=hashlib.sha256(canonical([key,options['partition_algorithm'],shard,count])).hexdigest()[:12]
+            result[shard_key]=dict(group,context=context,events=events,sources={e['source'] for e in events})
+    return result
 
 
 def supervisor_groups(groups):

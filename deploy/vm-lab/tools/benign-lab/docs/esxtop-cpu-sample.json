@@ -1,0 +1,42 @@
+{
+  "sample_interval_s": 2,
+  "group_cpu": {
+    "br": {
+      "% Used": 26.82,
+      "% Ready": 56.26,
+      "% CoStop": 0.0,
+      "% Max Limited": 0.0
+    },
+    "du": {
+      "% Used": 145.23,
+      "% Ready": 75.9,
+      "% CoStop": 0.0,
+      "% Max Limited": 0.0
+    },
+    "ue": {
+      "% Used": 146.31,
+      "% Ready": 156.14,
+      "% CoStop": 31.15,
+      "% Max Limited": 0.0
+    },
+    "ue2": {
+      "% Used": 123.62,
+      "% Ready": 128.77,
+      "% CoStop": 33.14,
+      "% Max Limited": 0.0
+    },
+    "lab-wifi-relay": {
+      "% Used": 36.02,
+      "% Ready": 67.11,
+      "% CoStop": 0.0,
+      "% Max Limited": 0.0
+    },
+    "peer-router": {
+      "% Used": 48.8,
+      "% Ready": 48.95,
+      "% CoStop": 0.0,
+      "% Max Limited": 0.0
+    }
+  },
+  "caveat": "Group Ready is sum across worlds; compare per-vCPU and same sampling interval."
+}

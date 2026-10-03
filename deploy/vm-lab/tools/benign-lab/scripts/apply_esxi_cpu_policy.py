@@ -3,7 +3,7 @@ import argparse,json,subprocess
 from pathlib import Path
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--latency',choices=['normal','high'],default='high');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--latency',choices=['normal','high'],default='normal');p.add_argument('--power-policy',choices=['high-performance','balanced']);a=p.parse_args()
     root=Path(__file__).resolve().parents[5];private=root/'.runtime/benign-lab'
     if any(json.loads(f.read_text())['status'] in ('queued','preparing','running') for f in (private/'data/runs').glob('*/run.json')):
         p.error('Stop active experiments before changing scheduling')
@@ -12,6 +12,10 @@ def main():
     for name in ['ue','ue2','du','du2','du3','du4','du5']:
         subprocess.run(['govc','vm.change','-vm',name,'-cpu.shares','normal','-latency',a.latency],env=env,check=True)
         print(name+': shares normal, latency '+a.latency,flush=True)
+    if a.power_policy:
+        policy='1' if a.power_policy=='high-performance' else '2'
+        subprocess.run(['govc','host.esxcli','hardware','power','policy','set','--id',policy],env=env,check=True)
+        print('Host power policy: '+a.power_policy,flush=True)
     audit=private/'cpu-upgrade';audit.mkdir(exist_ok=True)
     r=subprocess.run(['govc','vm.info','-json','*'],env=env,capture_output=True,check=True)
     (audit/('policy-'+a.latency+'.json')).write_bytes(r.stdout)
