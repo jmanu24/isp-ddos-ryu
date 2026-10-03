@@ -92,6 +92,9 @@ class Manager:
                 r['domains'][domain]=dict(counts=dict(Counter(e['status'] for e in es)),bytes_tx=sum(e.get('bytes_tx',0) for e in es),bytes_rx=sum(e.get('bytes_rx',0) for e in es),active_planned_mbps=sum(e['rate_bps'] for e in es if e['status']=='running')/1e6)
             if r['status'] in TERMINAL and r.get('finished_at'):
                 self.terminal_metrics[rid]={k:copy.deepcopy(r[k]) for k in ('counts','bytes_tx','bytes_rx','shortfall_bytes','active_planned_mbps','domains')}
+        if r.get('purpose')=='domain_benchmark':
+            actual=r['bytes_tx']+r['bytes_rx'];planned=r['benchmark_planned_bytes']
+            r['benchmark_metrics']=dict(domain=r['benchmark_domain'],planned_bytes=planned,actual_bytes=actual,observed_pct=100*actual/planned,planned_mean_mbps=planned*8/r['duration_s']/1e6,observed_mean_mbps=actual*8/max(r['elapsed_s'],.001)/1e6,failed_events=r['counts'].get('failed',0),final=r['status'] in TERMINAL)
         r['logs']=self.logs[rid][-100:]
         return r
 
@@ -137,6 +140,8 @@ class Manager:
 
     async def start(self,plan,plan_file,cfg,mode='simulation',scenario='B0',speed=20,attack_windows=None,pipeline='enabled',execution_profile=None):
         validate(plan)
+        if plan.get('purpose')=='domain_benchmark' and (scenario!='B0' or attack_windows or (mode=='lab' and pipeline!='baseline')):
+            raise ValueError('Domain benchmark requires B0 without attacks and baseline pipeline for laboratory runs')
         cfg=copy.deepcopy(cfg)
         options=execution_options(cfg,execution_profile)
         cfg['execution_options']=options
@@ -163,6 +168,7 @@ class Manager:
         (folder/'benign_plan.json').write_bytes(Path(plan_file).read_bytes())
         atomic_json(folder/'lab_snapshot.json',cfg)
         r=dict(id=rid,status='preparing',created_at=time.time(),started_at=None,finished_at=None,
+               purpose=plan.get('purpose','baseline_plan'),benchmark_domain=plan.get('benchmark_domain'),benchmark_planned_bytes=sum(e['planned_bytes'] for e in plan['events']) if plan.get('purpose')=='domain_benchmark' else None,
                plan_hash=plan['plan_hash'],plan_file_sha256=__import__('hashlib').sha256(Path(plan_file).read_bytes()).hexdigest(),
                lab_hash=digest(cfg),seed=plan['seed'],duration_s=plan['duration_s'],mode=mode,scenario=scenario,speed=speed,
                plan_capacity_mbps=copy.deepcopy(plan['capacity_mbps']),lab_reference_capacity_mbps=copy.deepcopy(cfg.get('capacity_mbps')),
@@ -196,13 +202,14 @@ class Manager:
             if r['pipeline']=='baseline':
                 cfg=copy.deepcopy(cfg)
                 guard=BaselineGuard(cfg,rid,plan['duration_s'])
+                if plan.get('purpose')=='domain_benchmark':guard.domains={plan['benchmark_domain']}
                 self.log(rid,'Suspending detection and mitigation for baseline')
                 r['baseline_control']['preflight']=await guard.enter()
                 groups=resolve(cfg,plan)
                 r['lab_hash']=digest(cfg)
                 atomic_json(self.folder(rid)/'lab_snapshot.json',cfg)
                 await self.persist_async(rid)
-                self.log(rid,'Baseline acknowledged; UE budgets restored and ten Fixed sessions verified')
+                self.log(rid,'Baseline acknowledged; selected domain checks completed' if plan.get('purpose')=='domain_benchmark' else 'Baseline acknowledged; UE budgets restored and ten Fixed sessions verified')
             if r['mode']=='simulation':
                 await self.simulate(rid,plan)
             else:

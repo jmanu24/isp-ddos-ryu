@@ -325,11 +325,30 @@ def generate(profiles, seed=1, duration_s=None, capacities=None):
     return result
 
 
+def generate_benchmark(profiles, seed, duration_s, capacities, domain):
+    if domain not in DOMAINS: raise ValueError('Invalid benchmark domain')
+    plan=generate(profiles,seed,duration_s,capacities)
+    parent=plan['plan_hash']
+    plan['events']=[e for e in plan['events'] if e['domain']==domain]
+    if not plan['events']:raise ValueError('Benchmark has no events; increase duration')
+    plan.update(purpose='domain_benchmark',benchmark_domain=domain,parent_plan_hash=parent)
+    plan['warnings']=[w for w in plan['warnings'] if not any(w.startswith(d+':') for d in DOMAINS if d!=domain)]
+    plan['warnings'].append('Single-domain BENIGN_V1 load benchmark; shared infrastructure and background load remain present.')
+    plan['summary']=summarize(plan);plan['plan_hash']=plan_hash(plan);validate(plan)
+    return plan
+
+
 def validate(plan):
     if plan.get('schema_version') != 1 or plan.get('plan_hash') != plan_hash(plan):
         raise ValueError('Plan schema or SHA-256 invalid')
     if plan.get('profile') != 'BENIGN_V1' or plan.get('window_s') != 5:
         raise ValueError('Unsupported profile or window')
+    if plan.get('purpose')=='domain_benchmark':
+        domain=plan.get('benchmark_domain')
+        if domain not in DOMAINS or not plan['events'] or any(e['domain']!=domain for e in plan['events']):
+            raise ValueError('Benchmark must contain events from exactly its selected domain')
+    elif plan.get('benchmark_domain') is not None:
+        raise ValueError('Benchmark domain requires domain_benchmark purpose')
     duration = plan['duration_s']
     if plan.get('profile_hash') != digest(plan['profiles']):
         raise ValueError('Profile hash mismatch')

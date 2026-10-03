@@ -169,3 +169,5 @@ Monitoreo continuo de CPU, memoria, disco y procesos de los invitados Linux, con
 La ejecución optimizada ofrece supervisores por VM, métricas agrupadas y un perfil TCP/HTTP persistente seleccionable. Consulta [OPTIMIZED_EXECUTION.md](docs/OPTIMIZED_EXECUTION.md) para despliegue y comparaciones reproducibles.
 
 Las capacidades de un plan pueden diferir de la referencia calibrada. Consulta [PLAN_CAPACITIES.md](docs/PLAN_CAPACITIES.md) para registro y comparación de planes personalizados.
+
+Benchmark por dominio disponible en el selector Tipo de prueba. Uso y límites: [DOMAIN_BENCHMARK.md](docs/DOMAIN_BENCHMARK.md).

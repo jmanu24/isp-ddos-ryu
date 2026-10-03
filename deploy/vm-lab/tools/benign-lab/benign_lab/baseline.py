@@ -14,6 +14,7 @@ class BaselineGuard:
         self.run_id=run_id
         self.duration=duration
         self.acquired=False
+        self.domains={'mobile','fixed','enterprise','peering'}
 
     async def ssh(self,host,user,command,root=False,payload=None):
         env=os.environ.copy()
@@ -78,8 +79,10 @@ print(json.dumps(v))
                 if state.get('cleared'):break
             await asyncio.sleep(1)
         else:raise RuntimeError('Controller did not acknowledge baseline mode')
-        # Restore all UE slice budgets, including actuator state left after a restart.
-        code="""import json,time,urllib.request
+        mobile=None
+        if 'mobile' in self.domains:
+            # Restore all UE slice budgets, including actuator state left after a restart.
+            code="""import json,time,urllib.request
 url=RIC_URL
 s=json.load(urllib.request.urlopen(url+'/status',timeout=5))
 for imsi in s['enforced']:
@@ -92,17 +95,19 @@ for _ in range(20):
 else:raise RuntimeError('UE slice budgets were not restored')
 print(json.dumps(s))
 """
-        code=code.replace('RIC_URL',repr(self.control['ric_url']))
-        mobile=json.loads(await self.controller(code))
+            code=code.replace('RIC_URL',repr(self.control['ric_url']))
+            mobile=json.loads(await self.controller(code))
         # Verify dataplane restrictions without deleting unidentified rules.
         flows=await self.ssh(self.control['pe_host'],'root','ovs-ofctl -O OpenFlow13 dump-flows br-ent')
         residual=[line for line in flows.splitlines() if 'priority=100' in line and 'actions=drop' in line]
         if residual:raise RuntimeError('Residual OpenFlow drop rules; baseline cannot start until identified restrictions are released')
-        # Reconnect only leases missing from BNG; healthy sessions retain their IP.
-        import re
-        sessions=await self.ssh(self.control['bng_host'],self.control['bng_user'],'accel-cmd -p 2000 show sessions',root=True)
-        active_ips=re.findall(r'\|\s*(10\.20\.0\.\d+)\s*\|\s*ipoe\s*\|.*?active',sessions)
-        refresh=r"""import json,subprocess
+        sessions=None
+        if 'fixed' in self.domains:
+            # Reconnect only leases missing from BNG; healthy sessions retain their IP.
+            import re
+            sessions=await self.ssh(self.control['bng_host'],self.control['bng_user'],'accel-cmd -p 2000 show sessions',root=True)
+            active_ips=re.findall(r'\|\s*(10\.20\.0\.\d+)\s*\|\s*ipoe\s*\|.*?active',sessions)
+            refresh=r"""import json,subprocess
 healthy=HEALTHY
 addresses=ADDRESSES
 missing=[a['local'] for i in addresses if i['ifname'].startswith('macvlan') for a in i['addr_info'] if a['family']=='inet' and a['local'] not in healthy]
@@ -110,26 +115,26 @@ if missing:
  with open('/run/bng-agent/cmd','w') as fifo:
   for address in missing:fifo.write('kick '+address+'\n');fifo.flush()
 """.replace('HEALTHY',repr(active_ips)).replace('ADDRESSES',repr(await self.fixed_addresses()))
-        await self.ssh(self.control['fixed_host'],self.control['fixed_user'],'python3 -',root=True,payload=refresh)
-        stable=None
-        for _ in range(40):
-            sessions=await self.ssh(self.control['bng_host'],self.control['bng_user'],'accel-cmd -p 2000 show sessions',root=True)
-            active_ips=re.findall(r'\|\s*(10\.20\.0\.\d+)\s*\|\s*ipoe\s*\|.*?active',sessions)
-            addresses=await self.fixed_addresses()
-            mapping={}
-            for name,node in self.cfg['nodes'].items():
-                if node.get('access_mode') in ('ipoe_bound','ipoe_namespace'):
-                    matches=[a['local'] for i in addresses if i['ifname']==node['interface'] and i.get('namespace','')==node.get('namespace','') for a in i['addr_info'] if a['family']=='inet']
-                    if len(matches)==1:mapping[name]=matches[0]
-            valid=len(mapping)==10 and len(active_ips)==10 and set(mapping.values())==set(active_ips)
-            if valid and mapping==stable:break
-            stable=mapping if valid else None
-            await asyncio.sleep(2)
-        else:raise RuntimeError('Baseline requires ten stable Fixed IPs matching active BNG sessions')
-        session_ids={line.split('|')[3].strip():line.split('|')[0].strip() for line in sessions.splitlines() if len(line.split('|'))>=7 and 'active' in line}
-        for name,address in mapping.items():
-            self.cfg['nodes'][name]['source_ip']=address
-            self.cfg['nodes'][name]['session_id']=session_ids[address]
+            await self.ssh(self.control['fixed_host'],self.control['fixed_user'],'python3 -',root=True,payload=refresh)
+            stable=None
+            for _ in range(40):
+                sessions=await self.ssh(self.control['bng_host'],self.control['bng_user'],'accel-cmd -p 2000 show sessions',root=True)
+                active_ips=re.findall(r'\|\s*(10\.20\.0\.\d+)\s*\|\s*ipoe\s*\|.*?active',sessions)
+                addresses=await self.fixed_addresses()
+                mapping={}
+                for name,node in self.cfg['nodes'].items():
+                    if node.get('access_mode') in ('ipoe_bound','ipoe_namespace'):
+                        matches=[a['local'] for i in addresses if i['ifname']==node['interface'] and i.get('namespace','')==node.get('namespace','') for a in i['addr_info'] if a['family']=='inet']
+                        if len(matches)==1:mapping[name]=matches[0]
+                valid=len(mapping)==10 and len(active_ips)==10 and set(mapping.values())==set(active_ips)
+                if valid and mapping==stable:break
+                stable=mapping if valid else None
+                await asyncio.sleep(2)
+            else:raise RuntimeError('Baseline requires ten stable Fixed IPs matching active BNG sessions')
+            session_ids={line.split('|')[3].strip():line.split('|')[0].strip() for line in sessions.splitlines() if len(line.split('|'))>=7 and 'active' in line}
+            for name,address in mapping.items():
+                self.cfg['nodes'][name]['source_ip']=address
+                self.cfg['nodes'][name]['session_id']=session_ids[address]
         state=await self.status()
         if not state.get('active') or state.get('run_id')!=self.run_id:raise RuntimeError('Baseline lease expired during preparation')
         return dict(lease=lease,controller=state,mobile=mobile,openflow_residual_drops=0,fixed_sessions=sessions)

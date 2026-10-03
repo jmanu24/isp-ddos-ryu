@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Literal
 from .config import ROOT, load_lab, resolve, mapping_issues
 from .ground_truth import windows
-from .planner import DOMAINS, canonical, generate, load_profiles, save_plan, validate
+from .planner import DOMAINS, canonical, generate, generate_benchmark, load_profiles, save_plan, validate
 from .runner import Manager, TERMINAL, csv_text
 from .interface_monitor import InterfaceMonitor
 from .host_monitor import HostMonitor
@@ -29,6 +29,7 @@ class PlanRequest(BaseModel):
     seed: int = 1
     duration_s: float = Field(default=600, ge=5, le=3600)
     capacity_mbps: Optional[Dict[str,float]] = None
+    benchmark_domain: Optional[Literal['mobile','fixed','enterprise','peering']] = None
 
 class AttackWindow(BaseModel):
     name: str = Field(min_length=1,max_length=80)
@@ -232,11 +233,12 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         rows=[]
         for f in plans.glob('*.json'):
             p=json.loads(f.read_text())
-            rows.append({k:p[k] for k in ('plan_hash','seed','duration_s','summary','warnings','capacity_mbps')})
+            rows.append({**{k:p[k] for k in ('plan_hash','seed','duration_s','summary','warnings','capacity_mbps')},'purpose':p.get('purpose'),'benchmark_domain':p.get('benchmark_domain')})
         return rows[::-1]
     @app.post('/api/plans')
     def make_plan(body:PlanRequest):
-        p=generate(load_profiles(profiles_path),body.seed,body.duration_s,body.capacity_mbps or load_lab(lab_path)['capacity_mbps'])
+        capacities=body.capacity_mbps or load_lab(lab_path)['capacity_mbps']
+        p=generate_benchmark(load_profiles(profiles_path),body.seed,body.duration_s,capacities,body.benchmark_domain) if body.benchmark_domain else generate(load_profiles(profiles_path),body.seed,body.duration_s,capacities)
         save_plan(p,plans/f'{p["plan_hash"]}.json')
         return p
     @app.post('/api/plans/import')
@@ -302,12 +304,18 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         return StreamingResponse(output(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
     @app.get('/api/runs/{rid}/export')
     async def export(rid:str):
-        run_for(rid)
+        benchmark_export=run_for(rid).get('purpose')=='domain_benchmark'
         def build_zip():
             buffer=io.BytesIO()
             with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
                 for f in manager.folder(rid).iterdir():
                     if f.suffix in ('.json','.jsonl','.csv') or f.name=='failure_traceback.txt':z.write(f,f.name)
+                if benchmark_export:
+                    stored=json.loads((manager.folder(rid)/'run.json').read_text())
+                    events=json.loads((manager.folder(rid)/'event_states.json').read_text()).values()
+                    actual=sum(e['bytes_tx']+e['bytes_rx'] for e in events);planned=stored['benchmark_planned_bytes']
+                    summary=dict(domain=stored['benchmark_domain'],plan_hash=stored['plan_hash'],execution_hash=stored['execution_hash'],status=stored['status'],elapsed_s=stored['elapsed_s'],planned_bytes=planned,actual_bytes=actual,observed_pct=100*actual/planned,planned_mean_mbps=planned*8/stored['duration_s']/1e6,observed_mean_mbps=actual*8/max(stored['elapsed_s'],.001)/1e6,failed_events=sum(e['status']=='failed' for e in events),metrics_kind=stored['metrics_kind'])
+                    z.writestr('benchmark_summary.json',json.dumps(summary,indent=2))
             return buffer.getvalue()
         async with capture_lock(rid):
             await background(lambda:capture_sync(rid))
