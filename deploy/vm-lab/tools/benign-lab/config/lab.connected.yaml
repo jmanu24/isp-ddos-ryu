@@ -855,7 +855,7 @@ vm_resource_monitor:
     govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
   - name: peer-router
     domain: peering
-    vcpus: 1
+    vcpus: 2
     object: /ha-datacenter/vm/peer-router
     entity: '57'
     govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env

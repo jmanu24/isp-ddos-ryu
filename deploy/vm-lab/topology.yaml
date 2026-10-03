@@ -222,7 +222,7 @@ vms:
     # entirely (only in edge/testing, last built 2017). Still packaged
     # in Ubuntu's universe repo.
     template: ubuntu
-    vcpu: 1
+    vcpu: 2
     ram_mb: 2048
     disk_gb: 10
     interfaces:
@@ -481,7 +481,7 @@ vms:
     placement: {hypervisor: workstation, host: "192.168.18.45", transport: wifi_wireguard_vxlan}
     role: pe_ovs
     template: alpine
-    vcpu: 1
+    vcpu: 2
     ram_mb: 1024
     disk_gb: 4
     interfaces:
