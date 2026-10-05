@@ -210,6 +210,16 @@ class Manager:
                 atomic_json(self.folder(rid)/'lab_snapshot.json',cfg)
                 await self.persist_async(rid)
                 self.log(rid,'Baseline acknowledged; selected domain checks completed' if plan.get('purpose')=='domain_benchmark' else 'Baseline acknowledged; UE budgets restored and ten Fixed sessions verified')
+            if r['mode']=='lab' and r['pipeline']!='baseline' and any(e['domain']=='fixed' for e in plan['events']) and any(n.get('access_mode') in ('ipoe_bound','ipoe_namespace') for n in cfg['nodes'].values()):
+                cfg=copy.deepcopy(cfg)
+                self.log(rid,'Discovering current Fixed IPs and active BNG sessions')
+                preparer=BaselineGuard(cfg,rid,plan['duration_s'])
+                r['fixed_preparation']=await preparer.prepare_fixed(reconnect=False)
+                groups=resolve(cfg,plan)
+                r['lab_hash']=digest(cfg)
+                atomic_json(self.folder(rid)/'lab_snapshot.json',cfg)
+                await self.persist_async(rid)
+                self.log(rid,'Fixed execution mappings refreshed; detection pipeline unchanged')
             if r['mode']=='simulation':
                 await self.simulate(rid,plan)
             else:
