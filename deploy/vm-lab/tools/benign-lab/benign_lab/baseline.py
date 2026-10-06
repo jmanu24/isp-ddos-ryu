@@ -1,4 +1,7 @@
 """Baseline control through the control node; no credentials in commands."""
+from pathlib import Path
+import hashlib
+import re
 import asyncio
 import json
 import os
@@ -33,8 +36,8 @@ class BaselineGuard:
         if proc.returncode:raise RuntimeError('Baseline remote operation failed on '+host+': '+err.decode(errors='replace')[-500:])
         return out.decode()
 
-    async def controller(self,code):
-        return await self.ssh(self.control['host'],self.control['user'],'python3 -',root=True,payload=code)
+    async def controller(self,code,timeout=25):
+        return await self.ssh(self.control['host'],self.control['user'],'python3 -',root=True,payload=code,timeout=timeout)
 
     async def status(self):
         return json.loads(await self.controller("from pathlib import Path; print(Path('/run/benign-baseline/status.json').read_text())"))
@@ -122,22 +125,14 @@ print(json.dumps(v))
         else:raise RuntimeError('Controller did not acknowledge baseline mode')
         mobile=None
         if 'mobile' in self.domains:
-            # Restore all UE slice budgets, including actuator state left after a restart.
-            code="""import json,time,urllib.request
-url=RIC_URL
-s=json.load(urllib.request.urlopen(url+'/status',timeout=5))
-for imsi in s['enforced']:
- req=urllib.request.Request(url+'/rc',data=json.dumps(dict(imsi=imsi,action='unblock',attack_type='BENIGN_BASELINE')).encode(),headers={'Content-Type':'application/json'})
- urllib.request.urlopen(req,timeout=5).read()
-for _ in range(20):
- s=json.load(urllib.request.urlopen(url+'/status',timeout=5))
- if len(s['enforced'])==5 and all(x.get('action')=='unblock' and x.get('max_prb')==100 for x in s['enforced'].values()):break
- time.sleep(.5)
-else:raise RuntimeError('UE slice budgets were not restored')
-print(json.dumps(s))
-"""
-            code=code.replace('RIC_URL',repr(self.control['ric_url']))
-            mobile=json.loads(await self.controller(code))
+            expected={name:n['source_ip'] for name,n in self.cfg['nodes'].items()
+                      if re.fullmatch(r'ue[1-5]',name) and n.get('configured',True)}
+            source=Path(__file__).with_name('mobile_budget.py').read_text(encoding='utf-8')
+            params=dict(core_url=self.control.get('mobile_telemetry_url','http://10.10.0.5:8766/telemetry'),
+                        ric_url=self.control['ric_url'],expected_ips=expected,run_id=self.run_id)
+            code=source+'\nparams='+repr(params)+'\nresult=restore_mobile_budgets(**params)\nprint(json.dumps(result))\n'
+            mobile=json.loads(await self.controller(code,timeout=75))
+            mobile['preflight_source_sha256']=hashlib.sha256(source.encode()).hexdigest()
         # Verify dataplane restrictions without deleting unidentified rules.
         flows=await self.ssh(self.control['pe_host'],'root','ovs-ofctl -O OpenFlow13 dump-flows br-ent')
         residual=[line for line in flows.splitlines() if 'priority=100' in line and 'actions=drop' in line]

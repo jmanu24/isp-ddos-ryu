@@ -26,7 +26,7 @@ def test_benchmark_rejects_mixed_import_even_with_recomputed_hash():
 @pytest.mark.parametrize('domain',['peering','enterprise','mobile'])
 def test_baseline_skips_inactive_domain_requirements_and_valid_guest_payload(domain):
  cfg=load_lab(ROOT/'config/lab.connected.yaml');guard=BaselineGuard(cfg,'benchmark-test',5);guard.domains={domain};calls=[]
- async def controller(code):
+ async def controller(code, timeout=25):
   compile(code,'guest','exec');calls.append(code)
   return json.dumps({'expires_at':9999999999} if len(calls)==1 else {'enforced':{}})
  async def status():return dict(active=True,cleared=True,run_id='benchmark-test')
@@ -57,7 +57,7 @@ def test_fixed_benchmark_refresh_payload_and_session_mapping():
  nodes=[(name,n) for name,n in cfg['nodes'].items() if n.get('access_mode') in ('ipoe_bound','ipoe_namespace')]
  addresses=[dict(ifname=n['interface'],namespace=n.get('namespace',''),addr_info=[dict(family='inet',local=n['source_ip'])]) for _,n in nodes]
  sessions='\n'.join('ipoe'+str(i)+' | user | mac | '+n['source_ip']+' | ipoe | | active | 1' for i,(_,n) in enumerate(nodes))
- async def controller(code):compile(code,'guest','exec');return json.dumps({'expires_at':9999999999})
+ async def controller(code, timeout=25):compile(code,'guest','exec');return json.dumps({'expires_at':9999999999})
  async def status():return dict(active=True,cleared=True,run_id='fixed-benchmark-test')
  async def fixed():return addresses
  async def ssh(host,user,command,**kwargs):
