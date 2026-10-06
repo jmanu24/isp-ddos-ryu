@@ -15,13 +15,31 @@ except ImportError:
 FIELDS=('rx_bytes','tx_bytes','rx_packets','tx_packets','rx_dropped','tx_dropped','rx_errors','tx_errors')
 
 
+def ipv4_addresses():
+    """iproute2 JSON, with a BusyBox text fallback; unknown is never inferred empty."""
+    try:
+        rows=json.loads(subprocess.check_output(['ip','-j','-4','address'],timeout=2,stderr=subprocess.DEVNULL))
+        return {r['ifname']:[a['local'] for a in r.get('addr_info',[]) if a.get('family')=='inet'] for r in rows},True
+    except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError):
+        pass
+    try:
+        text=subprocess.check_output(['ip','-o','-f','inet','address','show'],timeout=2,stderr=subprocess.DEVNULL).decode()
+        result={}
+        for line in text.splitlines():
+            match=re.search(r'^\d+:\s+(\S+).*?\binet\s+(\d+\.\d+\.\d+\.\d+)/',line)
+            if match:
+                iface=match.group(1).rstrip(':').split('@')[0]
+                result.setdefault(iface,[]).append(match.group(2))
+            elif line.strip():return {},False
+        return result,True
+    except (OSError,ValueError,subprocess.SubprocessError):
+        return {},False
+
+
 def read_interfaces(root=Path('/sys/class/net')):
     result=[];addresses={};addresses_known=False
     if root==Path('/sys/class/net'):
-        try:
-            rows=json.loads(subprocess.check_output(['ip','-j','-4','address'],timeout=2))
-            addresses={r['ifname']:[a['local'] for a in r.get('addr_info',[]) if a.get('family')=='inet'] for r in rows};addresses_known=True
-        except (OSError,ValueError,subprocess.TimeoutExpired):pass
+        addresses,addresses_known=ipv4_addresses()
     for iface in sorted(root.iterdir()):
         if iface.name=='lo' or iface.name.startswith(('veth','docker','virbr')):continue
         try:
@@ -64,10 +82,12 @@ def main():
                 items.extend(dict(namespace=namespace,**row) for row in json.loads(proc.stdout))
             except (OSError,ValueError,RuntimeError,subprocess.TimeoutExpired) as exc:errors[namespace]=str(exc)
         now=time.monotonic()
+        sample_timestamp=time.time()
         for row in items:
             key=(row['namespace'],row['interface'])
             before=previous.get(key)
-            row.update(rates(before[1] if before else None,row,now-before[0] if before else 0))
+            interval=now-before[0] if before else None
+            row.update(rates(before[1] if before else None,row,interval or 0),counter_interval_s=interval)
             previous[key]=(now,dict(row))
         present={(r['namespace'],r['interface']) for r in items}
         for key,before in previous.items():
@@ -82,7 +102,7 @@ def main():
         except (OSError,ValueError,KeyError):
             errors['resources']='Resource counters unavailable'
             resources_before=None
-        print(json.dumps(dict(timestamp=time.time(),items=items,errors=errors,resources=resources)),flush=True)
+        print(json.dumps(dict(timestamp=sample_timestamp,items=items,errors=errors,resources=resources)),flush=True)
         time.sleep(max(.1,args.interval-(time.monotonic()-begin)))
 
 if __name__=='__main__':
