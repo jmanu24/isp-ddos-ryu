@@ -36,6 +36,7 @@ class BGPPeeringAdapter(DomainAdapter):
         device_id: str = "r1",
         logger: Optional[logging.Logger] = None,
         clock=time.time,
+        async_poll=False,
     ):
         self.collector = collector or PeeringFlowCollector()
         self.backend = backend or PeeringBackend()
@@ -43,11 +44,38 @@ class BGPPeeringAdapter(DomainAdapter):
         self.logger = logger or logging.getLogger(__name__)
         self.clock = clock
         self._last_poll_ok = False
+        self._async_poll = async_poll
+        self._poll_pending = False
+        self._poll_ready = None
+        self._poll_started = None
 
     def is_connected(self) -> bool:
         return self._last_poll_ok
 
+    def _poll_background(self):
+        try:
+            self._poll_ready = self.collector.poll()
+            self._last_poll_ok = True
+        except Exception:
+            self.logger.exception("Peering asynchronous collection failed")
+            self._poll_ready = []
+            self._last_poll_ok = False
+        finally:
+            self.logger.info("Peering poll completed in %.3f seconds", self.clock()-self._poll_started)
+            self._poll_pending = False
+
     def collect(self) -> List[TelemetryEvent]:
+        if self._async_poll:
+            from ryu.lib import hub
+            records = self._poll_ready or []
+            self._poll_ready = None
+            if not self._poll_pending:
+                self._poll_pending = True
+                self._poll_started = self.clock()
+                hub.spawn(self._poll_background)
+            if not records:
+                return []
+            return self._events(records)
         try:
             records = self.collector.poll()
             self._last_poll_ok = True
@@ -56,6 +84,9 @@ class BGPPeeringAdapter(DomainAdapter):
             self._last_poll_ok = False
             return []
 
+        return self._events(records)
+
+    def _events(self, records):
         now = self.clock()
         return [
             TelemetryEvent(

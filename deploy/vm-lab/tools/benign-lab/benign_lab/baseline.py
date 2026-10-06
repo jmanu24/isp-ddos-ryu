@@ -149,7 +149,7 @@ print(json.dumps(v))
             await asyncio.sleep(5)
             state=await self.status()
             if not state.get('active') or not state.get('cleared') or state.get('run_id')!=self.run_id or time.time()-state.get('heartbeat',0)>30:
-                raise RuntimeError('Baseline suspension lost; stopping traffic')
+                raise RuntimeError('Baseline suspension lost; stopping traffic; evidence='+json.dumps(dict(expected_run_id=self.run_id,observed=state,heartbeat_age_s=time.time()-state.get('heartbeat',0)),sort_keys=True))
 
     async def leave(self):
         if not self.acquired:return dict(restored=True,changed=False)

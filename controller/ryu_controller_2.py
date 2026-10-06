@@ -196,7 +196,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             # settings.BNG_DISTRIBUTED_MODE. A hardcoded value here would
             # silently override that selection in distributed mode.
             BroadbandAdapter(logger=self.logger),
-            BGPPeeringAdapter(logger=self.logger),
+            BGPPeeringAdapter(logger=self.logger, async_poll=True),
         ]
 
         # Domains that had at least one active mitigation block as of the
