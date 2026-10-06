@@ -41,3 +41,7 @@ Los relojes deben estar sincronizados. La telemetría, el muestreo de IP y las a
 En este despliegue ambas raíces de 40 GiB estaban al 100 %. Los probes se instalaron en /run/benign-lab (tmpfs), con un lanzador pequeño en la ruta anterior. Los nodos ue/ue2 tienen bootstrap_probe=true: cada reconexión del colector reinstala desde el control el probe y resource_probe.py en RAM, también después de un reboot. No se borraron logs. Esta solución mantiene el monitoreo, pero no resuelve el disco lleno: liberar/archivar datos o ampliar correctamente el filesystem sigue pendiente antes de campañas extensas.
 
 Se exige la misma configuración del detector y los mismos hashes de implementación entre entrenamiento y validación; el umbral global de decisión puede variar para estudiar su gate. La atribución de decisiones usa únicamente el candidato ganador de cada grupo, no todos sus candidatos.
+
+### Almacenamiento persistente restaurado
+
+Después de liberar espacio en UE y UE2 se verificaron aproximadamente 27 GiB disponibles en cada nodo (29 % usado). Ambos probes vuelven a /opt/benign-lab y se retiraron probe_path=/run y bootstrap_probe de su configuración. La captura conserva sus campos IPv4 y recursos; no necesita bootstrap en RAM en estos nodos. La sección anterior documenta la contingencia histórica. Durante una prueba activa los colectores continúan en RAM; la configuración persistente se activa en el siguiente reinicio seguro del servicio.
