@@ -1,0 +1,17 @@
+# Pruebas, semillas y programación
+
+La sección **Pruebas y programación** permite retirar pruebas, planes individuales y todos los planes de una semilla. Las ejecuciones activas y los planes referenciados por series pendientes están protegidos. Retirar una semilla elimina sus planes de la biblioteca, conserva los planes incorporados a ejecuciones anteriores y no altera BENIGN_V1, plan_hash ni el ground truth de 5 s.
+
+Seleccione en Monitor un plan materializado, modo, pipeline y perfil de ejecución. En Pruebas y programación elija 1–100 repeticiones y una pausa de 0–86400 s después de cada finalización. **Ejecutar serie ahora** espera si existe una prueba activa. **Programar serie** usa la fecha y hora indicada en Lima (UTC−05:00), independientemente de la zona horaria del navegador o del servidor. La cola compara SHA-256 de los bytes del plan antes de cada ejecución, genera un run_id nuevo y registra series_id y repetition_index. Las series automáticas admiten B0 con detección activa o baseline sin mitigación; los ataques externos requieren lanzamiento y anotación manual.
+
+La cola serializada se guarda en BENIGN_DATA/experiment_jobs.json y funciona mientras benign-lab-web.service está encendido. Una serie pendiente vencida se ejecuta cuando el servicio vuelve y el laboratorio queda libre. Una serie que estaba preparando o ejecutando durante un reinicio pasa a **Requiere revisión**: no se repite automáticamente una prueba de resultado ambiguo. Revise la última ejecución y cree una nueva serie con las repeticiones restantes. Cancelar una serie detiene las repeticiones posteriores y deja terminar la prueba actual; para detenerla use Monitor → Parar. Una preparación fallida, prueba detenida o restauración fallida del pipeline detiene la serie. Una ejecución completed_with_errors permite continuar y conserva sus errores para analítica.
+
+El plan, modo y perfil quedan fijados al crear la serie. El mapeo real y la política del controlador se consultan al ejecutar y quedan registrados en cada prueba; deben mantenerse comparables para estadísticas. Repetir una misma semilla no aumenta el número de semillas independientes.
+
+## Papelera y recuperación
+
+Retirar no libera inmediatamente espacio: los archivos se mueven a BENIGN_DATA/trash/runs o trash/plans y desaparecen de las listas y de la analítica. No existe purga automática. Los imports de analítica pueden retirarse con la API DELETE /api/runs/{id}; las pruebas locales e importadas aparecen en esta sección.
+
+Para recuperar evidencia, detenga el servicio cuando no haya pruebas activas, mueva el directorio de papelera al directorio original BENIGN_DATA/runs/{run_id} (o analytics-imports/{run_id} si era importado), sin sobrescribir destinos, y reinicie el servicio. Para planes, restaure el archivo a plans/{plan_hash}.json o impórtelo desde Monitor. La papelera incluye prefijo de fecha e identificador único; el run.json/benign_plan.json contiene el identificador original. El administrador puede purgarla tras verificar sus copias de seguridad. Las series conservan run_ids incluso si se retira una prueba: son referencias históricas, no resultados estadísticos.
+
+API autenticada: GET/POST /api/jobs; POST /api/jobs/{id}/cancel; DELETE /api/runs/{id}; DELETE /api/plans/{hash}; DELETE /api/seeds/{seed}. POST /api/jobs acepta {run: <opciones de POST /api/runs>, count, gap_s, scheduled_at: <epoch UTC opcional>}. El token y la política de hosts actuales se conservan. No se requiere otro servicio ni dependencias nuevas; compatible con Python 3.8.

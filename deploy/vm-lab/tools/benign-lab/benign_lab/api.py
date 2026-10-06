@@ -7,6 +7,8 @@ import json
 import os
 import re
 import secrets
+import shutil
+import uuid
 import time
 import zipfile
 from contextlib import asynccontextmanager
@@ -27,6 +29,7 @@ from .vm_resources import VmResourceMonitor
 from .detection_audit import DetectionAuditMonitor
 from .detection_evaluation import evaluate as evaluate_detection, calibration as replay_calibration
 from .threshold_control import ThresholdControl
+from .experiment_jobs import ExperimentJobs
 from .experimental_analytics import ExperimentalAnalytics, csv_data as analytics_csv
 
 
@@ -49,6 +52,13 @@ class RunRequest(BaseModel):
     execution_profile: Optional[Literal['classic','coordinated','persistent']] = None
     speed: float = Field(default=20,ge=.1,le=100)
     attack_windows: List[AttackWindow] = Field(default_factory=list,max_length=100)
+
+class JobRequest(BaseModel):
+    run: RunRequest
+    count: int = Field(default=1, ge=1, le=100)
+    gap_s: float = Field(default=0, ge=0, le=86400, allow_inf_nan=False)
+    scheduled_at: Optional[float] = Field(default=None, allow_inf_nan=False)
+
 
 class Annotation(BaseModel):
     name: str = Field(default='external_attack',min_length=1,max_length=80)
@@ -155,7 +165,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         capture_interfaces(rid);capture_hosts(rid);capture_guests(rid);capture_audit(rid)
     async def capture_run(rid):
         async with capture_lock(rid):
-            await background(lambda:capture_sync(rid))
+            if rid in manager.runs: await background(lambda:capture_sync(rid))
     async def history_response(rid,filename,after,metadata):
         async with capture_lock(rid):
             def work():
@@ -173,6 +183,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             for rid,r in list(manager.runs.items()):
                 if r['status'] in TERMINAL and rid in finalized: continue
                 await capture_run(rid)
+                if rid not in manager.runs: continue
                 if r['status'] in TERMINAL:
                     if r.get('finished_at'): finalized.add(rid)
                     continue
@@ -195,9 +206,11 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         guests.start()
         audit.start()
         task=asyncio.create_task(monitor())
+        jobs.launch()
         yield
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError): await task
+        await jobs.shutdown()
         await manager.shutdown()
         await interfaces.stop()
         await hosts.stop()
@@ -257,8 +270,15 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         if not path.exists(): raise HTTPException(404,'Plan not found')
         return path
     plan_cache={}
+    def readable_plan_path(ph):
+        try: path=path_for(ph)
+        except HTTPException as exc:
+            if exc.status_code != 404: raise
+            path=next((manager.folder(rid)/'benign_plan.json' for rid,r in manager.runs.items() if r['plan_hash']==ph and (manager.folder(rid)/'benign_plan.json').exists()), None)
+            if path is None: raise
+        return path
     def read_plan(ph):
-        path=path_for(ph)
+        path=readable_plan_path(ph)
         stat=path.stat()
         signature=(stat.st_mtime_ns,stat.st_size)
         cached=plan_cache.get(ph)
@@ -302,7 +322,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @app.get('/api/plans/{ph}')
     def get_plan(ph:str): return read_plan(ph)
     @app.get('/api/plans/{ph}/download')
-    def download_plan(ph:str): return FileResponse(path_for(ph),filename='benign_plan.json',media_type='application/json')
+    def download_plan(ph:str): return FileResponse(readable_plan_path(ph),filename='benign_plan.json',media_type='application/json')
     @app.post('/api/plans/{ph}/preflight')
     def preflight(ph:str):
         groups=resolve(load_lab(lab_path),read_plan(ph))
@@ -315,9 +335,71 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         return result
     @app.post('/api/runs')
     async def start_run(body:RunRequest):
-        p=read_plan(body.plan_hash)
         async with control_change_lock():
-            return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows],body.pipeline,body.execution_profile)
+            if jobs.active(): raise ValueError('Ya hay una prueba activa; utilice una serie para esperar su finalización')
+            return await launch_request(body.model_dump())
+    async def launch_request(raw):
+        body=RunRequest(**raw)
+        p=read_plan(body.plan_hash)
+        return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows],body.pipeline,body.execution_profile)
+    jobs=ExperimentJobs(data,manager,control_change_lock,launch_request,path_for)
+    app.state.experiment_jobs=jobs
+    @app.get('/api/jobs')
+    async def list_jobs(): return list(reversed(list(jobs.jobs.values())))
+    @app.post('/api/jobs')
+    async def create_job(body:JobRequest):
+        if body.run.scenario!='B0' or body.run.attack_windows:
+            raise HTTPException(400,'Las series automáticas admiten B0; los ataques externos requieren ejecución y anotación manual')
+        if body.run.mode not in ('lab','simulation') or body.run.pipeline not in ('baseline','enabled'):
+            raise HTTPException(400,'Modo o pipeline inválido')
+        p=read_plan(body.run.plan_hash)
+        if p.get('purpose')=='domain_benchmark' and body.run.mode=='lab' and body.run.pipeline!='baseline':
+            raise HTTPException(400,'Benchmark de laboratorio requiere pipeline baseline')
+        async with control_change_lock():
+            return jobs.create(body.run.model_dump(),body.count,body.gap_s,body.scheduled_at)
+    @app.post('/api/jobs/{jid}/cancel')
+    async def cancel_job(jid:str):
+        async with control_change_lock(): return jobs.cancel(jid)
+    def trash(source,kind):
+        target=data/'trash'/kind/(str(int(time.time()))+'-'+uuid.uuid4().hex+'-'+source.name)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        source.rename(target)
+        return dict(deleted=True,recoverable=True,trash_id=target.name)
+    @app.delete('/api/plans/{ph}')
+    async def delete_plan(ph:str):
+        async with control_change_lock():
+            if jobs.references(ph) or any(r['plan_hash']==ph and r['status'] not in TERMINAL for r in manager.runs.values()):
+                raise HTTPException(409,'Plan utilizado por una prueba activa o una serie pendiente')
+            result=trash(path_for(ph),'plans')
+            plan_cache.pop(ph,None)
+            return result
+    @app.delete('/api/seeds/{seed}')
+    async def delete_seed(seed:int):
+        async with control_change_lock():
+            files=[f for f in plans.glob('*.json') if json.loads(f.read_text())['seed']==seed]
+            if not files: raise HTTPException(404,'Semilla no encontrada')
+            hashes=[f.stem for f in files]
+            if any(jobs.references(ph) for ph in hashes) or any(r['plan_hash'] in hashes and r['status'] not in TERMINAL for r in manager.runs.values()):
+                raise HTTPException(409,'Semilla utilizada por una prueba activa o serie pendiente')
+            result=[trash(f,'plans') for f in files]
+            for ph in hashes: plan_cache.pop(ph,None)
+            return dict(deleted=len(result),recoverable=True)
+    @app.delete('/api/runs/{rid}')
+    async def delete_run(rid:str):
+        async with control_change_lock():
+            if jobs.active(): raise HTTPException(409,'Espere que termine la prueba activa antes de borrar evidencia')
+            async with capture_lock(rid):
+                with analytics.lock:
+                    folder=analytics.folders().get(rid)
+                    if folder is None: raise HTTPException(404,'Prueba no encontrada')
+                    r=manager.runs.get(rid) or json.loads((folder/'run.json').read_text())
+                    if r['status'] not in TERMINAL: raise HTTPException(409,'La prueba todavía está activa')
+                    if rid in manager.tasks and not manager.tasks[rid].done(): raise HTTPException(409,'La prueba todavía está cerrando sus agentes')
+                    result=trash(folder,'runs')
+                    for name in ('runs','tasks','stops','processes','supervisors','events','logs','origins','plan_cache','terminal_metrics'):
+                        getattr(manager,name,{}).pop(rid,None)
+                    analytics.cache.pop(rid,None);analytics.detail_cache.pop(rid,None)
+                    return result
     @app.get('/api/runs/{rid}')
     async def get_run(rid:str):
         run_for(rid)
