@@ -667,6 +667,8 @@ traffic_monitor:
     fixed: false
     preferred_interface: ens192
   - name: ue
+    probe_path: /run/benign-lab/interface_probe.py
+    bootstrap_probe: true
     domain: mobile
     host: 10.10.0.8
     user: labadmin
@@ -681,6 +683,8 @@ traffic_monitor:
     fixed: false
     preferred_interface: ens192
   - name: ue2
+    probe_path: /run/benign-lab/interface_probe.py
+    bootstrap_probe: true
     domain: mobile
     host: 10.10.0.16
     user: labadmin
@@ -911,3 +915,6 @@ vm_resource_monitor:
 execution:
   default_profile: persistent
   metrics_interval_s: 2
+
+detection_audit:
+  enabled: true

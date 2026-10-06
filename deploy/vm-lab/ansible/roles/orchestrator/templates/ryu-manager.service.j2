@@ -33,6 +33,7 @@ Environment=PYTHONPATH=/opt/Tesis_Controller
 # to Mininet-mode peering logic under systemd until this was found.
 Environment=PEERING_DISTRIBUTED_MODE=true
 Environment=BNG_DISTRIBUTED_MODE=true
+Environment=LAB_AUDIT_ENABLED=true
 # "multidomain" detection (cross-domain correlation ON) is this unit's
 # own fixed default -- analysis/run_vm_lab_trials.py's --detection-mode
 # flips it per campaign via `systemctl set-environment` + restart (see

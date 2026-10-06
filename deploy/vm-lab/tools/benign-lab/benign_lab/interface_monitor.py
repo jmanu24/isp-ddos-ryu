@@ -1,5 +1,6 @@
 """Persistent SSH collectors and a bounded SQLite history of real counters."""
 import asyncio
+import base64
 import json
 import os
 import shlex
@@ -54,6 +55,11 @@ class InterfaceMonitor:
         args=[node.get('python','python3'),'-u',path,'--interval',str(self.cfg.get('interval_s',5)),'--namespaces',','.join(node.get('namespaces',[]))]
         if node.get('adapter')=='local':return [sys.executable,'-u',str(Path(__file__).with_name('interface_probe.py'))]+args[3:]
         command=('sudo -n ' if node.get('sudo') else '')+' '.join(shlex.quote(a) for a in args)
+        if node.get('bootstrap_probe'):
+            if not path.startswith('/run/benign-lab/'):raise ValueError('RAM probe must use the laboratory run directory')
+            files={name:base64.b64encode(Path(__file__).with_name(name).read_bytes()).decode() for name in ('interface_probe.py','resource_probe.py')}
+            bootstrap="from pathlib import Path;import base64;p=Path('/run/benign-lab');p.mkdir(exist_ok=True);"+";".join("(p/"+repr(name)+").write_bytes(base64.b64decode("+repr(data)+"))" for name,data in files.items())
+            command=('sudo -n ' if node.get('sudo') else '')+'python3 -c '+shlex.quote(bootstrap)+' && '+command
         ssh=['ssh','-T','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=2','-o','UserKnownHostsFile='+node['known_hosts_file']]
         if node.get('identity_file'):
             ssh+=['-i',node['identity_file'],'-o','BatchMode=yes']

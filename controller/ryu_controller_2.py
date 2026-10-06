@@ -1,3 +1,4 @@
+import time
 import logging
 from config.baseline import baseline_active
 from collections import defaultdict
@@ -55,6 +56,8 @@ from web import metrics
 from web.api import set_orchestrator
 
 import config.settings as settings
+from dataclasses import asdict
+from core.experiment_audit import emit as audit_emit, thresholds as audit_thresholds
 from core.log_format import log_line
 
 # Display verb for the MITIGATION log line, by domain -- the mobile
@@ -428,6 +431,11 @@ class FlowStatsIDS(app_manager.RyuApp):
         metrics.set_active_blocks_by_domain({**{d: 0 for d in domains_to_zero}, **block_counts})
         self._known_active_block_domains = set(block_counts.keys())
 
+        audit_observed={}
+        for event in all_events:
+            if 0 <= time.time()-event.timestamp <= max(10,2*settings.COLLECT_INTERVAL):
+                audit_observed.setdefault(event.domain,set()).add(event.src_ip)
+        audit_sources={domain:sorted(sources) for domain,sources in audit_observed.items()}
         # Stage 2 — correlate across domains
         self.correlator.ingest(all_events)
         correlated = self.correlator.correlate()
@@ -435,6 +443,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         # Keep telemetry and forwarding while isolated capacity probes run.
         if settings.LAB_CALIBRATION_MODE or baseline_active(self.orchestrator):
             self.orchestrator.validate(correlated, [])
+            audit_emit(self.logger,'cycle',pipeline_active=False,observed_sources=audit_sources,thresholds=audit_thresholds(settings),active_blocks=block_counts)
             return
 
         # Release blocks whose flow volume has died down — driven by the
@@ -553,6 +562,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         # is the descriptive "what's happening" signal; raw traffic
         # numbers live in Grafana via /metrics instead.
         for d in detections:
+            audit_emit(self.logger,'detection',detection=asdict(d),thresholds=audit_thresholds(settings))
 
             for msg in _detection_log_lines(d):
                 dashboard_state.add_event(msg)
@@ -573,7 +583,10 @@ class FlowStatsIDS(app_manager.RyuApp):
         # gets validated.
         self.orchestrator.validate(correlated, detections)
 
+        audit_emit(self.logger,'cycle',pipeline_active=True,observed_sources=audit_sources,thresholds=audit_thresholds(settings),active_blocks=block_counts)
         unblock_actions = openflow_unblock_actions + mobile_unblock_actions
+        for action in unblock_actions:
+            audit_emit(self.logger,'mitigation_release',action=asdict(action))
 
         # Stages 4 + 5 — decide and orchestrate. A cycle can have no new
         # detections (the attack that triggered a block already stopped)

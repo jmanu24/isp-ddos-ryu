@@ -16,12 +16,19 @@ FIELDS=('rx_bytes','tx_bytes','rx_packets','tx_packets','rx_dropped','tx_dropped
 
 
 def read_interfaces(root=Path('/sys/class/net')):
-    result=[]
+    result=[];addresses={};addresses_known=False
+    if root==Path('/sys/class/net'):
+        try:
+            rows=json.loads(subprocess.check_output(['ip','-j','-4','address'],timeout=2))
+            addresses={r['ifname']:[a['local'] for a in r.get('addr_info',[]) if a.get('family')=='inet'] for r in rows};addresses_known=True
+        except (OSError,ValueError,subprocess.TimeoutExpired):pass
     for iface in sorted(root.iterdir()):
         if iface.name=='lo' or iface.name.startswith(('veth','docker','virbr')):continue
         try:
             values={field:int((iface/'statistics'/field).read_text()) for field in FIELDS}
-            result.append(dict(interface=iface.name,operstate=(iface/'operstate').read_text().strip(),**values))
+            row=dict(interface=iface.name,operstate=(iface/'operstate').read_text().strip(),**values)
+            if root==Path('/sys/class/net'):row.update(ipv4_addresses=addresses.get(iface.name,[]),ipv4_known=addresses_known,mac=(iface/'address').read_text().strip())
+            result.append(row)
         except (OSError,ValueError):continue
     return result
 
@@ -63,6 +70,9 @@ def main():
             row.update(rates(before[1] if before else None,row,now-before[0] if before else 0))
             previous[key]=(now,dict(row))
         present={(r['namespace'],r['interface']) for r in items}
+        for key,before in previous.items():
+            if key not in present and key[0] not in errors:
+                items.append(dict(before[1],namespace=key[0],interface=key[1],operstate='missing',ipv4_addresses=[],ipv4_known=True,rx_mbps=None,tx_mbps=None))
         previous={k:v for k,v in previous.items() if k in present}
         resources=None
         try:

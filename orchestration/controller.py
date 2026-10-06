@@ -1,3 +1,5 @@
+from dataclasses import asdict
+from core.experiment_audit import emit as audit_emit
 import logging
 import time
 from collections import defaultdict
@@ -264,6 +266,10 @@ class OrchestrationController:
 
             decision: Decision = self._decision_engine.evaluate(det_dicts)
 
+            audit_emit(self._logger,'decision',accepted=decision is not None,
+                threshold=self._decision_engine.global_threshold,
+                weights=self._decision_engine.weights,
+                candidates=[dict(detection=asdict(d),effective_score=d.score*d.confidence*self._decision_engine.weights.get(d.attack_type,1.0)) for d in group])
             if decision is None:
                 continue
 
@@ -272,7 +278,9 @@ class OrchestrationController:
             newly_enforced: List[MitigationAction] = []
 
             for action in actions:
+                audit_emit(self._logger,'mitigation_attempt',action=asdict(action))
                 if self._dispatch(action):
+                    audit_emit(self._logger,'mitigation_issued',action=asdict(action),confirmation='backend_dispatch_returned_true')
                     # Only newly-enforced actions are reported back — an
                     # already-active block re-dispatching every cycle
                     # (because the attack is still ongoing) is a no-op at

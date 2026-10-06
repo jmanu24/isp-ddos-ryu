@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import contextlib
+import copy
 import io
 import json
 import os
@@ -23,6 +24,9 @@ from .runner import Manager, TERMINAL, csv_text
 from .interface_monitor import InterfaceMonitor
 from .host_monitor import HostMonitor
 from .vm_resources import VmResourceMonitor
+from .detection_audit import DetectionAuditMonitor
+from .detection_evaluation import evaluate as evaluate_detection, calibration as replay_calibration
+from .threshold_control import ThresholdControl
 
 
 class PlanRequest(BaseModel):
@@ -100,6 +104,42 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
                 for row in rows:f.write(json.dumps(row)+'\n')
             interface_cursors[rid]=rows[-1]['id']
         return rows
+    audit=DetectionAuditMonitor(data,load_lab(lab_path))
+    audit_cursors={}
+    def capture_audit(rid):
+        r=manager.runs[rid]
+        if r['mode']!='lab':return
+        path=manager.folder(rid)/'detection_events.jsonl'
+        if rid not in audit_cursors:
+            audit_cursors[rid]=max((json.loads(line)['id'] for line in path.read_text().splitlines()),default=0) if path.exists() else 0
+        rows=audit.rows(r.get('started_at') or r['created_at'],r.get('finished_at') or time.time(),audit_cursors[rid])
+        if rows:
+            with path.open('a') as f:
+                for row in rows:f.write(json.dumps(row)+'\n')
+            audit_cursors[rid]=rows[-1]['id']
+        (manager.folder(rid)/'audit_capture_status.json').write_text(json.dumps(audit.status))
+    def evaluation_dataset(rid):
+        r=copy.deepcopy(manager.runs[rid]);r['elapsed_s']=manager.elapsed(rid);folder=manager.folder(rid)
+        def read_lines(name):
+            path=folder/name
+            return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+        r['_lab']=json.loads((folder/'lab_snapshot.json').read_text()) if (folder/'lab_snapshot.json').exists() else {}
+        return (read_plan(r['plan_hash']),r,read_lines('detection_events.jsonl'),read_lines('interface_metrics.jsonl'),[dict(e) for e in manager.events.get(rid,{}).values()])
+    def evaluation_for(rid):
+        try:value=evaluate_detection(*evaluation_dataset(rid))
+        except (FileNotFoundError,KeyError):value=dict(schema=1,available=False,domains=[],windows=[],ip_changes=[],impact=[],threshold_snapshots=[],decision_weights=None,limitations=['Historical export lacks complete plan or evidence; no FP/TN inferred'])
+        value['capture_status']=dict(audit.status)
+        folder=manager.folder(rid)
+        atomic_payload=json.dumps(value,indent=2);tmp=folder/'detection_evaluation.tmp';tmp.write_text(atomic_payload);tmp.replace(folder/'detection_evaluation.json')
+        (folder/'detection_windows.csv').write_text(csv_text(value['windows']))
+        (folder/'threshold_snapshot.json').write_text(json.dumps(dict(policies=value['threshold_snapshots'],weights=value['decision_weights']),indent=2))
+        (folder/'fixed_ip_changes.json').write_text(json.dumps(value['ip_changes'],indent=2))
+        return value
+    control_lock=None
+    def control_change_lock():
+        nonlocal control_lock
+        if control_lock is None:control_lock=asyncio.Lock()
+        return control_lock
     capture_locks={}
     async def background(fn):
         future=asyncio.get_running_loop().run_in_executor(None,fn)
@@ -110,7 +150,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     def capture_lock(rid):
         return capture_locks.setdefault(rid,asyncio.Lock())
     def capture_sync(rid):
-        capture_interfaces(rid);capture_hosts(rid);capture_guests(rid)
+        capture_interfaces(rid);capture_hosts(rid);capture_guests(rid);capture_audit(rid)
     async def capture_run(rid):
         async with capture_lock(rid):
             await background(lambda:capture_sync(rid))
@@ -151,6 +191,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         interfaces.start()
         hosts.start()
         guests.start()
+        audit.start()
         task=asyncio.create_task(monitor())
         yield
         task.cancel()
@@ -159,11 +200,13 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         await interfaces.stop()
         await hosts.stop()
         await guests.stop()
+        await audit.stop()
     app=FastAPI(title='DDOS PUCP LAB',version='1.0.0',lifespan=lifespan)
     app.state.manager=manager
     app.state.interface_monitor=interfaces
     app.state.host_monitor=hosts
     app.state.vm_resources=guests
+    app.state.detection_audit=audit
     @app.get('/api/vm-resources')
     async def vm_resources(minutes:int=5,after:int=0):
         return await asyncio.get_running_loop().run_in_executor(None,lambda: JSONResponse(guests.response(max(1,min(minutes,360)),max(0,after))))
@@ -263,11 +306,16 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         groups=resolve(load_lab(lab_path),read_plan(ph))
         return dict(ok=True,scope='configuration_only; connectivity checked on lab start',groups=[dict(sources=sorted(g['sources']),events=len(g['events']),command=g['argv'],context=g['context']) for g in groups.values()])
     @app.get('/api/runs')
-    async def list_runs(): return [manager.snapshot(rid) for rid in reversed(manager.runs)]
+    async def list_runs():
+        result=[]
+        for rid in reversed(manager.runs):
+            value=manager.snapshot(rid);path=manager.folder(rid)/'detection_events.jsonl';value['audit_available']=path.exists() and path.stat().st_size>0;result.append(value)
+        return result
     @app.post('/api/runs')
     async def start_run(body:RunRequest):
         p=read_plan(body.plan_hash)
-        return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows],body.pipeline,body.execution_profile)
+        async with control_change_lock():
+            return await manager.start(p,path_for(body.plan_hash),load_lab(lab_path),body.mode,body.scenario,body.speed,[w.model_dump() for w in body.attack_windows],body.pipeline,body.execution_profile)
     @app.get('/api/runs/{rid}')
     async def get_run(rid:str):
         run_for(rid)
@@ -306,6 +354,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     async def export(rid:str):
         benchmark_export=run_for(rid).get('purpose')=='domain_benchmark'
         def build_zip():
+            evaluation_for(rid)
             buffer=io.BytesIO()
             with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
                 for f in manager.folder(rid).iterdir():
@@ -321,6 +370,45 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             await background(lambda:capture_sync(rid))
             content=await manager.persist_async(rid,after=build_zip)
         return Response(content,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{rid}.zip"'})
+    @app.get('/api/detection-audit/status')
+    async def audit_status():return dict(audit.status)
+    @app.get('/api/runs/{rid}/detection-evaluation')
+    async def detection_evaluation(rid:str):
+        run_for(rid)
+        async with capture_lock(rid):
+            return await background(lambda:(capture_sync(rid),evaluation_for(rid))[1])
+    @app.get('/api/calibration/thresholds')
+    async def threshold_values():
+        try:return await ThresholdControl(load_lab(lab_path)).read()
+        except (RuntimeError,ValueError,KeyError) as exc:raise HTTPException(503,'Threshold configuration unavailable: '+str(exc)) from exc
+    @app.post('/api/calibration/thresholds')
+    async def update_thresholds(request:Request):
+        body=await request.json()
+        if not isinstance(body,dict) or not isinstance(body.get('values'),dict) or not isinstance(body.get('expected_hash'),str):raise HTTPException(400,'Invalid threshold update')
+        async with control_change_lock():
+            if any(r['status'] not in TERMINAL for r in manager.runs.values()):raise HTTPException(409,'Wait until all experiments finish')
+            try:return await ThresholdControl(load_lab(lab_path)).apply(body['values'],body['expected_hash'])
+            except (ValueError,RuntimeError) as exc:raise HTTPException(400,str(exc)) from exc
+    @app.get('/api/calibration/download')
+    async def calibration_download():
+        path=data/'calibration_last.json'
+        if not path.exists():raise HTTPException(404,'No calibration result')
+        return FileResponse(path,filename='threshold_calibration.json',media_type='application/json')
+    @app.post('/api/calibration/replay')
+    async def replay_thresholds(request:Request):
+        body=await request.json()
+        if not isinstance(body,dict):raise HTTPException(400,'Invalid replay selection')
+        train=body.get('training_ids',[]);valid=body.get('validation_ids',[]);thresholds=body.get('thresholds',[])
+        if not isinstance(train,list) or not isinstance(valid,list) or not isinstance(thresholds,list) or len(train)+len(valid)>40 or not 1<=len(thresholds)<=30:raise HTTPException(400,'Invalid replay selection')
+        if any(not isinstance(rid,str) for rid in train+valid) or len(set(train))!=len(train) or len(set(valid))!=len(valid) or any(isinstance(t,bool) or not isinstance(t,(int,float)) for t in thresholds):raise HTTPException(400,'Invalid replay values')
+        datasets={}
+        for rid in train+valid:
+            run_for(rid)
+            async with capture_lock(rid):datasets[rid]=await background(lambda rid=rid:(capture_sync(rid),evaluation_dataset(rid))[1])
+        try:
+            result=await background(lambda:replay_calibration(datasets,train,valid,thresholds))
+            result['generated_at']=time.time();(data/'calibration_last.json').write_text(json.dumps(result,indent=2));return result
+        except (ValueError,TypeError) as exc:raise HTTPException(400,str(exc)) from exc
     app.mount('/static',StaticFiles(directory=ROOT/'benign_lab/static'),name='static')
     @app.get('/')
     def index(): return FileResponse(ROOT/'benign_lab/static/index.html')
