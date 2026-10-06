@@ -192,6 +192,21 @@ class Manager:
         except Exception as exc:
             r.update(status='failed',error=f'Could not initialize artifacts: {exc}',finished_at=time.time())
             raise ValueError(r['error']) from exc
+        # Public experimental provenance only; never serialize workstation credentials.
+        context=dict(schema=1,captured_at=time.time(),control_python=__import__('platform').python_version(),expected_worker_code_hashes={},probe_storage={n['name']:('ram' if n.get('bootstrap_probe') else 'persistent') for n in cfg.get('traffic_monitor',{}).get('nodes',[])})
+        for name in ('agent.py','supervisor.py','runner.py','transport.py','interface_probe.py','resource_probe.py'):
+            try:context['expected_worker_code_hashes'][name]=__import__('hashlib').sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            except OSError:context['expected_worker_code_hashes'][name]=None
+        context['worker_code_attestation']='expected control copies; remote installation not individually attested'
+        for host in cfg.get('host_monitor',{}).get('hosts',[]):
+            if host.get('adapter')=='workstation':
+                try:
+                    workstation=json.loads(Path(host['config_file']).read_text())
+                    context['transport']={k:workstation.get(k) for k in ('transport','relay_endpoint','relay_network')}
+                    context['workstation_guests']=sorted(workstation.get('vms',{}))
+                except (OSError,ValueError,KeyError):context['transport']=None
+        r['experiment_context']=context
+        await self.persist_async(rid)
         self.tasks[rid]=asyncio.create_task(self.execute(rid,plan,cfg,groups))
         return self.snapshot(rid)
 

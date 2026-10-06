@@ -27,6 +27,7 @@ from .vm_resources import VmResourceMonitor
 from .detection_audit import DetectionAuditMonitor
 from .detection_evaluation import evaluate as evaluate_detection, calibration as replay_calibration
 from .threshold_control import ThresholdControl
+from .experimental_analytics import ExperimentalAnalytics, csv_data as analytics_csv
 
 
 class PlanRequest(BaseModel):
@@ -62,6 +63,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     plans=data/'plans'
     plans.mkdir(parents=True,exist_ok=True)
     manager=Manager(data/'runs')
+    analytics=ExperimentalAnalytics(data,manager)
     interfaces=InterfaceMonitor(data/'traffic',load_lab(lab_path))
     hosts=HostMonitor(data/'resources',load_lab(lab_path))
     guests=VmResourceMonitor(data/'vm_resources',load_lab(lab_path))
@@ -409,6 +411,47 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             result=await background(lambda:replay_calibration(datasets,train,valid,thresholds))
             result['generated_at']=time.time();(data/'calibration_last.json').write_text(json.dumps(result,indent=2));return result
         except (ValueError,TypeError) as exc:raise HTTPException(400,str(exc)) from exc
+    def analytics_idle():
+        if any(r['status'] not in TERMINAL for r in manager.runs.values()):raise HTTPException(409,'El análisis detallado estará disponible cuando finalice la prueba activa; se protege la adquisición experimental.')
+    @app.get('/api/analytics/catalog')
+    async def analytics_catalog():return await background(analytics.catalog)
+    @app.get('/api/analytics/runs/{rid}')
+    async def analytics_detail(rid:str,domain:str='all'):
+        analytics_idle()
+        try:return await background(lambda:analytics.detail(rid,domain))
+        except ValueError as exc:raise HTTPException(400,str(exc)) from exc
+    @app.post('/api/analytics/report')
+    async def analytics_report(request:Request):
+        analytics_idle()
+        body=await request.json()
+        if not isinstance(body,dict) or not isinstance(body.get('run_ids'),list):raise HTTPException(400,'Select executions')
+        if not isinstance(body.get('precision',1),(int,float)) or isinstance(body.get('precision',1),bool) or not 0<body.get('precision',1)<=1000000:raise HTTPException(400,'Invalid precision')
+        try:return await background(lambda:analytics.report(body['run_ids'],body.get('domain','all'),body.get('metric','delivery_pct'),body.get('precision',1)))
+        except ValueError as exc:raise HTTPException(400,str(exc)) from exc
+    @app.post('/api/analytics/export')
+    async def analytics_export(request:Request):
+        analytics_idle()
+        body=await request.json()
+        if not isinstance(body,dict) or not isinstance(body.get('run_ids'),list):raise HTTPException(400,'Select executions')
+        if not isinstance(body.get('precision',1),(int,float)) or isinstance(body.get('precision',1),bool) or not 0<body.get('precision',1)<=1000000:raise HTTPException(400,'Invalid precision')
+        try:report=await background(lambda:analytics.report(body['run_ids'],body.get('domain','all'),body.get('metric','delivery_pct'),body.get('precision',1)))
+        except ValueError as exc:raise HTTPException(400,str(exc)) from exc
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('experimental_report.json',json.dumps(report,indent=2))
+            archive.writestr('execution_comparison.csv',analytics_csv(report))
+            summaries=[]
+            for group in report['groups']:
+                stats=group['statistics'];ci=stats['ci95'];summaries.append(dict(group_id=group['group_id'],domain=report['domain'],metric=report['metric'],n_runs=stats['n_runs'],n_seeds=stats['n_seeds'],seed_balanced_mean=stats['seed_balanced']['mean'],sd_between_seeds=stats['seed_balanced']['sd'],ci95_low=ci['low'] if ci else None,ci95_high=ci['high'] if ci else None,ci_unavailable_reason=stats['ci_unavailable_reason']))
+            archive.writestr('cohort_statistics.csv',csv_text(summaries))
+            archive.writestr('METHOD.md',(ROOT/'docs/EXPERIMENTAL_ANALYTICS.md').read_text())
+        return Response(buffer.getvalue(),media_type='application/zip',headers={'Content-Disposition':'attachment; filename="experimental_analytics.zip"'})
+    @app.post('/api/analytics/import')
+    async def analytics_import(request:Request):
+        analytics_idle()
+        raw=await request.body()
+        try:return await background(lambda:analytics.import_archive(raw))
+        except (ValueError,KeyError,TypeError,RuntimeError,zipfile.BadZipFile) as exc:raise HTTPException(400,str(exc)) from exc
     app.mount('/static',StaticFiles(directory=ROOT/'benign_lab/static'),name='static')
     @app.get('/')
     def index(): return FileResponse(ROOT/'benign_lab/static/index.html')
