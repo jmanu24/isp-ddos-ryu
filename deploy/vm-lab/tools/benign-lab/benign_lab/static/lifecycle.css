@@ -1,0 +1,35 @@
+/* Lifecycle view: consistent navigation, compact forms and aligned history. */
+aside{overflow-y:auto}
+nav .nav{min-width:0;white-space:normal;line-height:1.4;flex-shrink:0}
+nav .nav span{min-width:0;overflow-wrap:anywhere}
+#view-lifecycle{padding-top:26px}
+#view-lifecycle .page-heading{margin-top:0;margin-bottom:24px}
+#view-lifecycle>.panel>p{font-size:14px;max-width:100ch;margin-top:12px}
+#view-lifecycle .form-grid{display:grid;grid-template-columns:minmax(140px,1fr) minmax(180px,1fr) minmax(260px,1.35fr);gap:20px;margin:24px 0 4px;max-width:1050px}
+#view-lifecycle .form-grid label{margin:0}
+#view-lifecycle .button-row{justify-content:flex-start;gap:10px;margin:18px 0}
+#view-lifecycle .button-row button{flex:0 1 auto;min-width:160px}
+#job-options{background:#f4f7fb;border:1px solid var(--line);border-radius:8px;padding:12px 15px;font-size:13px!important;max-width:none!important}
+#job-list{margin-top:20px}
+#job-list>.panel{box-shadow:none;background:#f8fafc;margin-bottom:12px;padding:16px;font-size:13px;overflow-wrap:anywhere}
+#job-list>p{padding:20px;border:1px dashed #d9e1ec;border-radius:8px;text-align:center;font-size:14px}
+#delete-runs{margin-top:22px;max-height:600px;overflow:auto;padding-right:6px}
+.lifecycle-run{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:20px;padding:16px 0;border-bottom:1px solid var(--line)}
+.lifecycle-run:first-child{padding-top:0}
+.lifecycle-run:last-child{border-bottom:0}
+.lifecycle-run-info{min-width:0}
+.lifecycle-run-info strong{display:block;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;font-weight:600;overflow-wrap:anywhere;color:#28384f}
+.lifecycle-run-info small{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:7px}
+.lifecycle-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+#view-lifecycle .lifecycle-actions button{font-size:13px;padding:9px 12px}
+#delete-plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:16px;margin-top:22px}
+#delete-plans>.panel{margin:0;background:#f8fafc;box-shadow:none;padding:18px;font-size:13px;min-width:0}
+.lifecycle-seed-head{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.lifecycle-seed-head strong{color:#28384f}
+.lifecycle-plan{display:flex;justify-content:space-between;align-items:center;gap:16px;border-top:1px solid var(--line);padding-top:12px;margin-top:12px;font-size:12px}
+.lifecycle-plan-info{min-width:0;overflow-wrap:anywhere}
+.lifecycle-plan-info code{font-size:12px;color:#354a64;display:block}
+.lifecycle-plan-info small{display:block;margin-top:4px;color:var(--muted)}
+.lifecycle-plan button{font-size:12px;flex-shrink:0}
+@media(max-width:1100px){aside{overflow:visible}nav{flex:1;min-width:0;flex-wrap:wrap;justify-content:flex-start}nav .nav{max-width:100%;align-items:center}#view-lifecycle .form-grid{grid-template-columns:1fr 1fr}#view-lifecycle .form-grid label:last-child{grid-column:1/-1}}
+@media(max-width:700px){nav{display:grid;grid-template-columns:1fr 1fr;gap:4px}nav .nav{width:100%;font-size:18px;padding:10px;min-height:46px}nav .nav span{font-size:12px}#view-lifecycle{padding-top:20px}#view-lifecycle .form-grid{grid-template-columns:1fr;gap:14px}#view-lifecycle .form-grid label:last-child{grid-column:auto}#view-lifecycle .button-row{display:grid;grid-template-columns:1fr}#view-lifecycle .button-row button{width:100%;min-width:0}.lifecycle-run{grid-template-columns:1fr;gap:12px}.lifecycle-actions{justify-content:flex-start}.lifecycle-actions button{flex:1}.lifecycle-plan{flex-wrap:wrap}.lifecycle-seed-head{align-items:flex-start}#delete-runs{max-height:520px}}
