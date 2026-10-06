@@ -33,3 +33,10 @@ nav .nav span{min-width:0;overflow-wrap:anywhere}
 .lifecycle-plan button{font-size:12px;flex-shrink:0}
 @media(max-width:1100px){aside{overflow:visible}nav{flex:1;min-width:0;flex-wrap:wrap;justify-content:flex-start}nav .nav{max-width:100%;align-items:center}#view-lifecycle .form-grid{grid-template-columns:1fr 1fr}#view-lifecycle .form-grid label:last-child{grid-column:1/-1}}
 @media(max-width:700px){nav{display:grid;grid-template-columns:1fr 1fr;gap:4px}nav .nav{width:100%;font-size:18px;padding:10px;min-height:46px}nav .nav span{font-size:12px}#view-lifecycle{padding-top:20px}#view-lifecycle .form-grid{grid-template-columns:1fr;gap:14px}#view-lifecycle .form-grid label:last-child{grid-column:auto}#view-lifecycle .button-row{display:grid;grid-template-columns:1fr}#view-lifecycle .button-row button{width:100%;min-width:0}.lifecycle-run{grid-template-columns:1fr;gap:12px}.lifecycle-actions{justify-content:flex-start}.lifecycle-actions button{flex:1}.lifecycle-plan{flex-wrap:wrap}.lifecycle-seed-head{align-items:flex-start}#delete-runs{max-height:520px}}
+
+.batch-choice{display:flex;align-items:center;gap:10px;margin:0;min-width:0}
+.batch-choice input[type=checkbox]{width:17px;height:17px;min-height:0;margin:0;flex:0 0 17px;accent-color:#17865f;cursor:pointer}
+.batch-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:16px;font-size:14px}
+.batch-toolbar{border-color:#b9d8cc;background:#fafffc}
+#view-lifecycle .batch-toolbar .button-row button{min-width:0;font-size:13px}
+#batch-result{overflow-wrap:anywhere}

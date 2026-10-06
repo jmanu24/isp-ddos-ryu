@@ -60,6 +60,13 @@ class JobRequest(BaseModel):
     scheduled_at: Optional[float] = Field(default=None, allow_inf_nan=False)
 
 
+class BatchDeleteRequest(BaseModel):
+    run_ids: List[str] = Field(default_factory=list,max_length=1000)
+    plan_hashes: List[str] = Field(default_factory=list,max_length=1000)
+    seeds: List[int] = Field(default_factory=list,max_length=1000)
+    dry_run: bool = True
+
+
 class Annotation(BaseModel):
     name: str = Field(default='external_attack',min_length=1,max_length=80)
     action: str
@@ -400,6 +407,35 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
                         getattr(manager,name,{}).pop(rid,None)
                     analytics.cache.pop(rid,None);analytics.detail_cache.pop(rid,None)
                     return result
+    @app.post('/api/lifecycle/batch-delete')
+    async def batch_delete(body:BatchDeleteRequest):
+        hashes=set(body.plan_hashes)
+        for f in plans.glob('*.json'):
+            if json.loads(f.read_text())['seed'] in body.seeds: hashes.add(f.stem)
+        if len(hashes)>2000: raise HTTPException(400,'Máximo 2000 planes por lote')
+        targets=[('run',rid) for rid in dict.fromkeys(body.run_ids)]+[('plan',ph) for ph in sorted(hashes)]
+        if not targets: raise HTTPException(400,'Seleccione al menos una prueba o plan')
+        result=[]
+        for kind,identifier in targets:
+            row=dict(kind=kind,id=identifier)
+            try:
+                if body.dry_run:
+                    if kind=='run':
+                        folder=analytics.folders().get(identifier)
+                        if folder is None: raise HTTPException(404,'Prueba no encontrada')
+                        r=manager.runs.get(identifier) or json.loads((folder/'run.json').read_text())
+                        if jobs.active() or r['status'] not in TERMINAL: raise HTTPException(409,'Hay una prueba activa; espere a su finalización')
+                    else:
+                        path_for(identifier)
+                        if jobs.references(identifier) or any(r['plan_hash']==identifier and r['status'] not in TERMINAL for r in manager.runs.values()):
+                            raise HTTPException(409,'Plan utilizado por una prueba activa o serie pendiente')
+                    row['status']='ready'
+                else:
+                    value=await (delete_run(identifier) if kind=='run' else delete_plan(identifier))
+                    row.update(status='deleted',trash_id=value['trash_id'])
+            except HTTPException as exc:row.update(status='blocked' if exc.status_code==409 else 'error',detail=exc.detail)
+            result.append(row)
+        return dict(dry_run=body.dry_run,items=result,counts={key:sum(r['status']==key for r in result) for key in ('ready','deleted','blocked','error')},recoverable=True)
     @app.get('/api/runs/{rid}')
     async def get_run(rid:str):
         run_for(rid)
