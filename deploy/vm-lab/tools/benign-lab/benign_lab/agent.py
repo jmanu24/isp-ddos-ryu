@@ -141,6 +141,25 @@ async def receiver(host, tcp, udp, http, reuse_port=False):
             await s.wait_closed()
 
 
+def payload_budget(e, metrics, deadline):
+    now=time.monotonic()
+    available=max(0,deadline-now)
+    packet=max(1,int(e['packet_size_bytes']))
+    if e.get('direction')=='dl':packet=min(1400,max(28,packet))
+    required=((max(0,e['planned_bytes']-1)//packet)*packet)*8/max(e['rate_bps'],1)
+    metrics['nominal_payload_s']=e['planned_bytes']*8/max(e['rate_bps'],1)
+    metrics.update(payload_start_monotonic=now,available_payload_s=available,
+                   required_payload_s=required,setup_consumed_s=max(0,now-metrics.get('event_start_monotonic',now)),
+                   budget_shortfall_s=max(0,required-available),budget_policy='strict_plan_window_v2')
+
+
+def payload_outcome(e, metrics):
+    if e['wire_protocol'] not in ('tcp','http','udp'):
+        return 'not_applicable'
+    actual=metrics.get('bytes_tx',0)+metrics.get('bytes_rx',0)
+    return 'full_local' if actual>=e['planned_bytes'] else 'partial' if actual else 'zero'
+
+
 async def traffic(e, target, metrics, deadline, context=None, pool=None):
     context=context or {}
     source=context.get('source_ip')
@@ -150,13 +169,19 @@ async def traffic(e, target, metrics, deadline, context=None, pool=None):
     size, rate, packet = e['planned_bytes'], e['rate_bps'], e['packet_size_bytes']
     proto, direction = e['wire_protocol'], e['direction']
     def add(kind, n):
+        now=time.monotonic()
+        metrics.setdefault('first_payload_monotonic',now)
+        metrics['last_payload_monotonic']=now
         metrics[f'bytes_{kind}'] += n
         metrics[f'chunks_{kind}'] += 1
     if pool is not None and proto in ('tcp','http'):
         return await pooled_traffic(e,target,metrics,deadline,context,pool)
     if proto in ('tcp','http'):
         port = target['http_port' if proto == 'http' else 'tcp_port']
+        metrics['connect_start_monotonic']=time.monotonic()
         reader, writer = await asyncio.wait_for(asyncio.open_connection(target['host'], port,local_addr=(source,0) if source else None), 3)
+        metrics['connect_end_monotonic']=time.monotonic()
+        metrics['connect_s']=metrics['connect_end_monotonic']-metrics['connect_start_monotonic']
         metrics['source_ip'],metrics['src_port'] = writer.get_extra_info('sockname')[:2]
         metrics['dst_port'] = port
         metrics['connections_opened']=1
@@ -170,6 +195,8 @@ async def traffic(e, target, metrics, deadline, context=None, pool=None):
             else:
                 writer.write((json.dumps(dict(direction=direction, bytes=size, rate_bps=rate, duration_s=remaining, packet=packet))+'\n').encode())
             await writer.drain()
+            metrics['request_sent_monotonic']=time.monotonic()
+            payload_budget(e,metrics,deadline)
             if direction == 'ul':
                 await paced_send(writer, size, rate, packet, deadline, lambda n:add('tx',n))
             else:
@@ -183,6 +210,7 @@ async def traffic(e, target, metrics, deadline, context=None, pool=None):
                     data = await reader.read(min(65536,size-metrics['bytes_rx']))
                     if not data: break
                     add('rx',len(data))
+                if metrics['bytes_rx']>=size:metrics.update(receiver_bytes=size,receiver_confirmation='client_received')
                 if metrics['bytes_rx'] < size and time.monotonic() < deadline-.1:
                     raise ConnectionError('Receiver closed before completing payload')
         finally:
@@ -256,12 +284,17 @@ async def http_response(reader,expected,size):
 
 async def pooled_traffic(e,target,metrics,deadline,context,pool):
     key=pool.key(e,target,context.get('source_ip'))
+    metrics['connect_start_monotonic']=time.monotonic()
     reader,writer,reused=await pool.acquire(key)
+    metrics['connect_end_monotonic']=time.monotonic()
+    metrics['connect_s']=metrics['connect_end_monotonic']-metrics['connect_start_monotonic']
     metrics['source_ip'],metrics['src_port']=writer.get_extra_info('sockname')[:2]
     metrics['dst_port']=key[4];metrics['connections_opened']=0 if reused else 1;metrics['connection_reused']=reused
     size,rate,packet=e['planned_bytes'],e['rate_bps'],e['packet_size_bytes']
     http=e['wire_protocol']=='http';direction=e['direction'];reusable=False
-    def add(kind,n):metrics['bytes_'+kind]+=n;metrics['chunks_'+kind]+=1
+    def add(kind,n):
+        now=time.monotonic();metrics.setdefault('first_payload_monotonic',now);metrics['last_payload_monotonic']=now
+        metrics['bytes_'+kind]+=n;metrics['chunks_'+kind]+=1
     try:
         remaining=max(.001,deadline-time.monotonic())
         if http:
@@ -269,6 +302,8 @@ async def pooled_traffic(e,target,metrics,deadline,context,pool):
             writer.write(request.encode())
         else:writer.write((json.dumps(dict(direction=direction,bytes=size,rate_bps=rate,duration_s=remaining,packet=packet,keepalive=True))+'\n').encode())
         await writer.drain()
+        metrics['request_sent_monotonic']=time.monotonic()
+        payload_budget(e,metrics,deadline)
         keep=True
         if direction=='ul':
             sent=await paced_send(writer,size,rate,packet,deadline,lambda n:add('tx',n))
@@ -287,6 +322,8 @@ async def pooled_traffic(e,target,metrics,deadline,context,pool):
             ack=await reader.readline()
             if ack!=('BLACK %d\n' % size).encode():raise ConnectionError('Persistent transfer acknowledgement missing')
             metrics['receiver_bytes']=size
+        metrics['receiver_confirmation']='receiver_acknowledged' if direction=='ul' else 'client_received'
+        metrics['ack_monotonic']=time.monotonic()
         reusable=keep
     finally:
         if reusable:await pool.release(key,reader,writer)
@@ -418,11 +455,13 @@ async def worker():
             if pool:emit(dict(type='worker_stats',connections=pool.stats()))
     async def event(e):
         metrics = dict(bytes_tx=0,bytes_rx=0,chunks_tx=0,chunks_rx=0,icmp_replies=0,src_port=None,dst_port=None)
+        metrics.update(event_start_monotonic=time.monotonic(),receiver_confirmation='unverified')
         started = False
         status, error = 'completed', None
         try:
             await asyncio.sleep(max(0,origin+e['start_s']-loop.time()))
             started = True
+            metrics['event_start_monotonic']=time.monotonic()
             elapsed = loop.time()-origin
             active[e['event_id']] = metrics
             emit(dict(type='event',event_id=e['event_id'],status='running',actual_start_s=elapsed,start_timestamp=time.time(),lateness_s=elapsed-e['start_s']))
@@ -434,7 +473,7 @@ async def worker():
                     async with AsyncTimeout(deadline=end+.05):
                         await traffic(e,cfg['targets'][e['destination']],metrics,end,context,pool)
                 except TimeoutError:
-                    status = 'completed' if metrics['bytes_tx']+metrics['bytes_rx'] > 0 else 'failed'
+                    status = 'completed' if payload_outcome(e,metrics)=='full_local' else 'failed'
                     error = 'Deadline reached; compare actual and planned bytes'
         except asyncio.CancelledError:
             status, error = 'cancelled', 'Run stopped'
@@ -443,9 +482,15 @@ async def worker():
         finally:
             active.pop(e['event_id'], None)
             actual=metrics['bytes_tx']+metrics['bytes_rx']
-            metrics['shortfall_bytes']=max(0,e['planned_bytes']-actual) if started else 0
+            metrics['shortfall_bytes']=max(0,e['planned_bytes']-actual) if started and e['wire_protocol'] in ('tcp','http','udp') else 0
             if status=='completed' and metrics['shortfall_bytes']:
+                status='failed'
                 error=error or 'Scheduled payload shortfall: %s of %s bytes' % (actual,e['planned_bytes'])
+            metrics['payload_state']=payload_outcome(e,metrics)
+            for phase in ('connect_start','connect_end','request_sent','payload_start','first_payload','last_payload','ack'):
+                value=metrics.pop(phase+'_monotonic',None)
+                if value is not None:metrics[phase+'_s']=value-metrics['event_start_monotonic']
+            metrics.pop('event_start_monotonic',None)
             emit(dict(type='event',event_id=e['event_id'],status=status,actual_end_s=loop.time()-origin if started else None,
                       stop_timestamp=time.time(),error=error,**metrics))
     tasks = [asyncio.create_task(event(e)) for e in cfg['events']]

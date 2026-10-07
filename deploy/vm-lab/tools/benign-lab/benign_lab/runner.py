@@ -92,6 +92,11 @@ class Manager:
                 r['domains'][domain]=dict(counts=dict(Counter(e['status'] for e in es)),bytes_tx=sum(e.get('bytes_tx',0) for e in es),bytes_rx=sum(e.get('bytes_rx',0) for e in es),active_planned_mbps=sum(e['rate_bps'] for e in es if e['status']=='running')/1e6)
             if r['status'] in TERMINAL and r.get('finished_at'):
                 self.terminal_metrics[rid]={k:copy.deepcopy(r[k]) for k in ('counts','bytes_tx','bytes_rx','shortfall_bytes','active_planned_mbps','domains')}
+        if 'payload_quality' not in r:
+            eligible=[e for e in self.events[rid].values() if e.get('wire_protocol') in ('tcp','http','udp') and e['status'] not in ('pending','running')]
+            r['payload_quality']=dict(eligible=len(eligible),full_local=sum(e.get('bytes_tx',0)+e.get('bytes_rx',0)>=e['planned_bytes'] for e in eligible),partial=sum(0<e.get('bytes_tx',0)+e.get('bytes_rx',0)<e['planned_bytes'] for e in eligible),zero=sum(e.get('bytes_tx',0)+e.get('bytes_rx',0)==0 for e in eligible),receiver_confirmed=sum((e.get('receiver_bytes',0)>=e['planned_bytes'] or e.get('direction')=='dl' and e.get('bytes_rx',0)>=e['planned_bytes']) and e['planned_bytes']>0 for e in eligible) if r['mode']=='lab' else 0,interpretation='Observed local quota; UL requires receiver acknowledgement. Historical states are preserved.')
+            if r['status'] in TERMINAL and r.get('finished_at'):
+                self.terminal_metrics[rid]['payload_quality']=copy.deepcopy(r['payload_quality'])
         if r.get('purpose')=='domain_benchmark':
             actual=r['bytes_tx']+r['bytes_rx'];planned=r['benchmark_planned_bytes']
             r['benchmark_metrics']=dict(domain=r['benchmark_domain'],planned_bytes=planned,actual_bytes=actual,observed_pct=100*actual/planned,planned_mean_mbps=planned*8/r['duration_s']/1e6,observed_mean_mbps=actual*8/max(r['elapsed_s'],.001)/1e6,failed_events=r['counts'].get('failed',0),final=r['status'] in TERMINAL)
@@ -407,7 +412,7 @@ class Manager:
                         if msg['type'] not in ('event','metrics'):continue
                         e=self.events[rid].get(msg['event_id'])
                         if e is None: raise ValueError('Agent returned unknown event')
-                        for key in ('status','bytes_tx','bytes_rx','chunks_tx','chunks_rx','icmp_replies','src_port','dst_port','actual_start_s','actual_end_s','start_timestamp','stop_timestamp','lateness_s','error','source_ip','source_interface','shortfall_bytes','receiver_bytes','connections_opened','connection_reused'):
+                        for key in ('status','bytes_tx','bytes_rx','chunks_tx','chunks_rx','icmp_replies','src_port','dst_port','actual_start_s','actual_end_s','start_timestamp','stop_timestamp','lateness_s','error','source_ip','source_interface','shortfall_bytes','receiver_bytes','connections_opened','connection_reused','payload_state','receiver_confirmation','connect_s','connect_start_s','connect_end_s','request_sent_s','payload_start_s','first_payload_s','last_payload_s','ack_s','setup_consumed_s','available_payload_s','required_payload_s','nominal_payload_s','budget_shortfall_s','budget_policy'):
                             if key in msg: e[key]=msg[key]
                         if msg['type']=='event':
                             with (self.folder(rid)/'events.jsonl').open('a') as f: f.write(json.dumps(msg)+'\n')
