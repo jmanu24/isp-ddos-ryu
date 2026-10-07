@@ -77,7 +77,7 @@ def _build_nodes() -> List[Node]:
         role = vm["role"]
         domain = ROLE_TO_DOMAIN.get(role, "shared")
         ifaces = [{"network": i["network"], "ip": i.get("ip")} for i in vm.get("interfaces", [])]
-        mgmt_ip = next((i["ip"] for i in ifaces if i["network"] == "MGMT" and i.get("ip")), None)
+        mgmt_ip = vm.get("management_ip") or next((i["ip"] for i in ifaces if i["network"] == "MGMT" and i.get("ip")), None)
         nodes.append(Node(name=vm["name"], role=role, domain=domain, ip=mgmt_ip, interfaces=ifaces, placement=vm.get("placement", {"hypervisor": "esxi", "host": "192.168.18.135"})))
     return nodes, networks
 

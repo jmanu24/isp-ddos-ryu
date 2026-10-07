@@ -26,7 +26,7 @@ except Exception:backend=False
 scripts=Path(__file__).resolve().parent
 if not backend:subprocess.Popen([c['python'],str(scripts/'workstation_bridge.py'),'--config',str(path)],creationflags=flags)
 if not policy['tunnel_up']:subprocess.Popen([c['python'],str(scripts/'workstation_tunnel.py'),'--config',str(path)],creationflags=flags)
-order=['victim','pe']+['ent-site-'+str(i) for i in range(1,6)]+['bng','suscriptor']
+order=['victim','pe']+['ent-site-'+str(i) for i in range(1,6)]+['bng','suscriptor','br','peer-router']
 for n in order:
  if n in policy['permitted'] and Path(c['vms'][n]).exists():start(c['vms'][n])
 print('Gateway, administration channel and permitted VMs started')

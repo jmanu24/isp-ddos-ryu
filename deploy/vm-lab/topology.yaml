@@ -200,6 +200,7 @@ vms:
       - {network: BB_ACCESS, ip: null}
 
   - name: br
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: ethernet_direct}
     role: br
     template: ubuntu
     vcpu: 2
@@ -215,6 +216,8 @@ vms:
       - {network: BACKBONE_PEERING, ip: "10.93.0.2"}
 
   - name: peer-router
+    placement: {hypervisor: workstation, host: "192.168.18.45", transport: ethernet_direct}
+    management_ip: 10.30.0.2
     role: peer_router
     # ubuntu, not alpine -- confirmed on a real run: hping3 (a hard
     # dependency of webtool/enterprise_ops.py's real attack-generation
