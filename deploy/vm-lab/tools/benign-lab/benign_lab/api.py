@@ -30,7 +30,6 @@ from .detection_audit import DetectionAuditMonitor
 from .detection_evaluation import evaluate as evaluate_detection, calibration as replay_calibration
 from .threshold_control import ThresholdControl
 from .experiment_jobs import ExperimentJobs
-from .burst_variants import duration_variant
 from .experimental_analytics import ExperimentalAnalytics, csv_data as analytics_csv
 
 
@@ -405,6 +404,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         return result
     @app.post('/api/burst-pilot/prepare')
     async def prepare_bursts():
+        raise HTTPException(409,"Piloto retirado: use BENIGN_V1 original con persistent")
         async with control_change_lock():
             if jobs.active():raise ValueError('Wait for active test before preparing variants')
             return await asyncio.get_running_loop().run_in_executor(None,prepare_burst_pilot)
@@ -415,6 +415,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         return json.loads(p.read_text())
     @app.post('/api/burst-pilot/start')
     async def start_bursts():
+        raise HTTPException(409,"Piloto retirado: use BENIGN_V1 original con persistent")
         async with control_change_lock():
             if any(j['status'] not in ('completed','failed','cancelled','attention') for j in jobs.jobs.values()):raise ValueError('Finish or cancel existing series before starting pilot')
             if not (data/'burst_pilot.json').exists():raise ValueError('Prepare burst variants first')

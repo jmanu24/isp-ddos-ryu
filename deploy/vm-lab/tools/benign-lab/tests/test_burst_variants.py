@@ -21,17 +21,13 @@ def test_duration_variants_preserve_quotas_protocols_and_parent():
   for domain,value in q['summary'].items():assert value['peak_load']<=q['profiles']['common']['domains'][domain]['benign_peak_load']+.000001
  assert canonical(p)==before
 
-def test_pilot_api_preserves_original_files_and_builds_balanced_order(tmp_path):
- source=Path('/home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/data/plans');hashes=['2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245','18aa3c08e732aa6ac773f09538ccabe6df629ee3effb8d02b0d191f2538dbd1c','aace0dfc7bc48ca29417b543acc1b6e3c8c40c3ba34644f834b8f11179a8b948'];plans=tmp_path/'plans';plans.mkdir();original={}
- for h in hashes:
-  data=(source/(h+'.json')).read_bytes();(plans/(h+'.json')).write_bytes(data);original[h]=data
- cfg=yaml.safe_load((ROOT/'config/lab.demo.yaml').read_text());cfg['capacity_mbps']=json.loads(original[hashes[0]])['capacity_mbps'];path=tmp_path/'lab.yaml';path.write_text(yaml.safe_dump(cfg));app=create_app(tmp_path,path);app.state.experiment_jobs.launch=lambda:None
+def test_retired_pilot_cannot_create_variants_or_jobs(tmp_path):
+ cfg=yaml.safe_load((ROOT/'config/lab.demo.yaml').read_text());path=tmp_path/'lab.yaml';path.write_text(yaml.safe_dump(cfg));app=create_app(tmp_path,path)
+ plans=tmp_path/'plans';original=plans/'retained.json';original.write_text('{"retained": true}')
+ before=original.read_bytes()
  with TestClient(app) as c:
-  assert c.post('/api/burst-pilot/start',json={}).status_code==400
-  response=c.post('/api/burst-pilot/prepare',json={});assert response.status_code==200,response.text;pilot=response.json();assert len(pilot['steps'])==9
-  assert [(x['seed'],x['minimum_s']) for x in pilot['labels']]==[(1,0),(1,1),(1,2),(2,1),(2,2),(2,0),(3,2),(3,0),(3,1)]
-  assert all(x['execution_profile']=='persistent' and x['pipeline']=='baseline' for x in pilot['steps'])
-  job=c.post('/api/burst-pilot/start',json={});assert job.status_code==200 and job.json()['kind']=='burst_duration_pilot'
-  assert c.post('/api/burst-pilot/start',json={}).status_code==400
-  c.post('/api/jobs/'+job.json()['id']+'/cancel',json={})
- for h,data in original.items():assert (plans/(h+'.json')).read_bytes()==data
+  for endpoint in ('prepare','start'):
+   response=c.post('/api/burst-pilot/'+endpoint,json={})
+   assert response.status_code==409 and 'BENIGN_V1' in response.json()['detail']
+  assert c.get('/api/jobs').json()==[]
+ assert original.read_bytes()==before and len(list(plans.glob('*.json')))==1
