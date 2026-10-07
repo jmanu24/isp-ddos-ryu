@@ -33,7 +33,7 @@ class ExperimentJobs:
     def references(self, ph):
         return any(any(r['plan_hash']==ph for r in j.get('steps',[j['request']])) and j['status'] not in JOB_TERMINAL for j in self.jobs.values())
 
-    def create(self, request, count=1, gap_s=0, scheduled_at=None, steps=None):
+    def create(self, request, count=1, gap_s=0, scheduled_at=None, steps=None, kind='profile_comparison', labels=None):
         when = time.time() if scheduled_at is None else float(scheduled_at)
         if not math.isfinite(when) or (scheduled_at is not None and when < time.time()-5):
             raise ValueError('Seleccione una fecha futura válida')
@@ -44,7 +44,7 @@ class ExperimentJobs:
                    plan_file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                    run_ids=[], status='pending', cancel_requested=False)
         if steps:
-            job.update(kind='profile_comparison',steps=steps,step_plan_sha256=[hashlib.sha256(self.plan_path(r['plan_hash']).read_bytes()).hexdigest() for r in steps])
+            job.update(kind=kind,steps=steps,step_labels=labels or [],step_plan_sha256=[hashlib.sha256(self.plan_path(r['plan_hash']).read_bytes()).hexdigest() for r in steps])
         self.jobs[jid] = job
         self.save()
         return dict(job)
@@ -86,6 +86,8 @@ class ExperimentJobs:
                 self.manager.runs[rid]['repetition_index'] = len(job['run_ids'])
                 if job.get('kind')=='profile_comparison':
                     self.manager.runs[rid]['comparison_block']=(len(job['run_ids'])-1)//6+1
+                if job.get('kind')=='burst_duration_pilot':
+                    self.manager.runs[rid].update(series_kind=job['kind'],burst_condition=job['step_labels'][len(job['run_ids'])-1])
                 await self.manager.persist_async(rid)
                 self.save()
             except Exception as exc:

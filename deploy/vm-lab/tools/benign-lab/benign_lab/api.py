@@ -30,6 +30,7 @@ from .detection_audit import DetectionAuditMonitor
 from .detection_evaluation import evaluate as evaluate_detection, calibration as replay_calibration
 from .threshold_control import ThresholdControl
 from .experiment_jobs import ExperimentJobs
+from .burst_variants import duration_variant
 from .experimental_analytics import ExperimentalAnalytics, csv_data as analytics_csv
 
 
@@ -305,7 +306,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
         rows=[]
         for f in plans.glob('*.json'):
             p=json.loads(f.read_text())
-            rows.append({**{k:p[k] for k in ('plan_hash','seed','duration_s','summary','warnings','capacity_mbps')},'purpose':p.get('purpose'),'benchmark_domain':p.get('benchmark_domain')})
+            rows.append({**{k:p[k] for k in ('plan_hash','seed','duration_s','summary','warnings','capacity_mbps')},'purpose':p.get('purpose'),'benchmark_domain':p.get('benchmark_domain'),'profile':p.get('profile'),'variant_parameters':p.get('variant_parameters'),'parent_plan_hash':p.get('parent_plan_hash')})
         return rows[::-1]
     @app.post('/api/plans')
     def make_plan(body:PlanRequest):
@@ -387,6 +388,44 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @app.post('/api/comparison-plan/start')
     async def start_comparison():
         async with control_change_lock(): return jobs.create_comparison(comparison_steps())
+    def prepare_burst_pilot():
+        bases={1:'2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245',2:'18aa3c08e732aa6ac773f09538ccabe6df629ee3effb8d02b0d191f2538dbd1c',3:'aace0dfc7bc48ca29417b543acc1b6e3c8c40c3ba34644f834b8f11179a8b948'}
+        hashes={};parents=[]
+        for seed,ph in bases.items():
+            parent=read_plan(ph)
+            if parent['capacity_mbps']!=load_lab(lab_path)['capacity_mbps']:raise ValueError('Restore original capacities before preparing pilot')
+            hashes[(seed,0)]=ph
+            parents.append(dict(seed=seed,plan_hash=ph,file_sha256=__import__('hashlib').sha256(path_for(ph).read_bytes()).hexdigest()))
+            for floor in (1,2):
+                variant=duration_variant(parent,floor);target=plans/(variant['plan_hash']+'.json');pending=target.with_suffix('.pending');save_plan(variant,pending);pending.replace(target);hashes[(seed,floor)]=variant['plan_hash']
+        order=[(1,0),(1,1),(1,2),(2,1),(2,2),(2,0),(3,2),(3,0),(3,1)]
+        steps=[dict(plan_hash=hashes[(seed,floor)],mode='lab',scenario='B0',pipeline='baseline',speed=1,execution_profile='persistent',attack_windows=[]) for seed,floor in order]
+        result=dict(parents=parents,steps=steps,labels=[dict(seed=seed,minimum_s=floor) for seed,floor in order],gap_s=60,duration_s=600)
+        pending=data/'burst_pilot.tmp';pending.write_text(json.dumps(result,indent=2));pending.replace(data/'burst_pilot.json')
+        return result
+    @app.post('/api/burst-pilot/prepare')
+    async def prepare_bursts():
+        async with control_change_lock():
+            if jobs.active():raise ValueError('Wait for active test before preparing variants')
+            return await asyncio.get_running_loop().run_in_executor(None,prepare_burst_pilot)
+    @app.get('/api/burst-pilot')
+    async def burst_preview():
+        p=data/'burst_pilot.json'
+        if not p.exists():raise ValueError('Prepare burst variants first')
+        return json.loads(p.read_text())
+    @app.post('/api/burst-pilot/start')
+    async def start_bursts():
+        async with control_change_lock():
+            if any(j['status'] not in ('completed','failed','cancelled','attention') for j in jobs.jobs.values()):raise ValueError('Finish or cancel existing series before starting pilot')
+            if not (data/'burst_pilot.json').exists():raise ValueError('Prepare burst variants first')
+            p=json.loads((data/'burst_pilot.json').read_text())
+            for parent in p['parents']:
+                if __import__('hashlib').sha256(path_for(parent['plan_hash']).read_bytes()).hexdigest()!=parent['file_sha256']:raise ValueError('Original plan changed')
+            for request in p['steps']:
+                plan=read_plan(request['plan_hash'])
+                if plan['capacity_mbps']!=load_lab(lab_path)['capacity_mbps']:raise ValueError('Capacities changed; pilot cannot start')
+            job=jobs.create(p['steps'][0],len(p['steps']),60,steps=p['steps'],kind='burst_duration_pilot',labels=p['labels'])
+            return job
     @app.post('/api/jobs/{jid}/cancel')
     async def cancel_job(jid:str):
         async with control_change_lock(): return jobs.cancel(jid)

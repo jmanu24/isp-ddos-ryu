@@ -341,8 +341,12 @@ def generate_benchmark(profiles, seed, duration_s, capacities, domain):
 def validate(plan):
     if plan.get('schema_version') != 1 or plan.get('plan_hash') != plan_hash(plan):
         raise ValueError('Plan schema or SHA-256 invalid')
-    if plan.get('profile') != 'BENIGN_V1' or plan.get('window_s') != 5:
+    if plan.get('profile') not in ('BENIGN_V1','BENIGN_BURST_MIN_V1') or plan.get('window_s') != 5:
         raise ValueError('Unsupported profile or window')
+    if plan.get('profile')=='BENIGN_BURST_MIN_V1':
+        params=plan.get('variant_parameters',{})
+        if params.get('minimum_s') not in (1,2) or params!=plan['profiles'].get('burst_variant') or not isinstance(plan.get('parent_plan_hash'),str) or len(plan['parent_plan_hash'])!=64:
+            raise ValueError('Invalid burst variant provenance or parameters')
     if plan.get('purpose')=='domain_benchmark':
         domain=plan.get('benchmark_domain')
         if domain not in DOMAINS or not plan['events'] or any(e['domain']!=domain for e in plan['events']):
