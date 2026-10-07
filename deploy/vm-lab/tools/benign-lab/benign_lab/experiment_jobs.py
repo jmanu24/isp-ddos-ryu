@@ -31,9 +31,9 @@ class ExperimentJobs:
         return any(r['status'] not in TERMINAL for r in self.manager.runs.values()) or any(not t.done() for t in self.manager.tasks.values()) or any(not t.done() for t in self.manager.tasks.values()) or any(not t.done() for t in self.manager.tasks.values())
 
     def references(self, ph):
-        return any(j['request']['plan_hash'] == ph and j['status'] not in JOB_TERMINAL for j in self.jobs.values())
+        return any(any(r['plan_hash']==ph for r in j.get('steps',[j['request']])) and j['status'] not in JOB_TERMINAL for j in self.jobs.values())
 
-    def create(self, request, count=1, gap_s=0, scheduled_at=None):
+    def create(self, request, count=1, gap_s=0, scheduled_at=None, steps=None):
         when = time.time() if scheduled_at is None else float(scheduled_at)
         if not math.isfinite(when) or (scheduled_at is not None and when < time.time()-5):
             raise ValueError('Seleccione una fecha futura válida')
@@ -43,9 +43,16 @@ class ExperimentJobs:
                    count=count, gap_s=gap_s, request=request,
                    plan_file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                    run_ids=[], status='pending', cancel_requested=False)
+        if steps:
+            job.update(kind='profile_comparison',steps=steps,step_plan_sha256=[hashlib.sha256(self.plan_path(r['plan_hash']).read_bytes()).hexdigest() for r in steps])
         self.jobs[jid] = job
         self.save()
         return dict(job)
+
+    def create_comparison(self, steps):
+        if any(j.get('kind')=='profile_comparison' and j['status'] not in JOB_TERMINAL for j in self.jobs.values()):
+            raise ValueError('Ya existe una comparación pendiente o activa')
+        return self.create(steps[0],len(steps),60,steps=steps)
 
     def cancel(self, jid):
         if jid not in self.jobs: raise ValueError('Serie no encontrada')
@@ -63,18 +70,22 @@ class ExperimentJobs:
             if not ready: return
             job = ready[0]
             try:
-                path = self.plan_path(job['request']['plan_hash'])
-                if hashlib.sha256(path.read_bytes()).hexdigest() != job['plan_file_sha256']:
+                request=job.get('steps',[job['request']])[len(job['run_ids'])] if job.get('steps') else job['request']
+                expected=job['step_plan_sha256'][len(job['run_ids'])] if job.get('steps') else job['plan_file_sha256']
+                path = self.plan_path(request['plan_hash'])
+                if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
                     raise ValueError('Los bytes del plan cambiaron; serie detenida')
                 # Persist before any side effect. A crash in this window requires human review.
                 job['status'] = 'starting'
                 self.save()
-                result = await self.start(job['request'])
+                result = await self.start(request)
                 rid = result['id']
                 job['run_ids'].append(rid)
                 job['status'] = 'running'
                 self.manager.runs[rid]['series_id'] = job['id']
                 self.manager.runs[rid]['repetition_index'] = len(job['run_ids'])
+                if job.get('kind')=='profile_comparison':
+                    self.manager.runs[rid]['comparison_block']=(len(job['run_ids'])-1)//6+1
                 await self.manager.persist_async(rid)
                 self.save()
             except Exception as exc:

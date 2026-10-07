@@ -11,13 +11,18 @@
   return {plan_hash:plan.plan_hash,mode,scenario:'B0',pipeline:benchmark&&mode==='lab'?'baseline':$('pipeline').value,execution_profile:$('execution-profile').value,speed:mode==='lab'?1:Number($('speed').value),attack_windows:[]};
  }
  function summary(){try{const r=request();$('job-options').textContent=`Plan ${r.plan_hash.slice(0,12)} · semilla ${plan.seed} · ${plan.duration_s} s · ${r.mode} · pipeline ${r.pipeline} · ${r.execution_profile}. Repetir la misma semilla mide repetibilidad; no agrega semillas independientes.`;}catch(e){$('job-options').textContent=e.message;}}
+ function comparisonProgress(j){
+  if(!j.steps)return '';
+  const seeds={'2c3580be4272':1,'18aa3c08e732':2,'aace0dfc7bc4':3};
+  return `<details><summary>Ver orden y progreso de los 18 pasos</summary><ol>${j.steps.map((r,i)=>`<li>Semilla ${seeds[r.plan_hash.slice(0,12)]||escape(r.plan_hash.slice(0,12))} · ${escape(r.execution_profile)} · ${j.run_ids[i]?escape(j.run_ids[i]):'pendiente'}</li>`).join('')}</ol></details>`;
+ }
  async function refresh(){
   summary();
   const [jobs,ps,rs]=await Promise.all([api('/jobs'),api('/plans'),api('/analytics/catalog')]);
   const allRuns=rs.items;
   available={run:allRuns.filter(r=>terminal(r.status)).map(r=>r.id),seed:[...new Set(ps.map(p=>String(p.seed)))],plan:ps.map(p=>p.plan_hash)};
   for(const kind of Object.keys(selected))for(const id of selected[kind])if(!available[kind].includes(id))selected[kind].delete(id);
-  $('job-list').innerHTML=jobs.length?jobs.map(j=>`<div class="panel"><strong>${escape(states[j.status]||j.status)}</strong> · ${new Date(j.scheduled_at*1000).toLocaleString('es-PE',{timeZone:'America/Lima'})} Lima · ${j.run_ids.length}/${j.count} iniciadas · semilla del plan ${escape(j.request.plan_hash.slice(0,12))}<p>${escape(j.request.mode)} · ${escape(j.request.pipeline)} · pausa ${j.gap_s} s</p><p>${j.run_ids.map(id=>`<button data-job-run="${escape(id)}" class="text-button">${escape(id)}</button>`).join(' ')}</p>${j.error?`<p>${escape(j.error)}</p>`:''}${!['completed','failed','cancelled','attention'].includes(j.status)?`<button data-cancel-job="${j.id}" class="secondary" ${j.cancel_requested?'disabled':''}>${j.cancel_requested?'Cancelación solicitada':'Cancelar serie después de la prueba actual'}</button>`:''}</div>`).join(''):'<p>No hay series programadas.</p>';
+  $('job-list').innerHTML=jobs.length?jobs.map(j=>`<div class="panel"><strong>${escape(states[j.status]||j.status)}</strong> · ${new Date(j.scheduled_at*1000).toLocaleString('es-PE',{timeZone:'America/Lima'})} Lima · ${j.kind==='profile_comparison'?'Comparación classic / persistent · ':''}${j.run_ids.length}/${j.count} iniciadas · plan inicial ${escape(j.request.plan_hash.slice(0,12))}<p>${escape(j.request.mode)} · ${escape(j.request.pipeline)} · pausa ${j.gap_s} s</p>${comparisonProgress(j)}<p>${j.run_ids.map(id=>`<button data-job-run="${escape(id)}" class="text-button">${escape(id)}</button>`).join(' ')}</p>${j.error?`<p>${escape(j.error)}</p>`:''}${!['completed','failed','cancelled','attention'].includes(j.status)?`<button data-cancel-job="${j.id}" class="secondary" ${j.cancel_requested?'disabled':''}>${j.cancel_requested?'Cancelación solicitada':'Cancelar serie después de la prueba actual'}</button>`:''}</div>`).join(''):'<p>No hay series programadas.</p>';
   $('job-list').querySelectorAll('[data-cancel-job]').forEach(b=>b.onclick=()=>api('/jobs/'+b.dataset.cancelJob+'/cancel',{}).then(refresh).catch(e=>notice(e.message,true)));
   $('job-list').querySelectorAll('[data-job-run]').forEach(b=>b.onclick=()=>{document.querySelector('[data-view="monitor"]').click();loadRuns().then(()=>selectRun(b.dataset.jobRun)).catch(e=>notice(e.message,true));});
   $('delete-runs').innerHTML=allRuns.map(r=>`<div class="lifecycle-run"><div class="lifecycle-run-info"><label class="batch-choice"><input type="checkbox" data-batch-kind="run" data-batch-id="${escape(r.id)}" aria-label="Seleccionar prueba ${escape(r.id)}" ${selected.run.has(r.id)?'checked':''} ${terminal(r.status)?'':'disabled'}><strong>${escape(r.id)}</strong></label><small>Semilla ${r.seed} <span class="badge ${['failed','completed_with_errors','interrupted'].includes(r.status)?'error':''}">${escape(labels[r.status]||r.status)}</span>${r.imported?' · Importada':''}</small></div><div class="lifecycle-actions">${r.imported?'':`<button class="secondary" data-repeat-run="${escape(r.id)}">Repetir prueba</button>`}<button class="danger" data-delete-run="${escape(r.id)}" ${terminal(r.status)?'':'disabled'}>Retirar prueba</button></div></div>`).join('')||'<p>No hay pruebas.</p>';
@@ -55,6 +60,16 @@
    $('batch-result').textContent=`Retirados: ${result.counts.deleted}. Conservados: ${blocked.length+result.counts.blocked+result.counts.error}. `+[...blocked,...result.items.filter(r=>r.status!=='deleted')].map(r=>`${r.id}: ${r.detail}`).join(' · ');
    notice('Borrado por lote terminado. Los archivos retirados están en la papelera.');
   }catch(e){notice(e.message,true);}finally{batchBusy=false;updateSelection();}
+ };
+ $('comparison-start').onclick=async()=>{
+  const b=$('comparison-start');b.disabled=true;
+  try{
+   const preview=await api('/comparison-plan');
+   if(preview.steps.length!==18)throw Error('Plan de comparación incompleto');
+   const job=await api('/comparison-plan/start',{});
+   $('comparison-state').textContent=`Comparación ${job.id.slice(0,8)} añadida a la cola. 18 pruebas; pausa 60 s. El progreso y la cancelación aparecen abajo.`;
+   await refresh();
+  }catch(e){notice(e.message,true);}finally{b.disabled=false;}
  };
  async function create(scheduled){
   const body={run:request(),count:Number($('job-count').value),gap_s:Number($('job-gap').value)};

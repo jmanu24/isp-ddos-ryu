@@ -364,6 +364,29 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             raise HTTPException(400,'Benchmark de laboratorio requiere pipeline baseline')
         async with control_change_lock():
             return jobs.create(body.run.model_dump(),body.count,body.gap_s,body.scheduled_at)
+    def comparison_steps():
+        hashes={1:'2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245',
+                2:'18aa3c08e732aa6ac773f09538ccabe6df629ee3effb8d02b0d191f2538dbd1c',
+                3:'aace0dfc7bc48ca29417b543acc1b6e3c8c40c3ba34644f834b8f11179a8b948'}
+        plans=[read_plan(hashes[i]) for i in (1,2,3)]
+        if any(p['seed']!=i or p['duration_s']!=600 or p.get('purpose')=='domain_benchmark' for i,p in zip((1,2,3),plans)):
+            raise ValueError('Los planes de referencia no cumplen semillas 1/2/3 y duración 600 s')
+        if any(p.get('capacity_mbps')!=plans[0].get('capacity_mbps') for p in plans):
+            raise ValueError('Las capacidades de los planes difieren')
+        if plans[0].get('capacity_mbps')!=load_lab(lab_path)['capacity_mbps']:
+            raise ValueError('Las capacidades actuales difieren de los planes de referencia; restaure su configuración antes de comparar')
+        order=[(1,'classic'),(1,'persistent'),(2,'classic'),(2,'persistent'),(3,'classic'),(3,'persistent'),
+               (2,'persistent'),(2,'classic'),(3,'persistent'),(3,'classic'),(1,'persistent'),(1,'classic'),
+               (3,'classic'),(3,'persistent'),(1,'classic'),(1,'persistent'),(2,'classic'),(2,'persistent')]
+        return [dict(plan_hash=hashes[seed],mode='lab',scenario='B0',pipeline='baseline',speed=1,
+                     execution_profile=profile,attack_windows=[]) for seed,profile in order]
+    @app.get('/api/comparison-plan')
+    async def preview_comparison():
+        steps=comparison_steps()
+        return dict(steps=[dict(index=i+1,seed=read_plan(r['plan_hash'])['seed'],**r) for i,r in enumerate(steps)],gap_s=60,duration_s=600)
+    @app.post('/api/comparison-plan/start')
+    async def start_comparison():
+        async with control_change_lock(): return jobs.create_comparison(comparison_steps())
     @app.post('/api/jobs/{jid}/cancel')
     async def cancel_job(jid:str):
         async with control_change_lock(): return jobs.cancel(jid)
