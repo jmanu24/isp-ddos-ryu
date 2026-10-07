@@ -94,7 +94,7 @@ class Manager:
                 self.terminal_metrics[rid]={k:copy.deepcopy(r[k]) for k in ('counts','bytes_tx','bytes_rx','shortfall_bytes','active_planned_mbps','domains')}
         if 'payload_quality' not in r:
             eligible=[e for e in self.events[rid].values() if e.get('wire_protocol') in ('tcp','http','udp') and e['status'] not in ('pending','running')]
-            r['payload_quality']=dict(eligible=len(eligible),full_local=sum(e.get('bytes_tx',0)+e.get('bytes_rx',0)>=e['planned_bytes'] for e in eligible),partial=sum(0<e.get('bytes_tx',0)+e.get('bytes_rx',0)<e['planned_bytes'] for e in eligible),zero=sum(e.get('bytes_tx',0)+e.get('bytes_rx',0)==0 for e in eligible),receiver_confirmed=sum((e.get('receiver_bytes',0)>=e['planned_bytes'] or e.get('direction')=='dl' and e.get('bytes_rx',0)>=e['planned_bytes']) and e['planned_bytes']>0 for e in eligible) if r['mode']=='lab' else 0,interpretation='Observed local quota; UL requires receiver acknowledgement. Historical states are preserved.')
+            r['payload_quality']=dict(eligible=len(eligible),full_local=sum(e.get('bytes_tx',0)+e.get('bytes_rx',0)>=e['planned_bytes'] for e in eligible),partial=sum(0<e.get('bytes_tx',0)+e.get('bytes_rx',0)<e['planned_bytes'] for e in eligible),zero=sum(e.get('bytes_tx',0)+e.get('bytes_rx',0)==0 for e in eligible),receiver_confirmed=sum((e.get('receiver_bytes',0)>=e['planned_bytes'] or e.get('direction')=='dl' and e.get('bytes_rx',0)>=e['planned_bytes']) and e['planned_bytes']>0 for e in eligible) if r.get('mode')=='lab' else 0,interpretation='Observed local quota; UL requires receiver acknowledgement. Historical states are preserved.')
             if r['status'] in TERMINAL and r.get('finished_at'):
                 self.terminal_metrics[rid]['payload_quality']=copy.deepcopy(r['payload_quality'])
         if r.get('purpose')=='domain_benchmark':
@@ -317,6 +317,11 @@ class Manager:
 
     async def real(self,rid,plan,cfg,groups):
         r=self.runs[rid]
+        for group in groups.values():
+            context=group['context']
+            if context.get('executor_name'):
+                for planned in group['events']:
+                    self.events[rid][planned['event_id']].update(executor_name=context['executor_name'],source_as=context.get('source_as'))
         options=cfg.get('execution_options',execution_options(cfg))
         sessions=[];channels={}
         if options['supervisor_per_vm']:

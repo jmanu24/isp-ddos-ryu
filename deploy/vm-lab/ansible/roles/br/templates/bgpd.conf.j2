@@ -15,7 +15,9 @@ hostname br
 router bgp {{ bgp_br_as }}
  bgp router-id 10.30.0.1
  no bgp ebgp-requires-policy
- neighbor 10.30.0.2 remote-as {{ bgp_peer_router_as }}
+{% for peer in bgp_external_peers | default([{ "address": "10.30.0.2", "asn": bgp_peer_router_as }]) %}
+ neighbor {{ peer.address }} remote-as {{ peer.asn }}
+{% endfor %}
  !
  address-family ipv4 unicast
   network 10.10.0.0/24

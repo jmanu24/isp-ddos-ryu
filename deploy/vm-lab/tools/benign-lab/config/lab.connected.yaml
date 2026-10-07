@@ -435,6 +435,42 @@ nodes:
     auth_mode: password_env
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
+  peer-router:
+    configured: true
+    adapter: ssh
+    host: 10.30.0.2
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/agent.py
+    source_ip: 10.30.0.2
+    interface: ens160
+    expected_gateway: 10.30.0.1
+    check_route: true
+    observed_route: true
+    auth_mode: password_env
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
+    source_as: 64512
+  peer-router-2:
+    configured: true
+    adapter: ssh
+    host: 10.30.0.4
+    user: labadmin
+    port: 22
+    identity_file: null
+    python: /usr/bin/python3
+    agent_path: /opt/benign-lab/agent.py
+    source_ip: 10.30.0.4
+    interface: ens160
+    expected_gateway: 10.30.0.1
+    check_route: true
+    observed_route: true
+    auth_mode: password_env
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/isp-ddos-ryu/.runtime/benign-lab/known_hosts
+    source_as: 64513
 targets:
   victim-web:
     host: 10.55.0.100
@@ -559,6 +595,17 @@ traffic_monitor:
   - name: peer-router
     domain: peering
     host: 10.30.0.2
+    user: labadmin
+    password_env: BENIGN_SSH_PASSWORD
+    known_hosts_file: /home/ubuntu/.ssh/known_hosts
+    python: python3
+    sudo: true
+    namespaces: []
+    fixed: false
+    preferred_interface: ens160
+  - name: peer-router-2
+    domain: peering
+    host: 10.30.0.4
     user: labadmin
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/.ssh/known_hosts
@@ -914,3 +961,7 @@ execution:
 
 detection_audit:
   enabled: true
+
+peering_pool:
+  strategy: logical_source_round_robin_v1
+  members: [peer-router, peer-router-2]

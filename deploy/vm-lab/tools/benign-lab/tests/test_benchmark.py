@@ -16,7 +16,7 @@ def test_benchmark_retains_exact_domain_events_and_reproducibility(domain):
  assert canonical(plan)==canonical(generate_benchmark(profiles,1,600,None,domain))
  cfg=load_lab(ROOT/'config/lab.connected.yaml');groups=resolve(cfg,plan)
  assert all(g['context']['domain']==domain for g in groups.values())
- assert len(groups)=={'mobile':5,'fixed':10,'enterprise':5,'peering':1}[domain]
+ assert len(groups)=={'mobile':5,'fixed':10,'enterprise':5,'peering':2}[domain]
 
 def test_benchmark_rejects_mixed_import_even_with_recomputed_hash():
  profiles=load_profiles(ROOT/'profiles');p=generate_benchmark(profiles,1,5,None,'mobile');full=generate(profiles,1,5)

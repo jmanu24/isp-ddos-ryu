@@ -71,8 +71,24 @@ def command(node, supervisor=False):
     return downstream
 
 
+def peering_assignments(cfg, plan):
+    pool=cfg.get('peering_pool')
+    if not pool:return {}
+    if pool.get('strategy')!='logical_source_round_robin_v1':
+        raise ValueError('Unsupported Peering assignment strategy')
+    members=pool.get('members',[])
+    if len(members)<2 or len(set(members))!=len(members):
+        raise ValueError('Peering pool requires distinct members')
+    nodes=[cfg['nodes'][name] for name in members]
+    if len({n.get('source_ip') for n in nodes})!=len(nodes):
+        raise ValueError('Peering members require distinct source IPs')
+    sources=sorted({e['source'] for e in plan['events'] if e['domain']=='peering'})
+    return {source:members[i%len(members)] for i,source in enumerate(sources)}
+
+
 def resolve(cfg, plan):
     groups = {}
+    assignments=peering_assignments(cfg,plan)
     if cfg.get('require_explicit_mapping'):
         issues = mapping_issues(cfg)
         if issues: raise ValueError('Incomplete laboratory mapping: ' + '; '.join(issues))
@@ -80,7 +96,7 @@ def resolve(cfg, plan):
             raise ValueError('Strict capacity policy: plan capacities differ from the laboratory reference')
     networks = [ipaddress.ip_network(x) for x in cfg.get('allowed_target_cidrs',['127.0.0.0/8','10.0.0.0/8'])]
     for event in plan['events']:
-        node = executor_for(cfg,event)
+        node = executor_for(cfg,event,assignments)
         argv = command(node)
         target = cfg['targets'].get(event['destination'])
         if target is None:
@@ -92,6 +108,8 @@ def resolve(cfg, plan):
         for key in ('tcp_port','udp_port','http_port'):
             if not 1 <= int(target[key]) <= 65535: raise ValueError(f'Invalid {key}')
         context = {k:node.get(k) for k in ('source_ip','interface','expected_gateway','check_route','session_id','access_mode','domain')}
+        if node.get('executor_name'):
+            context.update(source_as=node.get('source_as'),executor_name=node['executor_name'])
         key = hashlib.sha256(canonical([argv,context])).hexdigest()[:12]
         groups.setdefault(key,dict(argv=argv,node=node,context=context,events=[],sources=set()))
         groups[key]['events'].append(event)
@@ -116,9 +134,11 @@ def supervisor_groups(groups):
     return sessions
 
 
-def executor_for(cfg, event):
+def executor_for(cfg, event, assignments=None):
     """Domain contract: network provisioning belongs to the laboratory."""
-    node = dict(node_for(cfg, event['source']))
+    member=(assignments or {}).get(event['source']) if event['domain']=='peering' else None
+    node = dict(cfg['nodes'][member] if member else node_for(cfg, event['source']))
+    if member:node['executor_name']=member
     domain = event['domain']
     node['domain'] = domain
     strict = cfg.get('require_explicit_mapping', False)

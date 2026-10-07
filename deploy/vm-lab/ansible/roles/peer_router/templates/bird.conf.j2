@@ -1,5 +1,5 @@
 # Managed by Ansible (roles/peer_router) -- real eBGP with br.
-router id 10.30.0.2;
+router id {{ own_mgmt_addr | default("10.30.0.2") }};
 
 protocol device {}
 
