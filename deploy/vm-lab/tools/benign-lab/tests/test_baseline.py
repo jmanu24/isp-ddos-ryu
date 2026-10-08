@@ -4,13 +4,14 @@ from benign_lab.runner import Manager
 from benign_lab.config import ROOT,load_lab
 from benign_lab.planner import generate,load_profiles,save_plan
 
-@pytest.mark.parametrize('mode,scenario',[('simulation','B0'),('lab','B0+attack')])
+@pytest.mark.parametrize('mode,scenario',[('simulation','B0'),('simulation','B0+attack')])
 def test_baseline_rejects_wrong_scenarios(tmp_path,mode,scenario):
  p=generate(load_profiles(ROOT/'profiles'),1,5);f=save_plan(p,tmp_path/'p.json')
  with pytest.raises(ValueError,match='Baseline requires'):
   asyncio.run(Manager(tmp_path/'runs').start(p,f,load_lab(ROOT/'config/lab.demo.yaml'),mode=mode,scenario=scenario,speed=1,pipeline='baseline'))
 
-def test_baseline_restores_after_failed_preparation(tmp_path,monkeypatch):
+@pytest.mark.parametrize('scenario',['B0','B0+attack'])
+def test_baseline_restores_after_failed_preparation(tmp_path,monkeypatch,scenario):
  import benign_lab.runner as runner
  flags=[]
  class Guard:
@@ -21,7 +22,7 @@ def test_baseline_restores_after_failed_preparation(tmp_path,monkeypatch):
  async def run():
   p=generate(load_profiles(ROOT/'profiles'),1,5);f=save_plan(p,tmp_path/'p.json');cfg=load_lab(ROOT/'config/lab.demo.yaml');cfg['baseline_control']={}
   cfg['baseline_control']['configured']=True
-  m=Manager(tmp_path/'runs');r=await m.start(p,f,cfg,mode='lab',speed=1,pipeline='baseline');await m.tasks[r['id']]
+  m=Manager(tmp_path/'runs');r=await m.start(p,f,cfg,mode='lab',scenario=scenario,attack_windows=[dict(name='external_attack',start_s=1,end_s=2)] if scenario=='B0+attack' else [],speed=1,pipeline='baseline');await m.tasks[r['id']]
   assert m.runs[r['id']]['status']=='failed'
   assert m.runs[r['id']]['baseline_control']['restoration']['restored']
   assert (m.folder(r['id'])/'benign_plan.json').read_bytes()==f.read_bytes()

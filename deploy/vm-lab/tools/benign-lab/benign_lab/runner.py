@@ -151,8 +151,8 @@ class Manager:
         options=execution_options(cfg,execution_profile)
         cfg['execution_options']=options
         if pipeline not in ('enabled','baseline'): raise ValueError('Invalid pipeline option')
-        if pipeline=='baseline' and (mode!='lab' or scenario!='B0' or attack_windows):
-            raise ValueError('Baseline requires laboratory B0 without attacks')
+        if pipeline=='baseline' and mode!='lab':
+            raise ValueError('Baseline requires laboratory mode')
         if pipeline=='baseline' and not cfg.get('baseline_control'):
             raise ValueError('Baseline controller mapping is not configured')
         if any(r['status'] not in TERMINAL for r in self.runs.values()):
