@@ -956,12 +956,8 @@ vm_resource_monitor:
     govc_env: /home/ubuntu/isp-ddos-ryu/deploy/vm-lab/.govc.env
 
 execution:
-  default_profile: persistent
+  default_profile: classic
   metrics_interval_s: 2
 
 detection_audit:
   enabled: true
-
-peering_pool:
-  strategy: logical_source_round_robin_v1
-  members: [peer-router, peer-router-2]
