@@ -7,3 +7,5 @@ Se restaura classic como perfil por defecto y se retira peering_pool de la confi
 Se conservan las IP/sesiones dinámicas Fixed actuales y la clasificación estricta v2. La lógica de envío conserva la referencia histórica; restaurar estados completed para cuotas parciales no incrementaría la entrega. El código del 6 octubre por fecha corresponde a 350a49d, pero el run.json no fija commit y no se presenta como prueba exacta de revisión.
 
 La ubicación física Peering sigue siendo Workstation; no se restaura su antigua VM ESXi ni se crean duplicados. Tampoco se recupera el estado temporal de red, carga, ARP o cachés del momento histórico. Por ello se restaura la configuración experimental identificada, sin garantizar repetir porcentajes superiores al 90%.
+
+El botón de 18 baseline usa classic exclusivamente: seis repeticiones por semilla, orden 1/2/3, 2/3/1, 3/1/2, 1/3/2, 3/2/1, 2/1/3; pausa 60 s, planes originales de 600 s. Duración nominal con 17 pausas: 3 h 17 min, más preparación y limpieza. No se inició la serie durante esta actualización.

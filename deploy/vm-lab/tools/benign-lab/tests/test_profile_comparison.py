@@ -36,8 +36,9 @@ def test_comparison_api_preview_and_queue(tmp_path):
  with TestClient(app) as c:
   r=c.get('/api/comparison-plan');assert r.status_code==200
   steps=r.json()['steps'];assert len(steps)==18 and all(x['pipeline']=='baseline' for x in steps)
-  for seed in [1,2,3]:
-   for profile in ['classic','persistent']:assert sum(x['seed']==seed and x['execution_profile']==profile for x in steps)==3
+  assert all(x['execution_profile']=='classic' for x in steps)
+  for seed in [1,2,3]:assert sum(x['seed']==seed for x in steps)==6
+  assert [x['seed'] for x in steps]==[1,2,3,2,3,1,3,1,2,1,3,2,3,2,1,2,1,3]
   job=c.post('/api/comparison-plan/start',json={});assert job.status_code==200 and job.json()['count']==18
   assert c.post('/api/comparison-plan/start',json={}).status_code==400
   assert c.post('/api/jobs/'+job.json()['id']+'/cancel',json={}).status_code==200

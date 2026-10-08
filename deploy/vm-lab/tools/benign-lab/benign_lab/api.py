@@ -375,9 +375,7 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
             raise ValueError('Las capacidades de los planes difieren')
         if plans[0].get('capacity_mbps')!=load_lab(lab_path)['capacity_mbps']:
             raise ValueError('Las capacidades actuales difieren de los planes de referencia; restaure su configuración antes de comparar')
-        order=[(1,'classic'),(1,'persistent'),(2,'classic'),(2,'persistent'),(3,'classic'),(3,'persistent'),
-               (2,'persistent'),(2,'classic'),(3,'persistent'),(3,'classic'),(1,'persistent'),(1,'classic'),
-               (3,'classic'),(3,'persistent'),(1,'classic'),(1,'persistent'),(2,'classic'),(2,'persistent')]
+        order=[(seed,'classic') for block in ((1,2,3),(2,3,1),(3,1,2),(1,3,2),(3,2,1),(2,1,3)) for seed in block]
         return [dict(plan_hash=hashes[seed],mode='lab',scenario='B0',pipeline='baseline',speed=1,
                      execution_profile=profile,attack_windows=[]) for seed,profile in order]
     @app.get('/api/comparison-plan')
