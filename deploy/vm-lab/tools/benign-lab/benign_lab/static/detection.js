@@ -6,6 +6,7 @@ async function refreshDetection(){
  if(!id){$('fp-status').textContent='Selecciona una ejecución en el historial.';return;}
  const value=await api('/runs/'+id+'/detection-evaluation');
  $('fp-status').textContent=value.available?'Evidencia registrada · ventanas benignas de 5 s · warmup excluido':'Sin ciclos evaluados registrados. Las ventanas sin evidencia no se cuentan como aciertos.';
+ const cm=value.confusion_matrix;if(cm){const n=cm.counts;$('fp-status').textContent+=` · Matriz global 5 s: VP ${n.VP}, VN ${n.VN}, FP ${n.FP}, FN ${n.FN}; sin evidencia/excluidas ${n.unknown}.`; }
  $('fp-table').innerHTML=value.domains.map(d=>`<tr><td>${escape(d.domain)}</td><td>${d.eligible_benign_windows}</td><td>${d.unknown_or_excluded_windows}</td><td>${d.detection_fp} / ${fpPercent(d.detection_fpr)}</td><td>${d.decision_fp} / ${fpPercent(d.decision_fpr)}</td><td>${d.mitigation_positive_windows}</td><td>${d.reported_restricted_seconds} s</td></tr>`).join('');
  $('fp-impact').textContent=value.impact.map(d=>`${d.domain}: ${d.payload_pct===null?'—':d.payload_pct.toFixed(2)+' %'} de payload, ${d.address_errors} errores de IP`).join(' · ');
  $('fp-changes').textContent=JSON.stringify(value.ip_changes,null,2);

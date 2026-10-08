@@ -29,6 +29,7 @@ from .vm_resources import VmResourceMonitor
 from .detection_audit import DetectionAuditMonitor
 from .detection_evaluation import evaluate as evaluate_detection, calibration as replay_calibration
 from .threshold_control import ThresholdControl
+from .scenario_series import scenario_steps
 from .experiment_jobs import ExperimentJobs
 from .experimental_analytics import ExperimentalAnalytics, csv_data as analytics_csv
 
@@ -52,6 +53,13 @@ class RunRequest(BaseModel):
     execution_profile: Optional[Literal['classic','coordinated','persistent']] = None
     speed: float = Field(default=20,ge=.1,le=100)
     attack_windows: List[AttackWindow] = Field(default_factory=list,max_length=100)
+
+class ScenarioSeriesRequest(BaseModel):
+    scenario: Literal['benign_off','benign_on','attack_off','attack_on']
+    start_s: float = Field(default=300, ge=0, allow_inf_nan=False)
+    end_s: float = Field(default=360, gt=0, allow_inf_nan=False)
+    source_ips: List[str] = Field(default_factory=list,max_length=100)
+    description: str = Field(default='',max_length=1000)
 
 class JobRequest(BaseModel):
     run: RunRequest
@@ -385,6 +393,24 @@ def create_app(data_dir=None,lab_path=None,profiles_path=None,token=None):
     @app.post('/api/comparison-plan/start')
     async def start_comparison():
         async with control_change_lock(): return jobs.create_comparison(comparison_steps())
+    def scenario_design(body):
+        steps,sources=scenario_steps(comparison_steps(),body.scenario,body.start_s,body.end_s,body.source_ips,body.description)
+        return steps,sources
+    @app.post('/api/scenario-series/preview')
+    async def preview_scenario_series(body:ScenarioSeriesRequest):
+        steps,sources=scenario_design(body)
+        return dict(steps=[dict(seed=read_plan(r['plan_hash'])['seed'],**r) for r in steps],gap_s=60,duration_s=600,scenario=body.scenario,attack_source_ips=sources,manual_attack=body.scenario.startswith('attack_'))
+    @app.post('/api/scenario-series/start')
+    async def start_scenario_series(body:ScenarioSeriesRequest):
+        async with control_change_lock():
+            if any(j['status'] not in ('completed','failed','cancelled','attention') for j in jobs.jobs.values()):raise ValueError('Finish the existing series before starting another scenario')
+            steps,sources=scenario_design(body)
+            job=jobs.create(steps[0],len(steps),60,steps=steps,kind='scenario_series')
+            jobs.jobs[job['id']].update(experimental_scenario=body.scenario,attack_source_ips=sources,attack_description=body.description if sources else '',manual_attack=body.scenario.startswith('attack_'))
+            jobs.save();return dict(jobs.jobs[job['id']])
+    @app.post('/api/jobs/{jid}/continue')
+    async def continue_scenario_series(jid:str):
+        async with control_change_lock():return jobs.continue_manual(jid)
     def prepare_burst_pilot():
         bases={1:'2c3580be4272c69a94c0ee39a990b0d33b9aa8654f60ab35d120283d2e118245',2:'18aa3c08e732aa6ac773f09538ccabe6df629ee3effb8d02b0d191f2538dbd1c',3:'aace0dfc7bc48ca29417b543acc1b6e3c8c40c3ba34644f834b8f11179a8b948'}
         hashes={};parents=[]

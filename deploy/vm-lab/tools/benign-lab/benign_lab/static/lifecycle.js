@@ -1,6 +1,6 @@
 /* Persistent experiment queue and recoverable deletion. */
 (()=>{
- const states={pending:'En espera',starting:'Preparando',running:'Ejecutando',completed:'Completada',failed:'Fallida',cancelled:'Cancelada',attention:'Requiere revisión'};
+ const states={pending:'En espera',starting:'Preparando',running:'Ejecutando',completed:'Completada',failed:'Fallida',cancelled:'Cancelada',attention:'Requiere revisión',awaiting_operator:'Esperando operador para el ataque'};
  let timer=null,batchBusy=false;
  const selected={run:new Set(),seed:new Set(),plan:new Set()};
  let available={run:[],seed:[],plan:[]};
@@ -22,7 +22,8 @@
   const allRuns=rs.items;
   available={run:allRuns.filter(r=>terminal(r.status)).map(r=>r.id),seed:[...new Set(ps.map(p=>String(p.seed)))],plan:ps.map(p=>p.plan_hash)};
   for(const kind of Object.keys(selected))for(const id of selected[kind])if(!available[kind].includes(id))selected[kind].delete(id);
-  $('job-list').innerHTML=jobs.length?jobs.map(j=>`<div class="panel"><strong>${escape(states[j.status]||j.status)}</strong> · ${new Date(j.scheduled_at*1000).toLocaleString('es-PE',{timeZone:'America/Lima'})} Lima · ${j.kind==='profile_comparison'?(j.steps?.every(s=>s.execution_profile==='classic')?'Baseline classic · tres semillas · ':'Comparación classic / persistent · '):''}${j.run_ids.length}/${j.count} iniciadas · plan inicial ${escape(j.request.plan_hash.slice(0,12))}<p>${escape(j.request.mode)} · ${escape(j.request.pipeline)} · pausa ${j.gap_s} s</p>${comparisonProgress(j)}<p>${j.run_ids.map(id=>`<button data-job-run="${escape(id)}" class="text-button">${escape(id)}</button>`).join(' ')}</p>${j.error?`<p>${escape(j.error)}</p>`:''}${!['completed','failed','cancelled','attention'].includes(j.status)?`<button data-cancel-job="${j.id}" class="secondary" ${j.cancel_requested?'disabled':''}>${j.cancel_requested?'Cancelación solicitada':'Cancelar serie después de la prueba actual'}</button>`:''}</div>`).join(''):'<p>No hay series programadas.</p>';
+  $('job-list').innerHTML=jobs.length?jobs.map(j=>`<div class="panel"><strong>${escape(states[j.status]||j.status)}</strong> · ${new Date(j.scheduled_at*1000).toLocaleString('es-PE',{timeZone:'America/Lima'})} Lima · ${j.kind==='scenario_series'?'Escenario '+escape(j.experimental_scenario)+' · ':''}${j.kind==='profile_comparison'?(j.steps?.every(s=>s.execution_profile==='classic')?'Baseline classic · tres semillas · ':'Comparación classic / persistent · '):''}${j.run_ids.length}/${j.count} iniciadas · plan inicial ${escape(j.request.plan_hash.slice(0,12))}<p>${escape(j.request.mode)} · ${escape(j.request.pipeline)} · pausa ${j.gap_s} s</p>${comparisonProgress(j)}<p>${j.run_ids.map(id=>`<button data-job-run="${escape(id)}" class="text-button">${escape(id)}</button>`).join(' ')}</p>${j.error?`<p>${escape(j.error)}</p>`:''}${j.status==='awaiting_operator'?`<button data-continue-job="${j.id}" class="primary">Estoy listo · continuar con siguiente ataque</button>`:''}${!['completed','failed','cancelled','attention'].includes(j.status)?`<button data-cancel-job="${j.id}" class="secondary" ${j.cancel_requested?'disabled':''}>${j.cancel_requested?'Cancelación solicitada':'Cancelar serie después de la prueba actual'}</button>`:''}</div>`).join(''):'<p>No hay series programadas.</p>';
+  $('job-list').querySelectorAll('[data-continue-job]').forEach(b=>b.onclick=()=>api('/jobs/'+b.dataset.continueJob+'/continue',{}).then(refresh).catch(e=>notice(e.message,true)));
   $('job-list').querySelectorAll('[data-cancel-job]').forEach(b=>b.onclick=()=>api('/jobs/'+b.dataset.cancelJob+'/cancel',{}).then(refresh).catch(e=>notice(e.message,true)));
   $('job-list').querySelectorAll('[data-job-run]').forEach(b=>b.onclick=()=>{document.querySelector('[data-view="monitor"]').click();loadRuns().then(()=>selectRun(b.dataset.jobRun)).catch(e=>notice(e.message,true));});
   $('delete-runs').innerHTML=allRuns.map(r=>`<div class="lifecycle-run"><div class="lifecycle-run-info"><label class="batch-choice"><input type="checkbox" data-batch-kind="run" data-batch-id="${escape(r.id)}" aria-label="Seleccionar prueba ${escape(r.id)}" ${selected.run.has(r.id)?'checked':''} ${terminal(r.status)?'':'disabled'}><strong>${escape(r.id)}</strong></label><small>Semilla ${r.seed} <span class="badge ${['failed','completed_with_errors','interrupted'].includes(r.status)?'error':''}">${escape(labels[r.status]||r.status)}</span>${r.imported?' · Importada':''}</small></div><div class="lifecycle-actions">${r.imported?'':`<button class="secondary" data-repeat-run="${escape(r.id)}">Repetir prueba</button>`}<button class="danger" data-delete-run="${escape(r.id)}" ${terminal(r.status)?'':'disabled'}>Retirar prueba</button></div></div>`).join('')||'<p>No hay pruebas.</p>';
@@ -61,13 +62,15 @@
    notice('Borrado por lote terminado. Los archivos retirados están en la papelera.');
   }catch(e){notice(e.message,true);}finally{batchBusy=false;updateSelection();}
  };
+ function scenarioRequest(){return {scenario:$('series-scenario').value,start_s:Number($('series-attack-start').value),end_s:Number($('series-attack-end').value),source_ips:$('series-attack-ips').value.split(',').map(s=>s.trim()).filter(Boolean),description:$('series-attack-description').value.trim()};}
+ $('series-scenario').onchange=()=>{const value=$('series-scenario').value;$('series-attack-options').hidden=!value.startsWith('attack_');$('series-scenario-detail').textContent={benign_off:'Sin pipeline: referencia de tráfico; matriz no evaluable.',benign_on:'Pipeline activo: medir FP y VN con evidencia. Sin ataque no se estiman VP o FN.',attack_off:'Sin detección ni mitigación: medir impacto del ataque; matriz no evaluable.',attack_on:'Detección y mitigación activas: VP y FN en ventanas con ataque confirmado, FP y VN fuera del ataque; falta de cobertura queda desconocida.'}[value];};
  $('comparison-start').onclick=async()=>{
   const b=$('comparison-start');b.disabled=true;
   try{
-   const preview=await api('/comparison-plan');
+   const body=scenarioRequest();const preview=await api('/scenario-series/preview',body);
    if(preview.steps.length!==18||!preview.steps.every(s=>s.execution_profile==='classic'))throw Error('Serie classic incompleta');
-   const job=await api('/comparison-plan/start',{});
-   $('comparison-state').textContent=`Serie classic ${job.id.slice(0,8)} añadida a la cola. 18 pruebas: seis por semilla; pausa 60 s. El progreso y la cancelación aparecen abajo.`;
+   const job=await api('/scenario-series/start',body);
+   $('comparison-state').textContent=`Serie ${job.experimental_scenario} ${job.id.slice(0,8)} añadida a la cola. 18 pruebas: seis por semilla; pausa 60 s.${job.manual_attack?" Abre la corrida activa en Monitor; debes ejecutar y anotar el ataque.":" Puedes cerrar el navegador."} El progreso y la cancelación aparecen abajo.`;
    await refresh();
   }catch(e){notice(e.message,true);}finally{b.disabled=false;}
  };

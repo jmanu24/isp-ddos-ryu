@@ -54,6 +54,12 @@ class ExperimentJobs:
             raise ValueError('Ya existe una comparación pendiente o activa')
         return self.create(steps[0],len(steps),60,steps=steps)
 
+    def continue_manual(self,jid):
+        if jid not in self.jobs:raise ValueError('Series not found')
+        job=self.jobs[jid]
+        if job.get('kind')!='scenario_series' or job['status']!='awaiting_operator' or not job.get('manual_attack'):raise ValueError('Series is not waiting for an attack operator')
+        job['status']='pending';job['next_at']=max(time.time(),job.get('next_at',0));self.save();return dict(job)
+
     def cancel(self, jid):
         if jid not in self.jobs: raise ValueError('Serie no encontrada')
         job = self.jobs[jid]
@@ -84,6 +90,8 @@ class ExperimentJobs:
                 job['status'] = 'running'
                 self.manager.runs[rid]['series_id'] = job['id']
                 self.manager.runs[rid]['repetition_index'] = len(job['run_ids'])
+                if job.get('kind')=='scenario_series':
+                    self.manager.runs[rid].update(series_kind=job['kind'],experimental_scenario=job['experimental_scenario'],attack_source_ips=job.get('attack_source_ips',[]),attack_description=job.get('attack_description',''))
                 if job.get('kind')=='profile_comparison':
                     self.manager.runs[rid]['comparison_block']=(len(job['run_ids'])-1)//6+1
                 if job.get('kind')=='burst_duration_pilot':
@@ -106,7 +114,11 @@ class ExperimentJobs:
             elif run.get('pipeline') == 'baseline' and run.get('mode') == 'lab' and not run.get('baseline_control', {}).get('restoration', {}).get('restored'):
                 job['status'] = 'attention'
                 job['error'] = 'Verifique restauración del pipeline antes de repetir'
+            elif job.get('manual_attack') and not any(a.get('end_s') is not None and a['end_s']>a['start_s'] for a in run.get('observed_attacks',[])):
+                job['status']='attention';job['error']='Ataque no confirmado con inicio y fin reales; serie detenida. No se cuentan ventanas previstas como ataque observado.'
             elif len(job['run_ids']) >= job['count']: job['status'] = 'completed'
+            elif job.get('manual_attack'):
+                job['status']='awaiting_operator';job['next_at']=time.time()+job['gap_s']
             else:
                 job['status'] = 'pending'
                 job['next_at'] = time.time() + job['gap_s']
