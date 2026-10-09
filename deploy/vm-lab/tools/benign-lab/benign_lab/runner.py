@@ -153,6 +153,8 @@ class Manager:
         if pipeline not in ('enabled','baseline'): raise ValueError('Invalid pipeline option')
         if pipeline=='baseline' and mode!='lab':
             raise ValueError('Baseline requires laboratory mode')
+        if mode=='lab' and cfg.get('require_explicit_mapping') and not cfg.get('baseline_control'):
+            raise ValueError('Laboratory block-cleanup controller mapping is not configured')
         if pipeline=='baseline' and not cfg.get('baseline_control'):
             raise ValueError('Baseline controller mapping is not configured')
         if any(r['status'] not in TERMINAL for r in self.runs.values()):
@@ -219,31 +221,40 @@ class Manager:
         r=self.runs[rid]
         guard=None
         try:
-            if r['pipeline']=='baseline':
+            before_start=None
+            if r['mode']=='lab' and (r['pipeline']=='baseline' or cfg.get('baseline_control')):
                 cfg=copy.deepcopy(cfg)
                 guard=BaselineGuard(cfg,rid,plan['duration_s'])
                 if plan.get('purpose')=='domain_benchmark':guard.domains={plan['benchmark_domain']}
-                self.log(rid,'Suspending detection and mitigation for baseline')
-                r['baseline_control']['preflight']=await guard.enter()
+                r['block_preparation']=dict(started_at=time.time(),policy='release_previous_blocks_before_every_run_v1',pipeline_requested=r['pipeline'])
+                self.log(rid,'Preparation: suspending pipeline and clearing previous controller/actuator restrictions')
+                preflight=await guard.enter()
+                r['block_preparation']['preflight']=preflight
                 groups=resolve(cfg,plan)
                 r['lab_hash']=digest(cfg)
                 atomic_json(self.folder(rid)/'lab_snapshot.json',cfg)
                 await self.persist_async(rid)
-                self.log(rid,'Baseline acknowledged; selected domain checks completed' if plan.get('purpose')=='domain_benchmark' else 'Baseline acknowledged; UE budgets restored and ten Fixed sessions verified')
-            if r['mode']=='lab' and r['pipeline']!='baseline' and any(e['domain']=='fixed' for e in plan['events']) and any(n.get('access_mode') in ('ipoe_bound','ipoe_namespace') for n in cfg['nodes'].values()):
-                cfg=copy.deepcopy(cfg)
-                self.log(rid,'Discovering current Fixed IPs and active BNG sessions')
-                preparer=BaselineGuard(cfg,rid,plan['duration_s'])
-                r['fixed_preparation']=await preparer.prepare_fixed(reconnect=False)
-                groups=resolve(cfg,plan)
-                r['lab_hash']=digest(cfg)
-                atomic_json(self.folder(rid)/'lab_snapshot.json',cfg)
-                await self.persist_async(rid)
-                self.log(rid,'Fixed execution mappings refreshed; detection pipeline unchanged')
+                if r['pipeline']=='baseline':
+                    r['baseline_control']['preflight']=preflight
+                    self.log(rid,'Restrictions cleared; pipeline remains suspended for baseline measurement')
+                else:
+                    async def activate_pipeline():
+                        nonlocal guard
+                        state=await guard.status()
+                        if not state.get('active') or not state.get('cleared') or state.get('run_id')!=rid:
+                            raise RuntimeError('Preparation suspension lost before start; no experimental traffic scheduled')
+                        restoration=await guard.leave()
+                        r['block_preparation']['pipeline_restoration']=restoration
+                        if not restoration.get('restored'):raise RuntimeError('Pipeline activation not confirmed before measurement')
+                        guard=None
+                        r['block_preparation']['completed_at']=time.time()
+                        await self.persist_async(rid)
+                        self.log(rid,'All agents ready; cleanup finished and pipeline restored before measurement')
+                    before_start=activate_pipeline
             if r['mode']=='simulation':
                 await self.simulate(rid,plan)
             else:
-                if guard:
+                if guard and r['pipeline']=='baseline':
                     traffic=asyncio.create_task(self.real(rid,plan,cfg,groups))
                     monitor=asyncio.create_task(guard.monitor())
                     try:
@@ -255,7 +266,8 @@ class Manager:
                             if not task.done():task.cancel()
                         await asyncio.gather(traffic,monitor,return_exceptions=True)
                 else:
-                    await self.real(rid,plan,cfg,groups)
+                    if before_start:await self.real(rid,plan,cfg,groups,before_start=before_start)
+                    else:await self.real(rid,plan,cfg,groups)
             if self.stops[rid].is_set(): r['status']='stopped'
             else:
                 r['status']='completed_with_errors' if any(e['status']=='failed' or e.get('error') for e in self.events[rid].values()) else 'completed'
@@ -315,7 +327,7 @@ class Manager:
             await asyncio.sleep(.1)
         r['elapsed_s']=elapsed
 
-    async def real(self,rid,plan,cfg,groups):
+    async def real(self,rid,plan,cfg,groups,before_start=None):
         r=self.runs[rid]
         for group in groups.values():
             context=group['context']
@@ -388,6 +400,8 @@ class Manager:
             if clock['status']=='inconclusive':
                 raise RuntimeError(f'Agent {sources} clock check inconclusive due to communication latency; retry when load is lower ({detail})')
         if self.stops[rid].is_set(): return
+        if before_start:await before_start()
+        if self.stops[rid].is_set():return
         start=time.time()+cfg.get('start_lead_s',3)
         self.origins[rid]=time.monotonic()+start-time.time()
         r.update(status='running',started_at=start)
