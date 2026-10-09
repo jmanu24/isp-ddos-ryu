@@ -218,7 +218,7 @@ vms:
   - name: peer-router
     bgp_as: 64512
     placement: {hypervisor: workstation, host: "192.168.18.45", transport: ethernet_direct}
-    management_ip: 10.30.0.2
+    management_ip: 10.10.0.17
     role: peer_router
     # ubuntu, not alpine -- confirmed on a real run: hping3 (a hard
     # dependency of webtool/enterprise_ops.py's real attack-generation
@@ -231,6 +231,7 @@ vms:
     disk_gb: 10
     interfaces:
       - {network: PEERING, ip: "10.30.0.2"}
+      - {network: MGMT, ip: 10.10.0.17}
 
   - name: peer-router-2
     role: peer_router
@@ -239,10 +240,11 @@ vms:
     ram_mb: 2048
     disk_gb: 15
     bgp_as: 64513
-    management_ip: 10.30.0.4
+    management_ip: 10.10.0.18
     placement: {hypervisor: workstation, host: "192.168.18.45", transport: ethernet_direct}
     interfaces:
       - {network: PEERING, ip: 10.30.0.4}
+      - {network: MGMT, ip: 10.10.0.18}
   - name: ric
     role: ric_oran_sc
     template: ubuntu

@@ -421,7 +421,7 @@ nodes:
   peer-flow*:
     configured: true
     adapter: ssh
-    host: 10.30.0.2
+    host: 10.10.0.17
     user: labadmin
     port: 22
     identity_file: null
@@ -438,7 +438,7 @@ nodes:
   peer-router:
     configured: true
     adapter: ssh
-    host: 10.30.0.2
+    host: 10.10.0.17
     user: labadmin
     port: 22
     identity_file: null
@@ -456,7 +456,7 @@ nodes:
   peer-router-2:
     configured: true
     adapter: ssh
-    host: 10.30.0.4
+    host: 10.10.0.18
     user: labadmin
     port: 22
     identity_file: null
@@ -594,7 +594,7 @@ traffic_monitor:
     preferred_interface: ens192
   - name: peer-router
     domain: peering
-    host: 10.30.0.2
+    host: 10.10.0.17
     user: labadmin
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/.ssh/known_hosts
@@ -605,7 +605,7 @@ traffic_monitor:
     preferred_interface: ens160
   - name: peer-router-2
     domain: peering
-    host: 10.30.0.4
+    host: 10.10.0.18
     user: labadmin
     password_env: BENIGN_SSH_PASSWORD
     known_hosts_file: /home/ubuntu/.ssh/known_hosts
