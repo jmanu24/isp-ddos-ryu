@@ -831,7 +831,7 @@ traffic_monitor:
     sudo: false
     namespaces: []
     fixed: false
-    preferred_interface: wg0
+    preferred_interface: wired0
   - name: lab-wifi-gateway
     domain: shared
     host: 10.10.0.253
@@ -842,7 +842,7 @@ traffic_monitor:
     sudo: false
     namespaces: []
     fixed: false
-    preferred_interface: wg0
+    preferred_interface: trunk0
 host_monitor:
   retention_s: 21600
   hosts:

@@ -1,3 +1,5 @@
+> Actualización: el transporte actual es VXLAN directa por Ethernet, sin WireGuard (ver [migración Ethernet](tools/workstation/WORKSTATION_ETHERNET_MIGRATION.md)). Este documento describe el transporte Wi-Fi histórico (WireGuard + VXLAN).
+
 > Transporte actualizado el 2026-10-03: ver [migración Ethernet](tools/workstation/WORKSTATION_ETHERNET_MIGRATION.md). WiFi queda como respaldo manual.
 
 # Laboratorio distribuido: ESXi y VMware Player por Wi-Fi
