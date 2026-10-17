@@ -1,0 +1,27 @@
+---
+# Checks (run on orchestrator): the controller is up and can read bng's
+# conntrack sidecar, which must report every subscriber session.
+- name: ryu-manager is active
+  ansible.builtin.command: systemctl is-active ryu-manager
+  changed_when: false
+
+- name: The sidecar answers from orchestrator and reports all sessions
+  ansible.builtin.shell: >-
+    curl -s -m4 http://{{ hostvars['bng'].ansible_host }}:8769/telemetry |
+    python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d['conntrack_connected'] and d['session_count']=={{ bng_subscriber_count }} else 1)"
+  register: side
+  until: side.rc == 0
+  retries: 6
+  delay: 3
+  changed_when: false
+
+- name: Does the deployed controller read the sidecar? (informational)
+  ansible.builtin.shell: grep -c BNG_DIST_FLOW_API_URL /opt/Tesis_Controller/config/settings.py || true
+  register: ctrl_uses
+  changed_when: false
+
+- name: Controller code check
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'The deployed controller reads the conntrack sidecar.' if (ctrl_uses.stdout | trim | int) > 0 else
+         'WARNING: the controller deployed in /opt/Tesis_Controller predates the conntrack sidecar and still reads RADIUS accounting; deploy the current code to use the flow telemetry validated here.' }}

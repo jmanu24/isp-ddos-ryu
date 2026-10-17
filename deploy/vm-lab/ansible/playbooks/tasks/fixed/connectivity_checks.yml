@@ -1,0 +1,19 @@
+---
+# Checks (run on suscriptor): every subscriber reaches victim (ICMP from its own
+# address + TCP/80) through bng -> pe.
+- name: Every subscriber reaches victim (ICMP + TCP/80)
+  ansible.builtin.shell: |
+    bad=""
+    for n in $(seq 1 {{ bng_subscriber_count }}); do
+      ip="{{ bb_access_cidr | regex_replace('\.0/24$', '') }}.$(({{ bng_static_ip_offset }} + n))"
+      ip netns exec fixed$n ping -c 2 -W 2 -I $ip {{ victim_ent_dc_addr }} >/dev/null 2>&1 || { bad="$bad fixed$n(icmp)"; continue; }
+      ip netns exec fixed$n timeout 5 bash -c 'exec 3<>/dev/tcp/{{ victim_ent_dc_addr }}/80' 2>/dev/null || bad="$bad fixed$n(tcp80)"
+    done
+    [ -z "$bad" ] || { echo "cannot reach victim:$bad"; exit 1; }
+    echo "all {{ bng_subscriber_count }} subscribers reach {{ victim_ent_dc_addr }} (ICMP + TCP/80)"
+  args: { executable: /bin/bash }
+  register: conn
+  changed_when: false
+
+- name: Connectivity summary
+  ansible.builtin.debug: { msg: "{{ conn.stdout }}" }

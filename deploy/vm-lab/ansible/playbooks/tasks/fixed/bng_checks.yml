@@ -1,0 +1,48 @@
+---
+# Checks for bng (any failure triggers bng_fix.yml).
+- name: bng services are active
+  ansible.builtin.command: systemctl is-active {{ item }}
+  loop: [accel-pppd, freeradius, ddos-bb-offered, bng-flow-api, bng-masquerade, backbone-route]
+  changed_when: false
+
+- name: Forwarding is enabled
+  ansible.builtin.command: sysctl -n net.ipv4.ip_forward
+  register: fwd
+  changed_when: false
+  failed_when: fwd.stdout | trim != '1'
+
+- name: conntrack counts packets/bytes per flow
+  ansible.builtin.command: sysctl -n net.netfilter.nf_conntrack_acct
+  register: acct
+  changed_when: false
+  failed_when: acct.stdout | trim != '1'
+
+- name: Subscriber traffic is masqueraded out the backbone NIC
+  ansible.builtin.command: >-
+    iptables -t nat -C POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE
+  changed_when: false
+
+- name: Route to victim's subnet exists on the backbone NIC
+  ansible.builtin.command: ip route show {{ ent_dc_cidr }} dev {{ bng_backbone_iface }}
+  register: vroute
+  changed_when: false
+  failed_when: vroute.stdout | trim == ''
+
+- name: One offered-load counter per subscriber and protocol (3 each)
+  ansible.builtin.shell: nft list table netdev {{ bng_offered_nft_table }} | grep -c counter
+  register: counters
+  changed_when: false
+  failed_when: counters.stdout | trim | int != (3 * (bng_subscriber_count | int))
+
+- name: No stale RADIUS reject markers (a leftover one keeps a subscriber out)
+  ansible.builtin.shell: >-
+    find {{ bng_radius_blocked_dir }} -maxdepth 1 -type f -name '??:??:??:??:??:??' | wc -l
+  register: markers
+  changed_when: false
+  failed_when: (markers.stdout | trim | int) > 0 and not (keep_blocks | default(false) | bool)
+
+- name: The conntrack sidecar sees conntrack, connection attempts and sessions
+  ansible.builtin.shell: >-
+    curl -s -m3 http://127.0.0.1:8769/telemetry |
+    python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d['conntrack_connected'] and d['syn_events_connected'] and d['sessions_connected'] else 1)"
+  changed_when: false

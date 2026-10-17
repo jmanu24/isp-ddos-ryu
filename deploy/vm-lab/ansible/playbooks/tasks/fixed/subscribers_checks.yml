@@ -1,0 +1,40 @@
+---
+# Checks (run on suscriptor): agent up, every subscriber namespace holds its
+# static address, and bng has a session for every subscriber MAC <-> address.
+- name: Subscriber services are active
+  ansible.builtin.command: systemctl is-active {{ item }}
+  loop: [bng-macvlans, bng-subscriber-agent]
+  changed_when: false
+
+- name: Every subscriber namespace holds its static address
+  ansible.builtin.shell: |
+    bad=""
+    for n in $(seq 1 {{ bng_subscriber_count }}); do
+      ip netns exec fixed$n ip -4 -o addr show dev macvlan$n 2>/dev/null \
+        | grep -q " {{ bb_access_cidr | regex_replace('\.0/24$', '') }}.$(({{ bng_static_ip_offset }} + n))/" || bad="$bad fixed$n"
+    done
+    [ -z "$bad" ] || { echo "no address in:$bad"; exit 1; }
+  changed_when: false
+
+- name: bng has one session per subscriber, MAC <-> expected address
+  ansible.builtin.shell: |
+    out=$(accel-cmd -p 2000 show sessions ip,calling-sid)
+    OUT="$out" python3 - {{ bng_subscriber_count }} {{ bng_static_ip_offset }} {{ bb_access_cidr | regex_replace('\.0/24$', '') }} <<'PY'
+    import os, sys
+    count, off, prefix = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+    have = {}
+    for line in os.environ["OUT"].splitlines():
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) == 2 and cells[0][:1].isdigit():
+            have[cells[1].lower()] = cells[0]
+    missing = []
+    for n in range(1, count + 1):
+        mac, ip = "02:00:00:00:00:%02x" % n, "%s.%d" % (prefix, off + n)
+        if have.get(mac) != ip:
+            missing.append("%s(expected %s, has %s)" % (mac, ip, have.get(mac)))
+    if missing:
+        print("sessions wrong/missing: " + ", ".join(missing)); sys.exit(1)
+    print("%d sessions OK" % count)
+    PY
+  delegate_to: bng
+  changed_when: false

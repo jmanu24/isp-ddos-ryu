@@ -1,0 +1,12 @@
+---
+- name: Start the controller if stopped (never restarted: it would drop active blocks)
+  ansible.builtin.systemd: { name: ryu-manager, state: started }
+
+- name: Restart the conntrack sidecar on bng
+  ansible.builtin.systemd: { name: bng-flow-api, state: restarted }
+  delegate_to: bng
+
+- name: Let it take samples
+  ansible.builtin.wait_for: { timeout: 5 }
+  delegate_to: localhost
+  become: false

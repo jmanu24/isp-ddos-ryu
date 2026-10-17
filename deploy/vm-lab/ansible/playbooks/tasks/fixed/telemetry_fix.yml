@@ -1,0 +1,10 @@
+---
+- name: Restart the conntrack sidecar and make sure conntrack counts flows
+  ansible.builtin.shell: sysctl -w net.netfilter.nf_conntrack_acct=1 && systemctl restart bng-flow-api
+  delegate_to: bng
+  changed_when: true
+
+- name: Let it settle
+  ansible.builtin.wait_for: { timeout: 6 }
+  delegate_to: localhost
+  become: false

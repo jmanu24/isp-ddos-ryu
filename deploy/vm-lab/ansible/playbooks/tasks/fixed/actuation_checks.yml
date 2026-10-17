@@ -1,0 +1,93 @@
+---
+# Actuation test, the same two levers BroadbandAdapter pulls: a FreeRADIUS
+# reject marker for the MAC plus `accel-cmd terminate ip`. Proves the session
+# goes away AND stays away while the marker exists (the subscriber keeps
+# retrying DHCP and must keep getting rejected), then that unblocking (marker
+# removed + `kick`) brings the SAME address back and victim is reachable.
+# Subject: subscriber probe_n (default: the last one). The marker is always
+# removed in `always`.
+- name: Actuation | block, verify, unblock, verify
+  block:
+    - name: Actuation | the subscriber has a session before the block
+      ansible.builtin.shell: >-
+        accel-cmd -p 2000 show sessions ip,calling-sid | grep -c "{{ probe_ip }} *| *{{ probe_mac }}"
+      delegate_to: bng
+      register: pre
+      changed_when: false
+      failed_when: pre.stdout | trim != '1'
+
+    - name: Actuation | BLOCK = reject marker for the MAC, then terminate the session
+      ansible.builtin.shell: >-
+        touch {{ bng_radius_blocked_dir }}/{{ probe_mac }} &&
+        accel-cmd -p 2000 terminate ip {{ probe_ip }}
+      delegate_to: bng
+      changed_when: true
+
+    - name: Actuation | the session is gone
+      ansible.builtin.shell: >-
+        accel-cmd -p 2000 show sessions ip,calling-sid | grep -c "{{ probe_mac }}" || true
+      delegate_to: bng
+      register: gone
+      until: gone.stdout | trim == '0'
+      retries: 10
+      delay: 1
+      changed_when: false
+
+    - name: Actuation | it stays gone while blocked (the subscriber keeps retrying DHCP)
+      ansible.builtin.wait_for: { timeout: "{{ hold_secs }}" }
+      delegate_to: localhost
+      become: false
+
+    - name: Actuation | still no session after {{ hold_secs }}s of retries
+      ansible.builtin.shell: >-
+        accel-cmd -p 2000 show sessions ip,calling-sid | grep -c "{{ probe_mac }}" || true
+      delegate_to: bng
+      register: still_gone
+      changed_when: false
+      failed_when: still_gone.stdout | trim != '0'
+
+    - name: Actuation | the offered-load counters still see the blocked MAC
+      ansible.builtin.shell: >-
+        nft list chain netdev {{ bng_offered_nft_table }} {{ bng_offered_nft_chain }} | grep -c "{{ probe_mac }}"
+      delegate_to: bng
+      register: offered
+      changed_when: false
+      failed_when: offered.stdout | trim | int < 3
+
+    - name: Actuation | UNBLOCK = remove the marker, then kick the subscriber
+      ansible.builtin.shell: >-
+        rm -f {{ bng_radius_blocked_dir }}/{{ probe_mac }}
+      delegate_to: bng
+      changed_when: true
+
+    - name: Actuation | kick (asks the agent for a fresh session at this address)
+      ansible.builtin.shell: timeout 5 sh -c 'echo "kick {{ probe_ip }}" > /run/bng-agent/cmd'
+      changed_when: true
+
+    - name: Actuation | the session returns with the SAME static address
+      ansible.builtin.shell: >-
+        accel-cmd -p 2000 show sessions ip,calling-sid | grep -c "{{ probe_ip }} *| *{{ probe_mac }}"
+      delegate_to: bng
+      register: back
+      until: back.stdout | trim == '1'
+      retries: 40
+      delay: 2
+      changed_when: false
+
+    - name: Actuation | victim is reachable again from that subscriber
+      ansible.builtin.shell: >-
+        ip netns exec fixed{{ probe_n }} ping -c 2 -W 2 -I {{ probe_ip }} {{ victim_ent_dc_addr }}
+      register: reach
+      until: reach.rc == 0
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    - name: Actuation result
+      ansible.builtin.debug:
+        msg: "fixed{{ probe_n }} ({{ probe_ip }}, {{ probe_mac }}): blocked -> no session for {{ hold_secs }}s -> unblocked -> same address back, victim reachable."
+  always:
+    - name: Actuation | never leave the marker behind
+      ansible.builtin.shell: rm -f {{ bng_radius_blocked_dir }}/{{ probe_mac }}
+      delegate_to: bng
+      changed_when: false

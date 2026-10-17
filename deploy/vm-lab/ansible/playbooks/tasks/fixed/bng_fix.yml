@@ -1,0 +1,46 @@
+---
+# Remediation for bng. accel-pppd is only STARTED if stopped, never restarted:
+# a restart tears down every subscriber session.
+- name: conntrack module and per-flow counters
+  ansible.builtin.shell: modprobe nf_conntrack && sysctl -w net.netfilter.nf_conntrack_acct=1 && sysctl -w net.ipv4.ip_forward=1
+  changed_when: true
+
+- name: Start stopped services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+  loop: [freeradius, accel-pppd]
+  failed_when: false
+
+- name: Re-apply masquerade + route to victim (the role's persistent oneshots)
+  ansible.builtin.include_role:
+    name: "{{ playbook_dir }}/../roles/bng"
+    tasks_from: forwarding
+
+- name: Restart the offered-load counters
+  ansible.builtin.systemd: { name: ddos-bb-offered, state: restarted }
+  failed_when: false
+
+- name: Is the sidecar installed?
+  ansible.builtin.stat: { path: /etc/systemd/system/bng-flow-api.service }
+  register: sidecar_unit
+
+- name: Install the sidecar (conntrack package, script, unit) when missing
+  ansible.builtin.include_role:
+    name: "{{ playbook_dir }}/../roles/bng"
+    tasks_from: flow_sidecar
+  when: not sidecar_unit.stat.exists
+
+- name: Restart the sidecar
+  ansible.builtin.systemd: { name: bng-flow-api, state: restarted }
+
+- name: Remove stale reject markers (keep them with -e keep_blocks=true)
+  ansible.builtin.shell: >-
+    find {{ bng_radius_blocked_dir }} -maxdepth 1 -type f -name '??:??:??:??:??:??' -delete
+  when: not (keep_blocks | default(false) | bool)
+  changed_when: true
+
+- name: Let the sidecar take its first conntrack samples
+  ansible.builtin.wait_for: { timeout: 4 }
+  delegate_to: localhost
+  become: false

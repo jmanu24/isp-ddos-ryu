@@ -1,0 +1,167 @@
+---
+# reconnect_fixed_domain.yml -- one-shot, idempotent reconnection and validation
+# of the FIXED broadband domain (bng: accel-ppp + FreeRADIUS + conntrack
+# sidecar; suscriptor: 10 IPoE subscribers), in this order, validating each
+# piece before the next:
+#
+#   power -> bng -> subscribers (sessions) -> orchestrator/sidecar
+#         -> every subscriber reaches victim -> flow telemetry (conntrack)
+#         -> actuation (block / stays blocked / unblock)
+#
+#   ansible-playbook playbooks/reconnect_fixed_domain.yml
+#
+# Vars / flags:
+#   -e power_cycle=true     -> first power OFF suscriptor + bng (Workstation
+#                              bridge), then bring them up in order
+#   --tags <tag>            -> re-run part: power, bng, subscribers,
+#                              orchestrator, connectivity, telemetry, actuation
+#   --skip-tags traffic     -> skip the telemetry and actuation tests (the two
+#                              that send probe traffic / block a subscriber)
+#   -e max_attempts=5 -e retry_delay=15  -> retry policy (default 3 / 10 s)
+#   -e keep_blocks=true     -> do not clear existing RADIUS reject markers
+#   -e telemetry_sub=1 -e actuation_sub=10 -> which subscriber each test uses
+#
+# Retries: every stage runs through tasks/retry_stage.yml; on failure its
+# remediation (tasks/fixed/<stage>_fix.yml) runs and the stage is repeated, up
+# to max_attempts times. accel-pppd and ryu-manager are never restarted by a
+# remediation (that would drop every session / the controller's active blocks).
+#
+# The probes use 50 pps UDP and 6 SYN/s, under the detector thresholds (200 /
+# 10), so a running controller does not react. The actuation test blocks ONE
+# subscriber for ~hold_secs and always lifts the block.
+#
+# NOTE: the controller deployed on orchestrator may predate the conntrack
+# sidecar (it then still reads RADIUS accounting); stage 3 reports that.
+
+- name: Power state of the fixed-domain VMs
+  hosts: localhost
+  gather_facts: false
+  become: false
+  tags: [power]
+  vars:
+    power_cycle: false
+    ws_config: "{{ playbook_dir }}/../../../../.runtime/benign-lab/workstation.json"
+  tasks:
+    - name: Power OFF suscriptor and bng (power_cycle=true)
+      ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: "{{ item }}", pow_ip: "{{ hostvars[item].ansible_host }}", pow_action: "off" }
+      loop: [suscriptor, bng]
+      when: power_cycle | bool
+
+    - name: Ensure pe and victim are on (every subscriber packet crosses them)
+      ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: "{{ item }}", pow_ip: "{{ hostvars[item].ansible_host }}" }
+      loop: [pe, victim]
+
+######################################################################
+- name: "1/6  bng -- power on, services, NAT + route to victim, conntrack sidecar"
+  hosts: bng
+  gather_facts: false
+  tags: [bng]
+  vars_files: ["{{ playbook_dir }}/../roles/bng/defaults/main.yml"]
+  vars:
+    ws_config: "{{ playbook_dir }}/../../../../.runtime/benign-lab/workstation.json"
+  tasks:
+    - ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: bng, pow_ip: "{{ ansible_host }}" }
+
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: bng
+        stage_checks: "{{ playbook_dir }}/tasks/fixed/bng_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/fixed/bng_fix.yml"
+        attempt: 1
+
+######################################################################
+- name: "2/6  suscriptor -- power on, agent, 10 IPoE sessions with their static addresses"
+  hosts: suscriptor
+  gather_facts: false
+  tags: [subscribers]
+  vars_files: ["{{ playbook_dir }}/../roles/bng/defaults/main.yml"]
+  vars:
+    ws_config: "{{ playbook_dir }}/../../../../.runtime/benign-lab/workstation.json"
+  tasks:
+    - ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: suscriptor, pow_ip: "{{ ansible_host }}" }
+
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: subscribers
+        stage_checks: "{{ playbook_dir }}/tasks/fixed/subscribers_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/fixed/subscribers_fix.yml"
+        attempt: 1
+
+######################################################################
+- name: "3/6  orchestrator -- controller up and sidecar reachable"
+  hosts: orchestrator
+  gather_facts: false
+  tags: [orchestrator]
+  vars_files: ["{{ playbook_dir }}/../roles/bng/defaults/main.yml"]
+  tasks:
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: orchestrator
+        stage_checks: "{{ playbook_dir }}/tasks/fixed/orchestrator_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/fixed/orchestrator_fix.yml"
+        attempt: 1
+
+######################################################################
+- name: "4/6  every subscriber reaches victim"
+  hosts: suscriptor
+  gather_facts: false
+  tags: [connectivity]
+  vars_files: ["{{ playbook_dir }}/../roles/bng/defaults/main.yml"]
+  tasks:
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: connectivity
+        stage_checks: "{{ playbook_dir }}/tasks/fixed/connectivity_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/fixed/connectivity_fix.yml"
+        attempt: 1
+
+######################################################################
+- name: "5/6  flow telemetry through conntrack"
+  hosts: suscriptor
+  gather_facts: false
+  tags: [traffic, telemetry]
+  vars_files: ["{{ playbook_dir }}/../roles/bng/defaults/main.yml"]
+  vars:
+    probe_n: "{{ telemetry_sub | default(1) | int }}"
+    probe_ip: "{{ bb_access_cidr | regex_replace('\\.0/24$', '') }}.{{ (bng_static_ip_offset | int) + (probe_n | int) }}"
+    probe_mac: "{{ '02:00:00:00:00:%02x' | format(probe_n | int) }}"
+    udp_port: 39996
+    syn_port: 39995
+    probe_secs: 8
+  tasks:
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: telemetry
+        stage_checks: "{{ playbook_dir }}/tasks/fixed/telemetry_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/fixed/telemetry_fix.yml"
+        attempt: 1
+
+######################################################################
+- name: "6/6  actuation: block, stays blocked, unblock"
+  hosts: suscriptor
+  gather_facts: false
+  tags: [traffic, actuation]
+  vars_files: ["{{ playbook_dir }}/../roles/bng/defaults/main.yml"]
+  vars:
+    probe_n: "{{ actuation_sub | default(bng_subscriber_count) | int }}"
+    probe_ip: "{{ bb_access_cidr | regex_replace('\\.0/24$', '') }}.{{ (bng_static_ip_offset | int) + (probe_n | int) }}"
+    probe_mac: "{{ '02:00:00:00:00:%02x' | format(probe_n | int) }}"
+    hold_secs: 15
+  tasks:
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: actuation
+        stage_checks: "{{ playbook_dir }}/tasks/fixed/actuation_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/fixed/actuation_fix.yml"
+        attempt: 1
+
+    - name: Fixed domain summary
+      ansible.builtin.debug:
+        msg: >-
+          Fixed domain reconnected: bng services, NAT/route to victim, 10 sessions
+          with their static addresses, every subscriber reaches victim, conntrack
+          flow telemetry and block/unblock all validated.

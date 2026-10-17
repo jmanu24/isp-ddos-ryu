@@ -86,52 +86,9 @@
         MASQUERADE/route tasks below
   ansible.builtin.meta: flush_handlers
 
-- name: Masquerade subscriber traffic out the VLAN_BACKBONE interface, NOT
-        MGMT (moved on explicit direction -- separate node OOB management
-        from the user-plane/attack-traffic path. Confirmed on a real run
-        this was a genuine mixing case -- subscriber traffic used to
-        forward straight from BB_ACCESS to this VM's own MGMT NIC to
-        reach victim's MGMT address -- now it takes a real, monitored
-        path, bng to pe's OVS bridge (br-ent, OpenFlow-controlled by
-        ryu-manager) to victim. MASQUERADE, not a plain route, because
-        unlike br/peering this domain's own detection doesn't depend
-        on seeing each subscriber's individual real source IP past bng,
-        accel-ppp/FreeRADIUS's own accounting records already identify
-        the subscriber upstream of this point.)
-  ansible.builtin.shell:
-    cmd: >-
-      iptables -t nat -C POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE 2>/dev/null ||
-      iptables -t nat -A POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE
-  changed_when: true
-  become: true
+- name: Forwarding of subscriber traffic toward victim (masquerade + route, persistent)
+  ansible.builtin.include_tasks: forwarding.yml
 
-- name: Deploy a systemd oneshot to add the gateway-less route to victim's
-        subnet on every boot (same pattern as core5g_open5gs's own
-        backbone-route.service)
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/backbone-route.service
-    mode: "0644"
-    content: |
-      [Unit]
-      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
-      After=network-online.target
-      Wants=network-online.target
-
-      [Service]
-      Type=oneshot
-      RemainAfterExit=true
-      ExecStart=/bin/sh -c 'ip route add {{ ent_dc_cidr }} dev {{ bng_backbone_iface }} 2>/dev/null || true'
-
-      [Install]
-      WantedBy=multi-user.target
-  register: backbone_route_unit
-
-- name: Enable and start the backbone route oneshot
-  ansible.builtin.systemd:
-    name: backbone-route.service
-    daemon_reload: "{{ backbone_route_unit.changed }}"
-    enabled: true
-    state: started
 
 - name: Clone Tesis_Controller (for deploy/install_accelppp.sh)
   ansible.builtin.git:
@@ -465,62 +422,5 @@
     enabled: true
     state: started
 
-# --- Subscriber flow telemetry: conntrack sidecar ----------------------
-# telemetry/broadband_adapter.py reads every subscriber flow (real
-# destination, protocol, port and rate) from simulation/bng_flow_api.py,
-# which queries the kernel's conntrack table. FreeRADIUS accounting stays in
-# place for AAA but is not a telemetry source.
-
-- name: Install conntrack for subscriber flow accounting
-  ansible.builtin.apt:
-    name: conntrack
-    state: present
-    update_cache: true
-
-- name: Load the conntrack module at boot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/nf_conntrack.conf
-    content: "nf_conntrack\n"
-    mode: "0644"
-
-- name: Load the conntrack module now
-  ansible.builtin.command: modprobe nf_conntrack
-  changed_when: false
-
-- name: Enable per-flow packet/byte counters in conntrack
-  ansible.builtin.copy:
-    dest: /etc/sysctl.d/90-conntrack-acct.conf
-    content: "net.netfilter.nf_conntrack_acct = 1\n"
-    mode: "0644"
-  register: conntrack_acct_conf
-
-- name: Apply the conntrack accounting setting
-  ansible.builtin.command: sysctl -w net.netfilter.nf_conntrack_acct=1
-  changed_when: false
-
-- name: Create the sidecar directory
-  ansible.builtin.file:
-    path: /opt/isp-ddos-ryu
-    state: directory
-    mode: "0755"
-
-- name: Deploy the subscriber flow telemetry sidecar
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../../simulation/bng_flow_api.py"
-    dest: /opt/isp-ddos-ryu/bng_flow_api.py
-    mode: "0755"
-  notify: restart bng-flow-api
-
-- name: Install the sidecar systemd unit
-  ansible.builtin.template:
-    src: bng-flow-api.service.j2
-    dest: /etc/systemd/system/bng-flow-api.service
-    mode: "0644"
-  notify: restart bng-flow-api
-
-- name: Enable and start the sidecar
-  ansible.builtin.systemd:
-    name: bng-flow-api.service
-    daemon_reload: true
-    enabled: true
-    state: started
+- name: Subscriber flow telemetry (conntrack sidecar)
+  ansible.builtin.include_tasks: flow_sidecar.yml

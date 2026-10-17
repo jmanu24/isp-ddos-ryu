@@ -1,0 +1,63 @@
+---
+# Flow telemetry end to end. DEFAULT (passive): the baseline traffic every
+# subscriber already generates must appear in bng's conntrack sidecar with the
+# real destination/protocol/port, the subscriber's MAC and its session id,
+# without adding traffic. The agent's baseline (1 connection/s per subscriber)
+# already totals 10 SYN/s toward victim = SYN_THRESHOLD, so ANY extra probe
+# traffic trips the controller (it then blocks the subscriber). With
+# -e active_probe=true a UDP + SYN probe from one subscriber is added anyway.
+# Vars from the play: probe_n, probe_ip, probe_mac, udp_port, syn_port.
+- name: Active probe (only with -e active_probe=true)
+  when: active_probe | default(false) | bool
+  block:
+    - name: Install the probe script on suscriptor
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/fixed_probe.py"
+        dest: /tmp/fixed_probe.py
+        mode: "0755"
+
+    - name: Start both probes in fixed{{ probe_n }}'s namespace
+      ansible.builtin.shell: |
+        ip netns exec fixed{{ probe_n }} setsid nohup python3 /tmp/fixed_probe.py udp {{ victim_ent_dc_addr }} {{ udp_port }} 50 {{ probe_secs }} >/dev/null 2>&1 < /dev/null &
+        ip netns exec fixed{{ probe_n }} setsid nohup python3 /tmp/fixed_probe.py syn {{ victim_ent_dc_addr }} {{ syn_port }} 6 {{ probe_secs }} >/dev/null 2>&1 < /dev/null &
+      changed_when: true
+
+    - name: Let the sidecar sample the probe
+      ansible.builtin.wait_for: { timeout: 3 }
+      delegate_to: localhost
+      become: false
+
+- name: Fetch the sidecar payload from orchestrator (the controller's vantage point)
+  ansible.builtin.command: curl -s -m4 http://{{ hostvars['bng'].ansible_host }}:8769/telemetry
+  delegate_to: orchestrator
+  register: payload
+  changed_when: false
+
+- name: Passive check | every subscriber's baseline flows carry its MAC and session id
+  ansible.builtin.command: >-
+    python3 -I {{ playbook_dir }}/files/fixed_flow_check.py --passive --dst {{ victim_ent_dc_addr }}
+    --count {{ bng_subscriber_count }} --prefix {{ bb_access_cidr | regex_replace('\.0/24$', '') }} --offset {{ bng_static_ip_offset }}
+  args:
+    stdin: "{{ payload.stdout | b64encode }}"
+  delegate_to: localhost
+  become: false
+  register: passive_check
+  changed_when: false
+
+- name: Active check | the probe appears as UDP and TCP_SYN flows with identity
+  ansible.builtin.command: >-
+    python3 -I {{ playbook_dir }}/files/fixed_flow_check.py --ip {{ probe_ip }} --mac {{ probe_mac }}
+    --dst {{ victim_ent_dc_addr }} --udp-port {{ udp_port }} --syn-port {{ syn_port }}
+  args:
+    stdin: "{{ payload.stdout | b64encode }}"
+  delegate_to: localhost
+  become: false
+  register: flow_check
+  changed_when: false
+  when: active_probe | default(false) | bool
+
+- name: Flow telemetry result
+  ansible.builtin.debug:
+    msg:
+      - "{{ passive_check.stdout }}"
+      - "{{ ('active probe fixed' ~ probe_n ~ ' (' ~ probe_ip ~ '): ' ~ flow_check.stdout) if (active_probe | default(false) | bool) else 'active probe skipped (-e active_probe=true adds one; it can trip the controller: baseline SYNs already sit at the threshold)' }}"

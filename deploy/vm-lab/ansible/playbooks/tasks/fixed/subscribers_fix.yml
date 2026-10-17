@@ -1,0 +1,19 @@
+---
+# Remediation: restart the agent (not accel-pppd) and ask it to bring every
+# subscriber up (`baseline` = session_up for all + low-rate benign traffic).
+- name: Start the macvlans, restart the agent
+  ansible.builtin.systemd:
+    name: "{{ item.name }}"
+    state: "{{ item.state }}"
+  loop:
+    - { name: bng-macvlans, state: started }
+    - { name: bng-subscriber-agent, state: restarted }
+
+- name: Ask the agent to bring every subscriber session up
+  ansible.builtin.shell: timeout 5 sh -c 'echo baseline > /run/bng-agent/cmd'
+  changed_when: true
+
+- name: Give DHCP/IPoE time to establish the sessions
+  ansible.builtin.wait_for: { timeout: 20 }
+  delegate_to: localhost
+  become: false

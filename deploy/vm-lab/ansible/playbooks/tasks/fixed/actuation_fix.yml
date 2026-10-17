@@ -1,0 +1,15 @@
+---
+# Remediation: clear the marker, restart the agent and ask it for all sessions.
+- name: Clear every reject marker for this subscriber
+  ansible.builtin.shell: rm -f {{ bng_radius_blocked_dir }}/{{ probe_mac }}
+  delegate_to: bng
+  changed_when: true
+
+- name: Restart the agent and bring the sessions back
+  ansible.builtin.shell: systemctl restart bng-subscriber-agent && sleep 2 && timeout 5 sh -c 'echo baseline > /run/bng-agent/cmd'
+  changed_when: true
+
+- name: Wait for the sessions
+  ansible.builtin.wait_for: { timeout: 20 }
+  delegate_to: localhost
+  become: false

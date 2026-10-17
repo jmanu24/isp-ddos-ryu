@@ -1,0 +1,14 @@
+---
+# Remediation: re-apply bng's masquerade + victim route, which are what a
+# reboot of bng used to lose.
+- name: Re-apply masquerade and route on bng
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+  loop: [bng-masquerade, backbone-route]
+  delegate_to: bng
+
+- name: Let ARP/conntrack settle
+  ansible.builtin.wait_for: { timeout: 5 }
+  delegate_to: localhost
+  become: false

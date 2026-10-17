@@ -1,0 +1,59 @@
+---
+# Subscriber traffic reaches victim through bng's backbone NIC (to pe's
+# monitored OVS bridge). Two things must exist for that, and BOTH used to be
+# lost on a reboot, leaving every subscriber without connectivity to victim:
+#   - the MASQUERADE rule (a one-off `iptables -A`, never persisted), and
+#   - the gateway-less route to victim's subnet (a oneshot that swallowed its
+#     own failure with `|| true` when the NIC was not up yet).
+# Both are now oneshot units that wait for the backbone NIC and re-apply
+# idempotently; playbooks/reconnect_fixed_domain.yml re-runs them on demand.
+# Subscriber traffic is masqueraded, not routed, because this domain's
+# detection does not need each subscriber's real source past bng: its flows
+# are observed at bng's conntrack, whose original tuple keeps the
+# pre-NAT subscriber address (see simulation/bng_flow_api.py).
+
+- name: Deploy the masquerade oneshot (persistent across reboots)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/bng-masquerade.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Masquerade subscriber traffic out the VLAN_BACKBONE interface
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'iptables -t nat -C POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s {{ bb_access_cidr }} -o {{ bng_backbone_iface }} -j MASQUERADE'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: bng_masq_unit
+
+- name: Deploy the route-to-victim oneshot (waits for the NIC, fails loudly)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/backbone-route.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route to victim (via pe's OVS bridge) over VLAN_BACKBONE
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/sh -c 'for i in $(seq 1 30); do ip link show {{ bng_backbone_iface }} >/dev/null 2>&1 && ip route replace {{ ent_dc_cidr }} dev {{ bng_backbone_iface }} && exit 0; sleep 1; done; exit 1'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: backbone_route_unit
+
+- name: Enable and (re)apply both oneshots
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: restarted
+  loop: [bng-masquerade.service, backbone-route.service]
