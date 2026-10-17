@@ -1,0 +1,581 @@
+% =====================================================================
+% CAPÍTULO V — DESARROLLO DEL PROYECTO, RESULTADOS
+% Requiere en el preámbulo: \input{resultados_macros}  (macros \pend, XX)
+% Paquetes usados: array, float, xcolor, url (\path), amsmath
+% =====================================================================
+\chapter{Desarrollo del Proyecto, Resultados}
+
+El presente capítulo expone la materialización del diseño metodológico descrito en el Capítulo~IV y los resultados obtenidos al aplicarlo. La Sección~\ref{sec:desarrollo_ingenieria} describe la implementación de la arquitectura, el laboratorio distribuido sobre el que se despliega, la plataforma experimental que controla las ejecuciones y registra la evidencia, las calibraciones y pruebas piloto que fijan los parámetros de la campaña, y la configuración final con la que se obtiene la muestra. La Sección~\ref{sec:resultados} presenta los indicadores organizados según la composición de los escenarios de ataque y concluye con el contraste de las hipótesis específicas y de la hipótesis general. La Sección~\ref{sec:discusion} interpreta dichos resultados frente a las hipótesis y a los antecedentes, y delimita su alcance.
+
+Los resultados reportados corresponden exclusivamente a ejecuciones realizadas con la configuración de laboratorio descrita en esta sección.
+
+% =====================================================================
+\section{Desarrollo del proyecto de ingeniería}
+\label{sec:desarrollo_ingenieria}
+% =====================================================================
+
+\subsection{De la arquitectura a la implementación}
+\label{subsec:arq_implementacion}
+
+La arquitectura propuesta en el Capítulo~III se implementa como un sistema de software único que integra los cuatro dominios considerados: enterprise, móvil, fijo y de interconexión. Cada componente lógico de la arquitectura se corresponde con un módulo de software con responsabilidad acotada, de modo que la telemetría de cada dominio se transforma en una representación común antes de llegar a las etapas de correlación, detección y decisión, y las acciones de mitigación se traducen nuevamente al mecanismo propio de cada dominio. La Tabla~\ref{tab:arq_implementacion} resume esta correspondencia.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{3.5cm} >{\arraybackslash}m{4.5cm} >{\arraybackslash}m{6cm} }
+        \hline
+        \textbf{Componente arquitectónico} & \textbf{Implementación} & \textbf{Función en el sistema} \\ \hline
+        Adaptador enterprise & Controlador Ryu con estadísticas de flujo OpenFlow & Obtiene contadores por flujo de los switches Open vSwitch de las sedes y los normaliza como observaciones por origen y destino \\ \hline
+        Adaptador móvil & xApp de telemetría E2SM-KPM y registro de conexiones del core & Combina los indicadores de radio por UE con la observación de flujos IP en la interfaz de usuario del UPF \\ \hline
+        Adaptador fijo & Registro de conexiones (\textit{conntrack}) del BNG, tabla de sesiones de accel-ppp y contadores nftables por suscriptor & Obtiene flujos por origen, destino, protocolo y puerto en el plano de datos del concentrador, los asocia con la sesión del suscriptor y mide la carga ofrecida por los suscriptores bloqueados \\ \hline
+        Adaptador de interconexión & Exportación NetFlow desde el router de borde & Proporciona registros de flujo agregados del tráfico que ingresa por el punto de interconexión \\ \hline
+        Módulo de correlación & Agregación por ventana de observaciones normalizadas & Agrupa las observaciones según la clave de correlación definida por el tratamiento \\ \hline
+        Motor de detección & Evaluación de umbrales por vector, criterios distribuidos y persistencia de activación & Calcula la puntuación de decisión y declara el incidente cuando se superan los criterios configurados durante el número de observaciones exigido en cada dominio \\ \hline
+        Motor de decisión & Selección de acciones por dominio & Determina el mecanismo de mitigación aplicable a cada origen implicado y su retiro \\ \hline
+        Actuadores & OpenFlow, E2SM-RC, terminación de sesión y BGP FlowSpec & Ejecutan la acción de mitigación en el plano de datos de cada dominio \\ \hline
+        \end{tabular}
+        \caption{Correspondencia entre los componentes de la arquitectura y su implementación}
+        \label{tab:arq_implementacion}
+    \end{center}
+\end{table}
+
+El motor de detección cubre tres vectores volumétricos, inundación TCP SYN, UDP e ICMP, y el criterio distribuido basado en el número de orígenes, la entropía de su distribución y la tasa agregada hacia el destino; este último, cuando los orígenes pertenecen a más de un dominio, se reporta como ataque distribuido multidominio. La detección de ataques de baja tasa (\textit{low-and-slow}) se retiró de la implementación, por lo que queda fuera del alcance de las evaluaciones de este capítulo. Para evitar que un pico aislado active una mitigación, cada dominio exige que la condición se observe un número mínimo de veces dentro de una ventana de tiempo antes de declarar el incidente (Tabla~\ref{tab:config_sistema}).
+
+Los parámetros de operación del sistema se concentran en un único archivo de configuración, \path{config/settings.py}, que define el intervalo de recolección, los umbrales de detección por vector, los criterios de detección distribuida, la persistencia de activación y los criterios de liberación de las acciones de mitigación. Esta centralización permite que todas las condiciones experimentales se ejecuten con el mismo código y que las diferencias entre ellas queden expresadas como diferencias explícitas de configuración.
+
+En particular, los dos tratamientos definidos en el diseño experimental, protección independiente por dominio (I) y coordinación multidominio (M), se distinguen por un único parámetro, \path{DETECTION_CROSS_DOMAIN_CORRELATION}. Cuando este parámetro toma el valor verdadero, el módulo de correlación agrupa las observaciones por dirección IP de destino, con independencia del dominio en que se originan; cuando toma el valor falso, la agrupación se realiza por el par (dominio, dirección IP de destino), de manera que cada dominio evalúa únicamente su propio tráfico. Los umbrales, los criterios distribuidos, los adaptadores y los actuadores permanecen idénticos en ambos tratamientos. En consecuencia, cualquier diferencia observada entre I y M se atribuye a la correlación entre dominios y no a diferencias de implementación.
+
+\subsection{Laboratorio distribuido}
+\label{subsec:laboratorio}
+
+El laboratorio se despliega sobre dos equipos físicos, cuyas características se detallan en la Tabla~\ref{tab:equipos_lab}. El servidor ejecuta el hipervisor VMware ESXi y aloja el sistema de control, el dominio móvil completo (núcleo, RIC, CU, DU y UE), que es el de mayor demanda computacional, mientras que la workstation ejecuta VMware Workstation Player sobre Windows y aloja la víctima, el router de borde enterprise, las sedes y los componentes de acceso fijo e interconexión.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{3cm} >{\arraybackslash}m{5.5cm} >{\arraybackslash}m{5.5cm} }
+        \hline
+        \textbf{Equipo} & \textbf{Características} & \textbf{Virtualización} \\ \hline
+        Servidor & HP ProLiant ML350 Gen9, 2 procesadores Intel Xeon E5-2680 v4 (28 núcleos, 56 hilos), 256~GB de RAM & VMware ESXi \\ \hline
+        Workstation & Intel Core i9-10900 (10 núcleos, 20 hilos), 96~GB de RAM & VMware Workstation Player sobre Windows \\ \hline
+        \end{tabular}
+        \caption{Equipos físicos del laboratorio}
+        \label{tab:equipos_lab}
+    \end{center}
+\end{table}
+
+Ambos equipos se conectan mediante un cable Ethernet directo de 1~Gbps dedicado al laboratorio. Sobre este enlace, las siete redes virtuales del laboratorio (VLAN) se transportan como segmentos VXLAN, uno por red, entre un nodo de retransmisión del lado del servidor y la pasarela de overlay del lado de la workstation, que se direccionan sobre la red 172.31.252.0/30. Así, las redes se extienden entre los dos hipervisores como si las máquinas virtuales compartieran un mismo dominio de capa~2. Dado que el encapsulado añade cabeceras, la red subyacente opera con una MTU de 1600 bytes y las máquinas virtuales conservan una MTU de 1500 bytes. Una versión previa del transporte empleaba un túnel WireGuard; se sustituyó por VXLAN directo sobre el cable. También se evaluó un troncal 802.1Q, que se descartó porque el controlador de red de la workstation elimina las etiquetas de las tramas recibidas. Sobre el transporte VXLAN, una única conexión TCP entre ambos equipos alcanza 725~Mbps, valor que acota la tasa agregada de tráfico que puede atravesar el laboratorio entre ambos equipos. La medición de capacidad por dominio se describe en la Subsección~\ref{subsec:calibracion}.
+
+La red de gestión (VLAN 800) es independiente de las redes de datos: todas las máquinas virtuales, incluidos los dos routers pares de interconexión, disponen de una interfaz de gestión desde la cual el sistema de control y la plataforma experimental establecen sus sesiones SSH, de modo que las órdenes y la telemetría de la plataforma no atraviesan los caminos de datos que se evalúan. El tráfico de datos de cada dominio converge en la víctima por un enlace punto a punto propio hacia el router de borde enterprise (\path{pe}): un enlace por cada dominio móvil, fijo y de interconexión, y las redes de las sedes y de la víctima en el propio \path{pe}. De este modo, ningún dominio alcanza a la víctima por la red de gestión ni por un camino que omita el conmutador monitoreado.
+
+La Tabla~\ref{tab:distribucion_vm} muestra la distribución de las 24 máquinas virtuales. La víctima, con dirección 10.55.0.100, expone un servicio HTTP en el puerto~80 y actúa a la vez como receptor del tráfico benigno, de forma que la disponibilidad del servicio legítimo se mide sobre el mismo destino que recibe el ataque.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{3cm} >{\arraybackslash}m{4.5cm} >{\arraybackslash}m{6.5cm} }
+        \hline
+        \textbf{Equipo} & \textbf{Máquina virtual} & \textbf{Función} \\ \hline
+        \multirow{7}{*}{\parbox{3cm}{Workstation}} & victim & Servidor HTTP objetivo y receptor del tráfico benigno \\ \cline{2-3}
+        & pe & Router de borde del dominio enterprise con Open vSwitch \\ \cline{2-3}
+        & ent-site-1 a ent-site-5 & Sedes del cliente enterprise \\ \cline{2-3}
+        & bng & Concentrador de acceso del dominio fijo (accel-ppp y FreeRADIUS) \\ \cline{2-3}
+        & suscriptor & Sesiones IPoE de los diez suscriptores del dominio fijo \\ \cline{2-3}
+        & br & Router de borde de interconexión (FRR, softflowd, nfcapd y FlowSpec) \\ \cline{2-3}
+        & peer-router, peer-router-2 & Routers pares de interconexión (BIRD; AS64512 y AS64513) \\ \hline
+        \multirow{6}{*}{\parbox{3cm}{Servidor}} & orchestrator & Sistema de detección y mitigación, y plataforma experimental \\ \cline{2-3}
+        & ric & Near-RT RIC de O-RAN SC y xApps \\ \cline{2-3}
+        & core5g & Core 5G Open5GS \\ \cline{2-3}
+        & ran, cu2 & CU de srsRAN (CU1 atiende a DU1--DU3 y CU2 a DU4--DU5) \\ \cline{2-3}
+        & du, du2 a du5 & Un DU de srsRAN por cada UE \\ \cline{2-3}
+        & ue, ue2 & Anfitriones de los cinco UE (UE1--UE3 y UE4--UE5) \\ \hline
+        \end{tabular}
+        \caption{Distribución de las máquinas virtuales en el laboratorio}
+        \label{tab:distribucion_vm}
+    \end{center}
+\end{table}
+
+\subsection{Plataforma experimental}
+\label{subsec:plataforma}
+
+La plataforma experimental comprende, por un lado, la instrumentación de los cuatro dominios, que provee la telemetría y los mecanismos de actuación, y, por otro, las herramientas que generan el tráfico, controlan las ejecuciones y registran la evidencia necesaria para calcular los indicadores.
+
+\subsubsection{Instrumentación de los dominios}
+
+En el dominio enterprise, cinco sedes se conectan al router de borde \path{pe}, donde un switch Open vSwitch controlado por Ryu concentra su tráfico hacia la red del proveedor. El controlador recolecta estadísticas de flujo con el intervalo de recolección configurado y, ante una decisión de mitigación, instala reglas OpenFlow de descarte para el origen implicado. Como el contador de un flujo reenviado no distingue el tipo de segmento TCP, cada regla de reenvío validada se acompaña de una regla gemela de mayor prioridad que solo coincide con segmentos SYN sin ACK, cuyos contadores permiten estimar la tasa de SYN de un origen único. Las reglas de descarte tienen una prioridad propia y se excluyen de la telemetría, para que sus contadores no se interpreten como un nuevo ataque. La detección en este dominio exige que la condición se observe en tres ciclos dentro de una ventana de 3~s.
+
+En el dominio móvil, el núcleo Open5GS da servicio a cinco UE emulados por srsRAN con separación CU/DU, de forma que cada UE es atendido por un DU distinto; dos CU reparten los cinco DU y los UE se alojan en dos máquinas virtuales. El Near-RT RIC de O-RAN SC aloja una xApp que recibe indicadores E2SM-KPM por UE, entre ellos la utilización de PRB en el enlace ascendente y el throughput ascendente. Dado que los indicadores de radio no identifican el destino del tráfico, un servicio local en el núcleo une la identidad del UE (obtenida de los registros del AMF y del SMF), la observación de flujos IP por UE y destino a partir del registro de conexiones sobre la interfaz de usuario y los indicadores KPM, y los expone al controlador mediante una única consulta HTTP por ciclo. Los ataques volumétricos se declaran a partir de los indicadores de radio (utilización de PRB y throughput ascendentes sostenidos), mientras que las inundaciones SYN se detectan con la tasa de nuevas conexiones TCP observada en el núcleo. La mitigación se ejecuta mediante una acción de control E2SM-RC (Style~2, Action~6) que limita la cuota de PRB del slice del DU que sirve al UE atacante; la xApp de actuación recibe la orden del motor de decisión, la transmite al RIC y confirma su aplicación a partir del acuse de control correspondiente. La liberación se produce cuando el UE deja de enviar tráfico hacia el destino y su throughput ascendente permanece por debajo del umbral de recuperación.
+
+En el dominio fijo, el concentrador \path{bng} establece sesiones IPoE con accel-ppp para diez suscriptores, cuya autenticación y contabilidad se realizan con FreeRADIUS. Cada suscriptor recibe siempre la misma dirección IP, determinada por su dirección MAC mediante un conjunto de direcciones de un solo elemento, de modo que el seguimiento de los bloqueos no se pierde cuando una sesión se restablece. La contabilidad RADIUS aporta identidad y volumen por sesión, pero no atributos de red ni de transporte. Por ello, la telemetría de este dominio se obtiene del registro de conexiones (\textit{conntrack}) del concentrador, que observa todo el tráfico de los suscriptores reenviado hacia la red del proveedor y conserva, en la dirección original de cada conexión, la dirección del suscriptor previa a la traducción de direcciones. Un servicio local en \path{bng} consulta ese registro cada 0,5~s, suma las entradas que comparten origen, destino, protocolo y puerto, calcula las tasas a partir de los contadores y cuenta los intentos de conexión TCP nuevos para medir las inundaciones SYN, cuyas entradas desaparecen antes de la siguiente consulta. Las asocia con la sesión correspondiente mediante la tabla de sesiones de accel-ppp, que proporciona el identificador de sesión y la dirección MAC del suscriptor, y el controlador las consulta una vez por ciclo. De este modo, los atributos utilizados por el detector proceden de observación del plano de datos y no del estado del generador de tráfico. Adicionalmente, \path{bng} mantiene contadores nftables por dirección MAC y protocolo sobre la interfaz de acceso, que miden la carga que un suscriptor sigue ofreciendo después de ser bloqueado. La mitigación consiste en la terminación de la sesión del suscriptor implicado y en su rechazo temporal en FreeRADIUS a partir de su dirección MAC, mediante un marcador por MAC que se evalúa de inmediato en la autorización, lo que impide el restablecimiento de la sesión durante el periodo de bloqueo. El bloqueo se libera cuando la carga ofrecida por el suscriptor permanece por debajo de la mitad del umbral que lo activó durante 10~s; si los contadores no están disponibles, se aplica la duración nominal del bloqueo.
+
+En el dominio de interconexión, el router de borde \path{br} establece sesiones eBGP con FRR frente a dos routers pares que ejecutan BIRD (AS64512 y AS64513); la serie de referencia actual dirige todos los flujos de interconexión al primer par. El tráfico que ingresa por la interconexión se observa mediante NetFlow, exportado con softflowd y recolectado con nfcapd, que rota sus archivos cada 2~s, por lo que las observaciones de este dominio llegan en ráfagas y la persistencia de activación se expresa en archivos de captura (dos observaciones en 6~s). La mitigación se realiza mediante reglas BGP FlowSpec anunciadas con ExaBGP, que las envía a \path{br}, donde se traducen a reglas de filtrado. Dado que la telemetría se captura antes de que la regla descarte el tráfico, la carga ofrecida sigue siendo visible durante el bloqueo, y la regla se retira cuando dicha carga permanece por debajo de la mitad del umbral que la activó durante 8~s. El controlador no verifica la instalación de la regla en el plano de datos, por lo que $t_I$ es no observable en este dominio y el efecto de la mitigación se determina con $t_E$.
+
+La Tabla~\ref{tab:instrumentacion} resume la telemetría y la actuación de cada dominio.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{2.3cm} >{\arraybackslash}m{3.8cm} >{\arraybackslash}m{3.8cm} >{\arraybackslash}m{3.8cm} }
+        \hline
+        \textbf{Dominio} & \textbf{Componentes} & \textbf{Telemetría} & \textbf{Actuación} \\ \hline
+        Enterprise & Open vSwitch, Ryu, 5 sedes & Estadísticas de flujo OpenFlow & Reglas OpenFlow de descarte \\ \hline
+        Móvil & Open5GS, srsRAN (2 CU, 5 DU), Near-RT RIC de O-RAN SC, 5 UE & E2SM-KPM por UE y registro de conexiones del núcleo & Control E2SM-RC sobre la cuota de PRB del slice \\ \hline
+        Fijo & accel-ppp (IPoE), FreeRADIUS, 10 suscriptores & Registro de conexiones del concentrador, tabla de sesiones y contadores nftables por MAC & Terminación de sesión y rechazo RADIUS por MAC \\ \hline
+        Interconexión & FRR, BIRD (2 pares), softflowd, nfcapd, ExaBGP & NetFlow & Reglas BGP FlowSpec \\ \hline
+        \end{tabular}
+        \caption{Telemetría y actuación implementadas en cada dominio}
+        \label{tab:instrumentacion}
+    \end{center}
+\end{table}
+
+\subsubsection{Generación de tráfico benigno y verdad de referencia}
+
+El tráfico benigno se genera con la herramienta \textit{benign-lab} a partir de planes reproducibles. Cada plan se construye con un generador versionado y una semilla maestra, de la cual se derivan semillas por dominio mediante SHA-256; el resultado se almacena como un archivo inmutable identificado por un \textit{hash} del plan. Así, dos ejecuciones con la misma semilla reproducen el mismo tráfico de fondo, y la identidad del plan queda registrada en cada ejecución, lo que permite verificar que las condiciones comparadas comparten efectivamente el mismo tráfico benigno. La campaña emplea tres planes de referencia, uno por semilla (1, 2 y 3), de 600~s de duración, materializados con el perfil \textit{classic} y las capacidades de la calibración (Subsección~\ref{subsec:calibracion}); cada plan puede ejecutarse con el pipeline de detección y mitigación activo o suspendido. La suspensión la gestiona una concesión temporal con caducidad y restauración automáticas, de modo que el pipeline no queda desactivado si la plataforma falla. Los eventos se ejecutan con una cuota de payload estricta: una transferencia que no alcanza los bytes previstos no se clasifica como completada, y se distinguen la cuota local completa, la transferencia parcial, la ausencia de payload y la recepción confirmada por el receptor.
+
+Antes de cada ejecución, la plataforma libera las restricciones que el controlador mantiene, restablece los presupuestos de los cinco UE, verifica que no queden reglas de descarte OpenFlow residuales en \path{pe}, reconecta las sesiones fijas sin sesión y exige diez direcciones IP estables que coincidan con las sesiones activas. Si queda una restricción no identificada, la ejecución no inicia. Con el pipeline activo, la suspensión se mantiene durante la preparación y se restaura justo antes del tráfico, de modo que la ventana medida conserva la detección y la mitigación y las restricciones generadas durante la ejecución forman parte del resultado.
+
+La misma herramienta construye la verdad de referencia que se utiliza para calcular las métricas de calidad de detección. Tras un periodo inicial de estabilización de 60~s, cada ejecución se divide en ventanas de 5~s, y cada unidad dominio--ventana se etiqueta como BENIGN, ATTACK o UNKNOWN. Los ataques se generan de forma externa a la herramienta, con tipo, generador, tasa, destino y duración idénticos en las etapas comparadas, y el operador marca su inicio y fin reales. Una ventana se etiqueta como ATTACK solo cuando la actividad del ataque está confirmada y el origen declarado se observa en la telemetría durante esa ventana; las ventanas previstas sin confirmación se etiquetan como UNKNOWN y se excluyen del cálculo, de modo que la incertidumbre sobre la verdad de referencia no se traslada como error del detector. Asimismo, solo se evalúan las ventanas completas con el pipeline activo y con cobertura de telemetría de todos los dominios; una ventana sin ciclo activo, con captura interrumpida o con fuentes no atribuibles permanece como UNKNOWN y no se cuenta como verdadero negativo. Las métricas de clasificación se calculan con las definiciones de la Tabla~3.5 sobre estas ventanas cubiertas; en particular, la tasa de falsos positivos corresponde a $100 \times \mathrm{FP}/(\mathrm{FP}+\mathrm{VN})$ sobre las unidades elegibles. Cuando un denominador es cero, la métrica se informa como no definida. Las etiquetas y el conocimiento del escenario que posee el generador se conservan fuera de las entradas del detector, y, en el dominio fijo, los atributos de protocolo, puerto y destino utilizados para clasificar proceden del registro de conexiones del concentrador descrito en la Subsección~\ref{subsec:plataforma}.
+
+La disponibilidad observada se calcula como $A = 100 \times T_{disp}/T_{obs}$, conforme a la Tabla~3.7, y se mide de forma independiente del sistema de detección. Dentro de la ventana bajo ataque, $T_{obs}$ corresponde al tiempo con cobertura válida de observación y $T_{disp}$ al tiempo en que el servicio cumple el criterio de servicio. Este criterio se evalúa en ventanas de 5~s y combina respuesta funcional y tiempo límite de la operación: una ventana cumple el criterio cuando la entrega útil, definida como el cociente entre los bytes de aplicación entregados a la víctima y la cuota prevista por el plan, alcanza el valor fijado en la configuración de la campaña (Subsección~\ref{subsec:config_final}) y las operaciones se completan dentro del tiempo límite. Las ventanas sin cobertura de observación se excluyen de $T_{obs}$ y se informan por separado, de modo que un hueco de instrumentación no se confunde con una falla del servicio. A partir de la misma instrumentación se obtienen el caudal útil legítimo, la latencia de las operaciones completadas y la pérdida de entrega.
+
+\subsubsection{Control de las ejecuciones y registro de evidencia}
+
+Las ejecuciones con ataque se controlan mediante el orquestador \path{run_vm_lab_trials.py}, que selecciona el escenario (ataque aislado en un dominio o ataque simultáneo multidominio) y el tratamiento (detección aislada o multidominio) mediante opciones independientes, lanza el generador de ataque desde una fuente real de cada dominio, consulta el estado del sistema y registra los instantes que definen los indicadores temporales. El cambio de tratamiento reinicia el controlador antes de iniciar la campaña y nunca durante una ejecución. Antes de cada ejecución se comprueban los servicios y la cadena radio del dominio móvil (con una recuperación automatizada acotada), se detienen los generadores residuales y se exige que el generador del ataque haya corrido: una ejecución sin detección solo se acepta como resultado cuando la tasa emitida observada supera un mínimo y el registro del generador no muestra fallos. Las ejecuciones inválidas se conservan y se excluyen del análisis, y cada campaña guarda un manifiesto de su condición experimental que impide reanudarla con otra configuración. Tras la liberación, una conexión TCP real al servicio de la víctima desde la fuente del ataque verifica la recuperación, y el estado de bloqueos activos publicado por el controlador verifica que la regla de la ejecución fue retirada. Para cada ejecución se registran los instantes definidos en la Tabla~3.6: el inicio observado del ataque $t_A$, registrado por separado del inicio programado; la primera alerta válida $t_D$; la emisión de la orden de mitigación $t_O$; su instalación confirmada $t_I$; el primer efecto de mitigación que cumple el criterio predefinido $t_E$; el fin observado del ataque $t_F$; y el instante $t_S$ desde el que el servicio cumple de forma estable el criterio de restablecimiento. A partir de ellos se calculan $T_D = t_D - t_A$, $T_O = t_O - t_D$, $T_I = t_I - t_O$, $T_M = t_E - t_D$ y $T_R = \max(0,\, t_S - t_F)$. Se distingue explícitamente entre la emisión de la mitigación y su efecto: la emisión de una orden no confirma por sí sola el bloqueo en el plano de datos, por lo que $t_E$ se determina a partir de la tasa atacante observada y no del registro de la orden. Cuando un actuador no expone confirmación de instalación, $t_I$ se registra como no observable. Una reducción del tráfico coincidente con el fin del ataque no se atribuye por sí sola a la defensa.
+
+El orden de ejecución de las condiciones se aleatoriza de forma reproducible dentro de cada bloque, y cada campaña se describe en un manifiesto que registra la configuración, las semillas y el identificador del plan benigno de cada ejecución. Adicionalmente, los componentes del sistema emiten registros de auditoría con marca temporal (LAB\_AUDIT) que permiten reconstruir la secuencia de eventos de cada ejecución y verificar los criterios de validez descritos en la Subsección~\ref{subsec:calidad}.
+
+Las series de ejecuciones benignas se programan en bloques de 18 pruebas, seis por semilla, con el perfil \textit{classic}, un orden intercalado de las semillas (1/2/3, 2/3/1, 3/1/2, 1/3/2, 3/2/1, 2/1/3) y una pausa de 60~s entre pruebas; cada copia conserva los bytes y el \textit{hash} del plan original. Las ejecuciones con ataque se evalúan en tres etapas sobre el mismo plan: tráfico benigno con el pipeline activo, para medir falsos positivos; tráfico benigno más ataque con el pipeline suspendido, para medir el impacto sin protección; y tráfico benigno más ataque con el pipeline activo, para medir el impacto y la protección. Como los ataques son externos, estas etapas requieren que el operador confirme el inicio y el fin de cada ataque y no se encadenan automáticamente.
+
+Dado que los indicadores temporales combinan eventos registrados en distintas máquinas virtuales, la plataforma verifica la sincronización de relojes antes de cada ejecución, después de preparar todos los agentes y antes del mensaje de inicio. Cada canal SSH se mide con cinco intercambios con identificador único; se retiene la muestra de menor tiempo de ida y vuelta, con una incertidumbre igual a la mitad de dicho tiempo. Se admite un desfase máximo de 250~ms entre contextos de ejecución: la verificación se aprueba cuando el desfase absoluto más la incertidumbre no excede el límite, se rechaza por desfase real cuando el desfase absoluto menos la incertidumbre lo excede, y en otro caso se declara no concluyente por latencia de comunicación y la ejecución no inicia hasta repetirla con menor carga.
+
+\subsection{Calibración y pruebas piloto}
+\label{subsec:calibracion}
+
+Antes de la campaña experimental se realizan tres actividades que fijan los parámetros con los que se obtiene la muestra: la calibración de capacidad, la calibración de umbrales y la prueba piloto de duración de ráfaga. Las ejecuciones realizadas en estas actividades no forman parte de la muestra.
+
+\subsubsection{Calibración de capacidad}
+
+La calibración de capacidad determina la tasa máxima de tráfico que cada dominio puede cursar sin pérdidas atribuibles al laboratorio. Este valor es necesario por dos razones: el tráfico benigno debe mantenerse por debajo de dicho límite, para que las pérdidas observadas durante un ataque se deban al ataque y no a la saturación del entorno, y la tasa de los ataques debe escalarse de modo que su efecto sobre la víctima sea observable. La medición se realiza de forma independiente por dominio, con todas sus fuentes concurrentes, dos flujos TCP por fuente hacia la víctima y repeticiones de 10~s en cada sentido, de las cuales se descartan los 2~s iniciales; se registra la tasa de payload entregado, con tres repeticiones por sentido y dos adicionales cuando la relación entre el máximo y el mínimo excede 1,3. La referencia de cada dominio es el menor de los valores medianos de subida y bajada. Durante la medición el pipeline de mitigación se suspende de forma temporal, manteniendo la telemetría, la correlación y el reenvío, y se restaura al finalizar; las muestras tomadas con el controlador activo, que desencadenaron mitigaciones reales, se descartaron. En el dominio enterprise se instalan reglas de reenvío temporales restringidas al puerto de la prueba, que mantienen el tráfico masivo en el plano de datos del conmutador. La Tabla~\ref{tab:capacidad} muestra las capacidades efectivas obtenidas; son tasas de payload TCP alcanzables con estos generadores y caminos, no la capacidad física del enlace ni la capacidad de pérdida UDP, y los dominios se midieron por separado, por lo que no garantizan picos simultáneos.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4cm} >{\centering\arraybackslash}m{3.5cm} >{\arraybackslash}m{6.5cm} }
+        \hline
+        \textbf{Segmento} & \textbf{Capacidad efectiva (Mbps)} & \textbf{Observación} \\ \hline
+        % Valores de deploy/vm-lab/tools/benign-lab/docs/CAPACITY_MEASUREMENTS.json (1 oct 2026)
+        Enterprise & 696,72 & Subida 696,7 y bajada 708,6~Mbps (medianas); 5 sedes \\ \hline
+        Móvil & 4,44 & Subida 4,4 y bajada 16,4~Mbps (medianas); 5 UE concurrentes \\ \hline
+        Fijo & 416,10 & Subida 441,3 y bajada 416,1~Mbps (medianas); 10 suscriptores \\ \hline
+        Interconexión & 200,86 & Subida 200,9 y bajada 479,6~Mbps (medianas); agregado de las fuentes del par \\ \hline
+        Transporte entre equipos & 725 & Una conexión TCP sobre el transporte VXLAN (Subsección~\ref{subsec:laboratorio}) \\ \hline
+        \end{tabular}
+        \caption{Capacidad efectiva por segmento del laboratorio}
+        \label{tab:capacidad}
+    \end{center}
+\end{table}
+
+Asimismo, la verificación de sincronización registra un desfase máximo de \RelojMaxDesfase~ms entre los \RelojContextos{} contextos de ejecución, valor inferior al límite de 250~ms establecido.
+
+\subsubsection{Calibración de umbrales}
+
+Los umbrales de detección por vector y el umbral de la puntuación de decisión se calibran exclusivamente con tráfico benigno. Para evitar que los umbrales se ajusten a las mismas ejecuciones con que se evalúan, las semillas de calibración se dividen en un conjunto de entrenamiento y uno de validación, ambos disjuntos de las semillas de la campaña. La unidad de evaluación es la ventana de 5~s por dominio, y solo se incluyen ventanas completas, benignas, fuera de la estabilización y con un ciclo activo que observó telemetría reciente. Con las decisiones registradas durante las ejecuciones benignas, se aplica a una lista de umbrales candidatos el producto de la puntuación, la confianza y el peso del vector; el candidato se elige con el conjunto de entrenamiento como el menor umbral cuya tasa de falsos positivos de decisión no supera el 1\,\% en cada dominio, sobre al menos 200 ventanas benignas en total y 20 por dominio, y solo ese candidato se consulta en el conjunto de validación. Este procedimiento reproduce las decisiones registradas y no vuelve a ejecutar el detector, por lo que un cambio en los umbrales de los vectores exige nuevas ejecuciones para confirmarse. Los umbrales aplicados se registran junto con el \textit{hash} de la configuración, y su modificación reinicia el controlador y solo se permite sin ejecuciones activas.
+
+La calibración utiliza \CalibVentanasEnt{} ventanas benignas de entrenamiento y \CalibVentanasVal{} de validación, y alcanza en validación una tasa de falsos positivos de decisión de \CalibFPRVal\,\%. Los umbrales resultantes se presentan en la Tabla~\ref{tab:config_sistema}.
+
+\subsubsection{Prueba piloto de duración de ráfaga}
+
+La prueba piloto determina la duración del ataque y de la ejecución que permiten observar la detección, la mitigación y la recuperación dentro de una misma ejecución, sin censura sistemática de los tiempos. Se realiza con tres semillas distintas de las de la campaña y con los escenarios de cada composición definida en la Tabla~\ref{tab:composicion_escenarios}. Como resultado, se fija una duración de ataque de \DuracionAtaque~s y una duración total de ejecución de \DuracionEjecucion~s. Asimismo, la variabilidad observada en el piloto se utiliza para fijar el número de repeticiones, el efecto mínimo de interés y el método de estimación antes de la campaña. La prueba piloto se emplea también para verificar que, en los escenarios multidominio bajo el umbral local, la tasa por dominio permanece efectivamente por debajo del umbral local de cada dominio y que el número de orígenes alcanza el mínimo requerido por el criterio de detección distribuida.
+
+\subsection{Configuración final de la campaña}
+\label{subsec:config_final}
+
+La Tabla~\ref{tab:config_sistema} reúne los parámetros del sistema de detección y mitigación, que son idénticos en ambos tratamientos salvo la clave de correlación descrita en la Subsección~\ref{subsec:arq_implementacion}. La Tabla~\ref{tab:config_final} presenta los parámetros del diseño de la campaña y los criterios fijados antes de su ejecución, conforme a las Subsecciones~3.2.7 y~4.6.3.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4.5cm} >{\centering\arraybackslash}m{2.5cm} >{\arraybackslash}m{7cm} }
+        \hline
+        \textbf{Parámetro} & \textbf{Valor} & \textbf{Significado} \\ \hline
+        Intervalo de recolección & 0,5~s & Periodo de consulta de la telemetría de los dominios \\ \hline
+        % Valores vigentes de config/settings.py (16 oct 2026); si se aplicó una calibración posterior, actualizar.
+        Umbral SYN & 10~pps & Tasa de segmentos TCP SYN por origen que activa el vector \\ \hline
+        Umbral UDP & 200~pps & Tasa de datagramas UDP por origen que activa el vector \\ \hline
+        Umbral ICMP & 150~pps & Tasa de mensajes ICMP por origen que activa el vector \\ \hline
+        Umbral de decisión & 1,5 & Puntuación mínima (puntuación $\times$ confianza $\times$ peso del vector) para declarar un incidente \\ \hline
+        Orígenes mínimos distribuidos & 5 & Número mínimo de orígenes para aplicar el criterio distribuido \\ \hline
+        Entropía mínima distribuida & 0,7 & Entropía de Shannon normalizada mínima de los orígenes \\ \hline
+        Tasa agregada distribuida & 300~pps & Tasa agregada mínima hacia el destino para el criterio distribuido \\ \hline
+        Factor multidominio & 1,3 & Factor aplicado a la puntuación cuando los orígenes pertenecen a varios dominios \\ \hline
+        Criterio KPM móvil & PRB~UL $\geq$ 45; thp~UL $\geq$ 500~kbps & Condición sostenida durante 3 reportes consecutivos \\ \hline
+        Activación en enterprise & 3 en 3~s & Ciclos con detección dentro de la ventana para declarar el incidente \\ \hline
+        Activación en móvil (SYN) & 3 en 3~s & Ciclos con detección dentro de la ventana para inundaciones SYN \\ \hline
+        Activación en fijo & 2 en 4~s & Muestras de flujo con detección dentro de la ventana \\ \hline
+        Activación en interconexión & 2 en 6~s & Archivos de captura NetFlow con detección dentro de la ventana \\ \hline
+        Liberación en enterprise y móvil & $<0{,}5\times$ umbral; 100 ciclos & Durante 100 ciclos (50~s): en enterprise, tasa del flujo bloqueado bajo la mitad del umbral que lo activó; en móvil, el UE deja de enviar hacia el destino \\ \hline
+        Liberación en fijo & $<0{,}5\times$ umbral; 10~s & Carga ofrecida por el suscriptor bloqueado; 60~s de bloqueo nominal si no hay lectura \\ \hline
+        Liberación en interconexión & $<0{,}5\times$ umbral; 8~s & Carga ofrecida hacia el destino bloqueado antes de retirar la regla FlowSpec \\ \hline
+        \end{tabular}
+        \caption{Parámetros del sistema de detección y mitigación}
+        \label{tab:config_sistema}
+    \end{center}
+\end{table}
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4.5cm} >{\centering\arraybackslash}m{2.5cm} >{\arraybackslash}m{7cm} }
+        \hline
+        \textbf{Parámetro} & \textbf{Valor} & \textbf{Significado} \\ \hline
+        Fracciones del umbral local ($f$) & \FraccionesF & Tasa por dominio relativa al umbral local en los escenarios bajo el umbral local \\ \hline
+        Semillas de la campaña & \NumSemillas & Planes benignos independientes que definen los bloques comparativos \\ \hline
+        Repeticiones & \NumRepeticiones & Ejecuciones por bloque y condición \\ \hline
+        Duración del ataque & \DuracionAtaque~s & Fijada en la prueba piloto \\ \hline
+        Duración de la ejecución & \DuracionEjecucion~s & Incluye estabilización, ataque y observación de la recuperación \\ \hline
+        Ventana de evaluación & 5~s & Unidad de etiquetado de la verdad de referencia \\ \hline
+        Estabilización inicial & 60~s & Periodo excluido de la evaluación \\ \hline
+        Criterio de servicio & \CriterioEntrega\,\%; \CriterioTiempo~ms & Entrega útil mínima y tiempo límite de la operación para considerar disponible una ventana \\ \hline
+        Criterio de mitigación efectiva & \CriterioMitigacion & Reducción requerida de la tasa atacante, duración y punto de medición que definen $t_E$ \\ \hline
+        Criterio de restablecimiento & \CriterioRestablecimiento & Condición estable del servicio que define $t_S$ \\ \hline
+        Nivel de significancia & \Alfa & Nivel de los intervalos de confianza de las diferencias \\ \hline
+        Método de estimación & \MetodoIC & Procedimiento para los intervalos de confianza de las diferencias emparejadas, compatible con la censura \\ \hline
+        Efecto mínimo de interés & \EfectoMinimo & Diferencia M--I mínima considerada relevante en el indicador principal \\ \hline
+        Comparaciones múltiples & \ComparacionesMultiples & Ajuste aplicado al contrastar HE1--HE5 \\ \hline
+        Margen de no inferioridad (HE2) & \MargenFPR~p.p. & Aumento máximo admisible de la FPR de M frente a I \\ \hline
+        \end{tabular}
+        \caption{Configuración de la campaña experimental}
+        \label{tab:config_final}
+    \end{center}
+\end{table}
+
+% =====================================================================
+\section{Resultados}
+\label{sec:resultados}
+% =====================================================================
+
+Los resultados se presentan en el orden siguiente. En primer lugar, se reporta la calidad de las ejecuciones, que determina la muestra efectivamente analizada. En segundo lugar, se presentan las falsas alarmas en condiciones benignas. A continuación, se exponen los indicadores de los escenarios con ataque, agrupados según las tres composiciones definidas en la Tabla~\ref{tab:composicion_escenarios}: vector único, multidominio sobre el umbral local y multidominio bajo el umbral local. Finalmente, se contrastan las hipótesis.
+
+La unidad de repetición es la ejecución completa; las ventanas, eventos y flujos se utilizan como observaciones internas para calcular los indicadores de cada ejecución y no se cuentan como repeticiones independientes. Para cada indicador se reportan el resumen por tratamiento y la diferencia emparejada M--I por bloque, acompañada de su intervalo de confianza obtenido con el método fijado en la Tabla~\ref{tab:config_final}. Los casos sin detección, mitigación efectiva o recuperación durante el seguimiento se registran como fallos o tiempos censurados, conservando su duración de observación; para cada indicador temporal se informa además la cobertura de éxito, es decir, la proporción de ejecuciones en que el evento ocurre.
+
+\subsection{Calidad de las ejecuciones}
+\label{subsec:calidad}
+
+Una ejecución se considera válida cuando cumple los criterios de la Tabla~\ref{tab:criterios_validez}. Las ejecuciones que no los cumplen se reportan, pero no se incluyen en el análisis; si una ejecución inválida pertenece a un par, se excluye el par completo, a fin de preservar el emparejamiento.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4.5cm} >{\arraybackslash}m{6.5cm} >{\centering\arraybackslash}m{3cm} }
+        \hline
+        \textbf{Criterio} & \textbf{Verificación} & \textbf{Ejecuciones que no lo cumplen} \\ \hline
+        Identidad del plan benigno & El \textit{hash} del plan coincide con el registrado en el manifiesto & \pend{XX} \\ \hline
+        Confirmación del ataque & El generador confirma la actividad del ataque en el intervalo previsto & \pend{XX} \\ \hline
+        Sincronización de relojes & Desfase entre contextos inferior a 250~ms & \pend{XX} \\ \hline
+        Cumplimiento del plan benigno & Relación entre tráfico emitido y previsto, y proporción de eventos completados dentro de su plazo & \pend{XX} \\ \hline
+        Disponibilidad de telemetría & Todos los adaptadores reportan durante la ejecución & \pend{XX} \\ \hline
+        Cobertura de las sondas & Cobertura de observación del servicio suficiente en la ventana bajo ataque & \pend{XX} \\ \hline
+        Recursos del laboratorio & Carga y CPU Ready dentro de los límites registrados en la calibración & \pend{XX} \\ \hline
+        Integridad del registro & Registros de auditoría completos para la reconstrucción de la ejecución & \pend{XX} \\ \hline
+        \end{tabular}
+        \caption{Criterios de validez de las ejecuciones}
+        \label{tab:criterios_validez}
+    \end{center}
+\end{table}
+
+De un total de \EjecTotales{} ejecuciones, \EjecValidas{} resultan válidas y \EjecInvalidas{} no cumplen al menos uno de los criterios; la exclusión de pares incompletos retira además \EjecExcluidas{} ejecuciones. La Tabla~\ref{tab:muestra_efectiva} muestra la muestra efectiva por composición de escenario y condición.
+
+Adicionalmente, antes de comparar los tratamientos se verifica que cada condición se aplicó según lo previsto, mediante los indicadores de la variable independiente definidos en la Tabla~3.4. La Tabla~\ref{tab:verificacion_tratamientos} presenta estos indicadores; caracterizan la operación de cada tratamiento y no constituyen, por sí solos, evidencia de eficacia.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{3.2cm} >{\arraybackslash}m{4.3cm} >{\centering\arraybackslash}m{2.6cm} >{\centering\arraybackslash}m{2.6cm} }
+        \hline
+        \textbf{Dimensión} & \textbf{Indicador} & \textbf{C3 (I)} & \textbf{C4 (M)} \\ \hline
+        Observabilidad & Cobertura de fuentes (\%) & \pend{XX} & \pend{XX} \\ \hline
+        Observabilidad & Retardo de adquisición (s) & \pend{XX} & \pend{XX} \\ \hline
+        Correlación & Dominios que participan en cada decisión & \pend{XX} & \pend{XX} \\ \hline
+        Detección & Versión de reglas y modo de decisión & \pend{XX} & \pend{XX} \\ \hline
+        Automatización & Acciones completadas (\%) & \pend{XX} & \pend{XX} \\ \hline
+        \end{tabular}
+        \caption{Verificación de la aplicación de los tratamientos}
+        \label{tab:verificacion_tratamientos}
+    \end{center}
+\end{table}
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4.5cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{2.5cm} }
+        \hline
+        \textbf{Composición} & \textbf{C2} & \textbf{C3 (I)} & \textbf{C4 (M)} & \textbf{Pares válidos} \\ \hline
+        Vector único & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        Multidominio sobre el umbral local & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        Multidominio bajo el umbral local & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        \end{tabular}
+        \caption{Muestra efectiva por composición de escenario y condición}
+        \label{tab:muestra_efectiva}
+    \end{center}
+\end{table}
+
+\subsection{Falsas alarmas en condiciones benignas}
+\label{subsec:falsas_alarmas}
+
+Las condiciones benignas con detector, C1-I y C1-M, permiten estimar las falsas alarmas de cada tratamiento sin la influencia del ataque. Se evalúan \VentanasBenignas{} ventanas benignas elegibles. La Tabla~\ref{tab:fpr_benigno} presenta la tasa de falsos positivos por dominio y tratamiento.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{2.4cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{2.3cm} >{\centering\arraybackslash}m{2.4cm} >{\centering\arraybackslash}m{3.2cm} }
+        \hline
+        \textbf{Dominio} & \textbf{Ventanas} & \textbf{FPR C1-I (\%)} & \textbf{FPR C1-M (\%)} & \textbf{Diferencia M--I [IC]} \\ \hline
+        Enterprise & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Móvil & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Fijo & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Interconexión & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \textbf{Total} & \pend{XX} & \FPRI & \FPRM & \FPRDifIC \\ \hline
+        \end{tabular}
+        \caption{Tasa de falsos positivos en condiciones benignas}
+        \label{tab:fpr_benigno}
+    \end{center}
+\end{table}
+
+La tasa total de falsos positivos es de \FPRI\,\% en C1-I y de \FPRM\,\% en C1-M. % Completar con una oración descriptiva, sin interpretación.
+
+\subsection{Escenarios de control: vector único}
+\label{subsec:res_vector_unico}
+
+En los escenarios de vector único, el ataque se origina en un solo dominio y supera el umbral local; por tanto, ambos tratamientos disponen de la misma evidencia para detectarlo. Esta composición cumple una función de control: una diferencia sistemática entre I y M se interpreta como sesgo del procedimiento y no como efecto de la coordinación. La ausencia de diferencia estadística, por su parte, no se interpreta como demostración de equivalencia. La Tabla~\ref{tab:res_vector_unico} presenta los indicadores.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4.6cm} >{\centering\arraybackslash}m{1.6cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{3.3cm} }
+        \hline
+        \textbf{Indicador} & \textbf{C2} & \textbf{C3 (I)} & \textbf{C4 (M)} & \textbf{Diferencia M--I [IC]} \\ \hline
+        \multicolumn{5}{l}{\textit{Detección y respuesta}} \\ \hline
+        Cobertura de detección (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_D$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        $T_O$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        $T_I$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Cobertura de mitigación (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_M$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Reducción del tráfico atacante (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \multicolumn{5}{l}{\textit{Calidad de detección}} \\ \hline
+        Exactitud (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Precisión (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Sensibilidad (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        F1-score (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \multicolumn{5}{l}{\textit{Continuidad y recuperación}} \\ \hline
+        Disponibilidad $A$ (\%) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Caudal útil (Mbps) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Latencia p50 / p95 (ms) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Pérdida de entrega (\%) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Cobertura de recuperación (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_R$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \end{tabular}
+        \caption{Indicadores en los escenarios de vector único}
+        \label{tab:res_vector_unico}
+    \end{center}
+\end{table}
+
+% Oraciones descriptivas por indicador. Ejemplo:
+% En los escenarios de vector único, el tiempo medio de detección es de \pend{XX}~s en C3 y de \pend{XX}~s en C4, con una diferencia pareada de \pend{XX}~s (IC: \pend{XX}; \pend{XX}).
+
+La Tabla~\ref{tab:res_vector_unico_vector} desagrega el tiempo de detección y la disponibilidad por vector de ataque y dominio de origen.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{2.2cm} >{\arraybackslash}m{2.5cm} >{\centering\arraybackslash}m{1.9cm} >{\centering\arraybackslash}m{1.9cm} >{\centering\arraybackslash}m{2.2cm} >{\centering\arraybackslash}m{2.2cm} }
+        \hline
+        \textbf{Vector} & \textbf{Dominio de origen} & \textbf{$T_D$ I (s)} & \textbf{$T_D$ M (s)} & \textbf{Disp. I (\%)} & \textbf{Disp. M (\%)} \\ \hline
+        TCP SYN & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        UDP & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        ICMP & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        \end{tabular}
+        \caption{Tiempo de detección y disponibilidad por vector en los escenarios de vector único}
+        \label{tab:res_vector_unico_vector}
+    \end{center}
+\end{table}
+
+\subsection{Escenarios multidominio sobre el umbral local}
+\label{subsec:res_sobre_umbral}
+
+En los escenarios multidominio sobre el umbral local, el ataque se distribuye entre varios dominios hacia un destino común y al menos uno de ellos supera por sí solo su umbral local. Ambos tratamientos disponen, por tanto, de evidencia suficiente para detectar el ataque, y la comparación caracteriza la atribución de los orígenes y la coordinación de la respuesta. La Tabla~\ref{tab:res_sobre_umbral} presenta los indicadores.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4.6cm} >{\centering\arraybackslash}m{1.6cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{3.3cm} }
+        \hline
+        \textbf{Indicador} & \textbf{C2} & \textbf{C3 (I)} & \textbf{C4 (M)} & \textbf{Diferencia M--I [IC]} \\ \hline
+        \multicolumn{5}{l}{\textit{Detección y respuesta}} \\ \hline
+        Cobertura de detección (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_D$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        $T_O$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        $T_I$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Cobertura de mitigación (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_M$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Reducción del tráfico atacante (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \multicolumn{5}{l}{\textit{Calidad de detección}} \\ \hline
+        Exactitud (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Precisión (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Sensibilidad (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        F1-score (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \multicolumn{5}{l}{\textit{Continuidad y recuperación}} \\ \hline
+        Disponibilidad $A$ (\%) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Caudal útil (Mbps) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Latencia p50 / p95 (ms) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Pérdida de entrega (\%) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Cobertura de recuperación (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_R$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \end{tabular}
+        \caption{Indicadores en los escenarios multidominio sobre el umbral local}
+        \label{tab:res_sobre_umbral}
+    \end{center}
+\end{table}
+
+% Oraciones descriptivas por indicador, sin interpretación.
+
+\subsection{Escenarios multidominio bajo el umbral local}
+\label{subsec:res_bajo_umbral}
+
+En los escenarios multidominio bajo el umbral local, la tasa en cada dominio corresponde a una fracción $f < 1$ del umbral local, mientras que la tasa agregada hacia la víctima alcanza el criterio de detección distribuida. En esta composición, ningún dominio dispone por sí solo de evidencia suficiente para declarar el incidente, por lo que constituye el contraste confirmatorio de la contribución de la correlación entre dominios. La Tabla~\ref{tab:res_bajo_umbral} presenta los indicadores agregados y la Tabla~\ref{tab:res_bajo_umbral_f} los desagrega según la fracción $f$.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{4.6cm} >{\centering\arraybackslash}m{1.6cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{1.8cm} >{\centering\arraybackslash}m{3.3cm} }
+        \hline
+        \textbf{Indicador} & \textbf{C2} & \textbf{C3 (I)} & \textbf{C4 (M)} & \textbf{Diferencia M--I [IC]} \\ \hline
+        \multicolumn{5}{l}{\textit{Detección y respuesta}} \\ \hline
+        Cobertura de detección (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_D$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        $T_O$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        $T_I$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Cobertura de mitigación (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_M$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Reducción del tráfico atacante (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \multicolumn{5}{l}{\textit{Calidad de detección}} \\ \hline
+        Exactitud (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Precisión (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Sensibilidad (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        F1-score (\%) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \multicolumn{5}{l}{\textit{Continuidad y recuperación}} \\ \hline
+        Disponibilidad $A$ (\%) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Caudal útil (Mbps) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Latencia p50 / p95 (ms) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Pérdida de entrega (\%) & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        Cobertura de recuperación (\%) & -- & \pend{XX} & \pend{XX} & -- \\ \hline
+        $T_R$ (s) & -- & \pend{XX} & \pend{XX} & \pend{XX} [\pend{XX}; \pend{XX}] \\ \hline
+        \end{tabular}
+        \caption{Indicadores en los escenarios multidominio bajo el umbral local}
+        \label{tab:res_bajo_umbral}
+    \end{center}
+\end{table}
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\centering\arraybackslash}m{1.3cm} >{\centering\arraybackslash}m{2.2cm} >{\centering\arraybackslash}m{2.2cm} >{\centering\arraybackslash}m{2cm} >{\centering\arraybackslash}m{2.2cm} >{\centering\arraybackslash}m{2.2cm} }
+        \hline
+        \textbf{$f$} & \textbf{Detección I (\%)} & \textbf{Detección M (\%)} & \textbf{$T_D$ M (s)} & \textbf{Disp. I (\%)} & \textbf{Disp. M (\%)} \\ \hline
+        \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} & \pend{XX} \\ \hline
+        \end{tabular}
+        \caption{Indicadores según la fracción del umbral local}
+        \label{tab:res_bajo_umbral_f}
+    \end{center}
+\end{table}
+
+% Nota para la redacción: si C3 no detecta en una ejecución, T_D se registra como censurado
+% en la duración del ataque; la diferencia M–I de T_D se calcula sobre los valores censurados
+% y se reporta junto con la proporción de ejecuciones con detección.
+
+\subsection{Contraste de hipótesis}
+\label{subsec:contraste}
+
+El contraste de cada hipótesis específica se realiza con la regla de decisión establecida en el diseño metodológico, aplicada a la diferencia emparejada M--I por bloque. Conforme a la Subsección~3.2.7, el contraste confirmatorio de HG y HE1--HE5 se realiza sobre la composición multidominio bajo el umbral local; la composición sobre el umbral local aporta evidencia complementaria y la de vector único opera como control. La interpretación considera intervalo, magnitud, cobertura y costos sobre el servicio legítimo, y la falta de evidencia de diferencia se distingue de una demostración de equivalencia. La Tabla~\ref{tab:contraste_hipotesis} resume las reglas de decisión y los resultados.
+
+\begin{table}[H]
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \fontsize{10}{12}\selectfont
+        \begin{tabular}{ >{\arraybackslash}m{1.7cm} >{\arraybackslash}m{2.5cm} >{\arraybackslash}m{4.8cm} >{\centering\arraybackslash}m{2.4cm} >{\centering\arraybackslash}m{1.9cm} }
+        \hline
+        \textbf{Hipó\-tesis} & \textbf{Indicador} & \textbf{Regla de decisión} & \textbf{Diferencia M--I [IC]} & \textbf{Resultado} \\ \hline
+        HE1 & Tiempo de detección $T_D$ y cobertura de detección & La diferencia M--I en $T_D$ es negativa y su IC excluye el cero, con cobertura de detección de M no inferior a la de I & \pend{XX} & \pend{XX} \\ \hline
+        HE2 & F1 y FPR & La diferencia M--I en F1 es positiva y su IC excluye el cero, y el límite superior del IC de la diferencia en FPR no supera el margen de \MargenFPR~p.p. & \pend{XX} & \pend{XX} \\ \hline
+        HE3 & Tiempo de mitigación efectiva $T_M$ y cobertura de mitigación & La diferencia M--I en $T_M$ es negativa y su IC excluye el cero, considerando la cobertura de casos mitigados & \pend{XX} & \pend{XX} \\ \hline
+        HE4 & Disponibilidad observada $A$ durante el ataque & La diferencia $A_M - A_I$ es positiva y su IC excluye el cero & \pend{XX} & \pend{XX} \\ \hline
+        HE5 & Tiempo de recuperación $T_R$ & La diferencia M--I en $T_R$ es negativa y su IC excluye el cero & \pend{XX} & \pend{XX} \\ \hline
+        HG & Disponibilidad observada $A$ (principal); continuidad y recuperación (complementarios) & La diferencia $A_M - A_I$ es positiva y su IC excluye el cero; los indicadores de continuidad y recuperación delimitan la interpretación de resiliencia & \pend{XX} & \pend{XX} \\ \hline
+        \end{tabular}
+        \caption{Contraste de hipótesis}
+        \label{tab:contraste_hipotesis}
+    \end{center}
+\end{table}
+
+% Reglas alineadas con 3.2.7 y Tabla 4.17. Si en el plan de análisis se fija un
+% efecto mínimo de interés, añadir a HG/HE4: "y la estimación alcanza \EfectoMinimo".
+% La columna "Resultado" se completa con "Sustentada" / "No sustentada" solo cuando
+% se disponga de los datos.
+
+% =====================================================================
+\section{Discusión de resultados}
+\label{sec:discusion}
+% =====================================================================
+
+\subsection{Interpretación frente a las hipótesis}
+\label{subsec:disc_hipotesis}
+% Pendiente de resultados. Interpretar cada hipótesis por composición; explicar
+% por qué I y M difieren (o no) en términos del mecanismo de correlación;
+% relacionar HE1–HE5 con HG.
+
+\subsection{Contraste con los antecedentes}
+\label{subsec:disc_antecedentes}
+% Pendiente de resultados. Comparar magnitudes de T_D, T_M y disponibilidad con los
+% antecedentes del Capítulo II, indicando diferencias de entorno y de métricas.
+
+\subsection{Limitaciones y amenazas a la validez}
+\label{subsec:disc_limitaciones}
+% Pendiente. Validez interna (carga del laboratorio, sincronización, verdad de
+% referencia), validez de constructo (definición de disponibilidad y de T_M),
+% validez externa (escala del laboratorio, vectores volumétricos, ausencia de ataques
+% de baja tasa y de capa de aplicación) y validez de conclusión (número de semillas).
+% Puntos concretos de la implementación vigente a considerar:
+%  - Interconexión: el controlador no verifica la instalación de FlowSpec (t_I no observable).
+%    La prueba del 9 oct halló que la cadena nft de flow usaba el hook input y no frenaba tráfico
+%    reenviado; el 16 oct se corrigió con cadenas base en forward e input que saltan a flowspecs
+%    (prueba UDP 1000 pps: tx de br hacia la víctima pasó de ~570 a 0 pps tras el anuncio).
+%  - Móvil: capacidad de 4,44 Mbps; la cadena radio es sensible y se recupera de forma acotada
+%    antes de cada ejecución.
+%  - Transporte compartido: la gestión (VLAN 800) y los datos comparten el cable Ethernet y la
+%    pasarela de overlay; la separación es lógica, no física.
+%  - Serie de referencia con un solo par de interconexión (peer-router-2 desplegado sin flujos).
+%  - Detección de baja tasa retirada; solo vectores volumétricos y criterio distribuido.
+
+\subsection{Implicancias para redes de Service Provider}
+\label{subsec:disc_implicancias}
+% Pendiente. Requisitos operativos de la coordinación multidominio: compartición de
+% telemetría entre dominios, gobierno de las acciones de mitigación y despliegue
+% gradual.

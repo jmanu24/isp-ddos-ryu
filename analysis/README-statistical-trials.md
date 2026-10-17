@@ -4,16 +4,6 @@
 el laboratorio de VMs real (`deploy/vm-lab`) y genera una tabla `Td`, `Tm` y
 `Tr` para Enterprise, Broadband, Mobile y Peering.
 
-**Esto es distinto de `run_basic_matrix.py`** (la matriz de "24 combinaciones
-básicas" -- 4 dominios × 3 vectores × DoS/DDoS -- que corre contra el
-laboratorio Mininet, no contra `deploy/vm-lab`). Comparten la idea de
-"4 dominios × 3 vectores", pero son dos suites distintas: `run_basic_matrix.py`
-distingue explícitamente DoS (una fuente) de DDoS (varias fuentes) como eje
-propio; `run_vm_lab_trials.py` no tiene ese eje -- cada dominio ya ataca con
-el número de fuentes que su propio diseño permite (ver más abajo), y el eje
-que sí tiene aquí es **modo de escenario** (`--mode`) × **modo de detección**
-(`--detection-mode`), no DoS/DDoS. No usar los resultados de uno para
-responder preguntas pensadas para el otro.
 
 - **Td (tiempo de detección):** inicio real del generador → primera línea
   `DETECTION: ATTACK_DETECTED` para ese dominio/destino en el log del
@@ -58,8 +48,9 @@ el log es la única fuente para ellos.
   HTTP exitosa NO prueba que la regla específica de este ensayo (TCP/443 o
   UDP/53, según el vector) haya sido retirada -- podría coexistir con un
   bloqueo obsoleto sobre ese 5-tuple exacto mientras el puerto 80 sigue
-  funcionando por otra vía. Se consulta `/api/blocks` del propio controlador
-  (desde `orchestrator`, loopback) y se verifica que no quede ningún bloqueo
+  funcionando por otra vía. El controlador publica sus bloqueos activos en
+  `/run/ddos-controller/active_blocks.json` (se reescribe en cada cambio); se
+  lee desde `orchestrator` y se verifica que no quede ningún bloqueo
   activo para (fuente, destino, puerto, protocolo) de este ensayo. `None` en
   cualquiera de las dos columnas (nunca `False`) significa que no hay fuente
   única que sondear (p. ej. la fila de Enterprise en `MULTIDOMAIN_FLOOD`,

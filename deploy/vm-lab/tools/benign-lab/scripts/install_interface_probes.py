@@ -7,7 +7,7 @@ sys.path.insert(0,str(root/'deploy/vm-lab'))
 from webtool.inventory import NODES,UE_NETNS,credentials_for
 payload=base64.b64encode((app/'benign_lab/interface_probe.py').read_bytes()).decode()
 def install(n):
- user,password=credentials_for(n.name);host=n.ip or '10.30.0.2';env=os.environ.copy();env['SSHPASS']=password
+ user,password=credentials_for(n.name);host=n.ip or '10.10.0.17';env=os.environ.copy();env['SSHPASS']=password
  code="from pathlib import Path;import base64; p=Path('/opt/benign-lab/interface_probe.py');p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(base64.b64decode('"+payload+"'));p.chmod(0o755)"
  command=('sudo -n ' if user!='root' else '')+'python3 -c '+shlex.quote(code)
  result=subprocess.run(['sshpass','-e','ssh','-T','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',user+'@'+host,command],env=env,capture_output=True,text=True,timeout=30)

@@ -13,7 +13,7 @@ from webtool.inventory import credentials_for
 orig=ssh._target
 def target(n):
  if n=='peer-router':
-  u,p=credentials_for(n);return '10.30.0.2',u,p
+  u,p=credentials_for(n);return '10.10.0.17',u,p
  return orig(n)
 ssh._target=target
 files=['connection_pool.py','supervisor.py','agent.py']

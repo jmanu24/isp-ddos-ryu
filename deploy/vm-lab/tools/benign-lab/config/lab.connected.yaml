@@ -122,12 +122,12 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.167
+    source_ip: 10.20.0.201
     interface: macvlan1
     expected_gateway: 10.20.0.1
     check_route: true
     access_mode: ipoe_namespace
-    session_id: ipoe1
+    session_id: ipoe0
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
@@ -144,12 +144,12 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.168
+    source_ip: 10.20.0.202
     interface: macvlan2
     expected_gateway: 10.20.0.1
     check_route: true
     access_mode: ipoe_namespace
-    session_id: ipoe3
+    session_id: ipoe1
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
@@ -166,7 +166,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.163
+    source_ip: 10.20.0.203
     interface: macvlan3
     expected_gateway: 10.20.0.1
     check_route: true
@@ -188,12 +188,12 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.169
+    source_ip: 10.20.0.204
     interface: macvlan4
     expected_gateway: 10.20.0.1
     check_route: true
     access_mode: ipoe_namespace
-    session_id: ipoe4
+    session_id: ipoe3
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
@@ -210,12 +210,12 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.170
+    source_ip: 10.20.0.205
     interface: macvlan5
     expected_gateway: 10.20.0.1
     check_route: true
     access_mode: ipoe_namespace
-    session_id: ipoe5
+    session_id: ipoe4
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
@@ -232,12 +232,12 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.171
+    source_ip: 10.20.0.206
     interface: macvlan6
     expected_gateway: 10.20.0.1
     check_route: true
     access_mode: ipoe_namespace
-    session_id: ipoe6
+    session_id: ipoe5
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
@@ -254,12 +254,12 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.172
+    source_ip: 10.20.0.207
     interface: macvlan7
     expected_gateway: 10.20.0.1
     check_route: true
     access_mode: ipoe_namespace
-    session_id: ipoe7
+    session_id: ipoe6
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
@@ -276,12 +276,12 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.162
+    source_ip: 10.20.0.208
     interface: macvlan8
     expected_gateway: 10.20.0.1
     check_route: true
     access_mode: ipoe_namespace
-    session_id: ipoe0
+    session_id: ipoe7
     observed_route: true
     observed_active_session: true
     auth_mode: password_env
@@ -298,7 +298,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.173
+    source_ip: 10.20.0.209
     interface: macvlan9
     expected_gateway: 10.20.0.1
     check_route: true
@@ -320,7 +320,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/agent.py
-    source_ip: 10.20.0.174
+    source_ip: 10.20.0.210
     interface: macvlan10
     expected_gateway: 10.20.0.1
     check_route: true

@@ -34,6 +34,9 @@ from typing import Iterable, Optional, Tuple
 DOMAINS = ("enterprise", "broadband", "mobile", "peering")
 VECTORS = ("TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "MULTIDOMAIN_FLOOD")
 TARGET_IP = "10.55.0.100"
+# Must match config/settings.py's ACTIVE_BLOCKS_STATE_PATH (duplicated, this
+# script runs on the control node and doesn't import the controller's config).
+ACTIVE_BLOCKS_STATE_PATH = "/run/ddos-controller/active_blocks.json"
 
 # 2nd review pass, finding 2: observed_pps sums tx_packets across EVERY
 # non-loopback interface on the host (Lab.sample_tx_packets()'s own
@@ -490,22 +493,27 @@ class Lab:
         trial's own attack triggered (TCP/443 or UDP/53, _EXPECTED_
         BLOCK_TUPLE above) was ever actually withdrawn; a stale/wrongly-
         scoped block on that exact 5-tuple could coexist with port 80
-        working fine. Queries the controller's own /api/blocks (web/
-        api.py, backed by OrchestrationController._sync_dashboard_blocks
-        -- the same source of truth `/api/blocks` returns to a human
-        looking at the dashboard) from orchestrator itself (loopback,
-        port 5000 -- see web/socket_server.py's own start_server()) and
-        checks whether a block matching this trial's own (src_ip, dst_ip,
-        dst_port, protocol) is still present. None (never a failure) when
-        src_ip is empty (a wildcard/distributed row -- see MULTIDOMAIN_
-        FLOOD's own enterprise source handling, no single 5-tuple to look
-        up) or the API couldn't be reached/parsed at all."""
+        working fine. Reads the active-block snapshot the controller's
+        OrchestrationController publishes on every change
+        (config.settings.ACTIVE_BLOCKS_STATE_PATH, a JSON list) from
+        orchestrator itself, and checks whether a block matching this
+        trial's own (src_ip, dst_ip, dst_port, protocol) is still
+        present. None (never a failure) when src_ip is empty (a
+        wildcard/distributed row -- see MULTIDOMAIN_FLOOD's own
+        enterprise source handling, no single 5-tuple to look up) or the
+        snapshot couldn't be read/parsed at all."""
         if self.dry_run or not src_ip:
             return None
         dst_port, protocol = self._EXPECTED_BLOCK_TUPLE.get(vector, (0, ""))
         try:
-            out = self.shell("orchestrator", "curl -s http://127.0.0.1:5000/api/blocks", timeout=10)
-            blocks = json.loads(out)
+            out = self.shell(
+                "orchestrator",
+                f"cat {ACTIVE_BLOCKS_STATE_PATH}",
+                timeout=10,
+            )
+            # ansible's default output prefixes a "host | CHANGED | rc=0 >>"
+            # header line; the JSON list starts at the first '['.
+            blocks = json.loads(out[out.index("["):])
         except (LabError, subprocess.TimeoutExpired, ValueError):
             return None
         if not isinstance(blocks, list):

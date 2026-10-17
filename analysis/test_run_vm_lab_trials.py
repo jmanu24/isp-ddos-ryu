@@ -565,5 +565,53 @@ class TrialParsingTests(unittest.TestCase):
         self.assertEqual([r.iteration for r in rows], [3])
 
 
+class MitigationWithdrawnProbeTests(unittest.TestCase):
+    """mitigation_withdrawn reads the controller's published active-block
+    snapshot (config.settings.ACTIVE_BLOCKS_STATE_PATH), including through
+    ansible's "host | CHANGED | rc=0 >>" output header."""
+
+    SNAPSHOT = (
+        'orchestrator | CHANGED | rc=0 >>\n'
+        '[{"src_ip": "10.70.0.11", "dst_ip": "10.55.0.100", "dst_port": 53, '
+        '"protocol": "UDP", "attack_type": "UDP_FLOOD", "domain": "enterprise"}]\n'
+    )
+
+    def _lab(self, output=None, error=None):
+        class FakeLab(Lab):
+            def __init__(self):
+                super().__init__(Path("."), Path("inventory.ini"), dry_run=False)
+                self.command = ""
+
+            def shell(self, host, command, **kwargs):
+                self.command = command
+                if error:
+                    raise error
+                return output
+
+        return FakeLab()
+
+    def test_block_still_present(self):
+        lab = self._lab(self.SNAPSHOT)
+        self.assertIs(lab.mitigation_withdrawn("UDP_FLOOD", "10.70.0.11", "10.55.0.100"), False)
+        self.assertIn("/run/ddos-controller/active_blocks.json", lab.command)
+
+    def test_block_withdrawn(self):
+        lab = self._lab("orchestrator | CHANGED | rc=0 >>\n[]\n")
+        self.assertIs(lab.mitigation_withdrawn("UDP_FLOOD", "10.70.0.11", "10.55.0.100"), True)
+
+    def test_other_source_does_not_count(self):
+        lab = self._lab(self.SNAPSHOT)
+        self.assertIs(lab.mitigation_withdrawn("UDP_FLOOD", "10.70.0.12", "10.55.0.100"), True)
+
+    def test_unreadable_snapshot_is_unknown_not_failure(self):
+        self.assertIsNone(self._lab(error=LabError("no such file")).mitigation_withdrawn(
+            "UDP_FLOOD", "10.70.0.11", "10.55.0.100"))
+        self.assertIsNone(self._lab("garbage").mitigation_withdrawn(
+            "UDP_FLOOD", "10.70.0.11", "10.55.0.100"))
+
+    def test_wildcard_source_is_skipped(self):
+        self.assertIsNone(self._lab(self.SNAPSHOT).mitigation_withdrawn("UDP_FLOOD", "", "10.55.0.100"))
+
+
 if __name__ == "__main__":
     unittest.main()

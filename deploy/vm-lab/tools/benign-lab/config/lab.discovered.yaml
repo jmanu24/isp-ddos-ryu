@@ -108,7 +108,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.19
+    source_ip: 10.20.0.201
     interface: macvlan1
     expected_gateway: 10.20.0.1
     check_route: true
@@ -125,7 +125,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.20
+    source_ip: 10.20.0.202
     interface: macvlan2
     expected_gateway: 10.20.0.1
     check_route: true
@@ -142,7 +142,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.12
+    source_ip: 10.20.0.203
     interface: macvlan3
     expected_gateway: 10.20.0.1
     check_route: true
@@ -159,7 +159,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.13
+    source_ip: 10.20.0.204
     interface: macvlan4
     expected_gateway: 10.20.0.1
     check_route: true
@@ -176,7 +176,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.14
+    source_ip: 10.20.0.205
     interface: macvlan5
     expected_gateway: 10.20.0.1
     check_route: true
@@ -193,7 +193,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.15
+    source_ip: 10.20.0.206
     interface: macvlan6
     expected_gateway: 10.20.0.1
     check_route: true
@@ -210,7 +210,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.16
+    source_ip: 10.20.0.207
     interface: macvlan7
     expected_gateway: 10.20.0.1
     check_route: true
@@ -227,7 +227,7 @@ nodes:
     identity_file: null
     python: /usr/bin/python3
     agent_path: /opt/benign-lab/benign_lab/agent.py
-    source_ip: 10.20.0.17
+    source_ip: 10.20.0.208
     interface: macvlan8
     expected_gateway: 10.20.0.1
     check_route: true
