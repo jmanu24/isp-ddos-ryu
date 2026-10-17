@@ -1,0 +1,63 @@
+---
+# test_mobile_actuation.yml -- mobile-domain ACTUATION test with the radio
+# KPM shown before, during and after it. Standalone ("tests only": it assumes
+# the domain is already up) and also imported by reconnect_mobile_domain.yml.
+#
+#   ansible-playbook playbooks/test_mobile_actuation.yml
+#   ansible-playbook playbooks/test_mobile_actuation.yml -e '{"test_ues": ["ue1","ue4"]}'
+#
+# What it does, per UE (default ue1):
+#   idle    UE quiet                         -> reference floor
+#   before  UL flood running, no RC action   -> what the UE pushes
+#   during  RC block through rc_actuator     -> PRB quota squeezed (1 %)
+#   after   RC unblock, flood still running  -> quota restored (100 %)
+# and prints RRU.PrbUsedUl / DRB.UEThpUl / DRB.UEThpDl for every sample plus
+# per-phase averages, then asserts: before >= min_before_kbps,
+# during <= max_during_ratio x before, after >= min_after_ratio x before.
+# The block/unblock is always undone and the flood always stopped, even when
+# an assertion fails.
+#
+# Preconditions: RAN up (see reconnect_mobile_domain.yml), KPM bridge and RC
+# actuator running on the RIC, victim reachable from the UEs.
+#
+# The test drives the actuator directly (POST /rc) with attack_type
+# ACTUATION_TEST; it does NOT go through the controller. The flood stays below
+# the controller's KPM detection threshold (PRB >= 45 AND thp >= 500 kbps) so
+# it does not also react. 100 pps x 400 B is ~0.4 Mbps; 500 pps already saturated
+# the UE's PRBs (50) at ~4 Mbps and the controller throttled the UE mid-test,
+# which contaminated the 'before' phase. Raise flood_pps only to exercise the
+# controller's own detection on purpose.
+#
+# Tunables (-e): test_ues, flood_pps (100), flood_bytes (400), flood_port
+# (9999), idle_secs (6), phase_secs (12), sample_every (2), settle_secs (5),
+# min_before_kbps (100), max_during_ratio (0.5), min_after_ratio (0.5).
+
+- name: Mobile actuation test (KPM before / during / after)
+  hosts: ric_oran_sc
+  gather_facts: false
+  tags: [tests, actuation]
+  vars:
+    test_ues: [ue1]
+    flood_pps: 100
+    flood_bytes: 400
+    flood_port: 9999
+    idle_secs: 6
+    phase_secs: 12
+    sample_every: 2
+    settle_secs: 5
+    min_before_kbps: 100
+    max_during_ratio: 0.5
+    min_after_ratio: 0.5
+    # flood outlives all phases: idle excluded, 3 phases + 2 settles + margin
+    flood_total_secs: "{{ (3 * (phase_secs | int)) + (3 * (settle_secs | int)) + 20 }}"
+    ue_table:
+      ue1: { imsi: "001010123456780", host: ue,  netns: ue1 }
+      ue2: { imsi: "001010123456790", host: ue,  netns: ue2 }
+      ue3: { imsi: "001010123456791", host: ue,  netns: ue3 }
+      ue4: { imsi: "001010123456792", host: ue2, netns: ue4 }
+      ue5: { imsi: "001010123456793", host: ue2, netns: ue5 }
+  tasks:
+    - name: Run the actuation test for each selected UE
+      ansible.builtin.include_tasks: tasks/mobile_actuation_one_ue.yml
+      vars: { ue_name: "{{ item }}" }
+      loop: "{{ test_ues }}"

@@ -1,0 +1,14 @@
+---
+# Remediation for orchestrator. ryu-manager is only started if stopped, never
+# restarted: a restart drops every domain's controller state (active blocks).
+- name: Start nfcapd and the controller if stopped
+  ansible.builtin.systemd: { name: "{{ item }}", state: started }
+  loop: [nfcapd, ryu-manager]
+
+- name: Restart exabgp (rebuilds its session with flow on br)
+  ansible.builtin.systemd: { name: exabgp, state: restarted }
+
+- name: Give the session time to come up
+  ansible.builtin.wait_for: { timeout: 8 }
+  delegate_to: localhost
+  become: false

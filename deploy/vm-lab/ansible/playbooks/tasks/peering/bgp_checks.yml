@@ -1,0 +1,13 @@
+---
+# Checks: both eBGP neighbours of br are Established (any failure triggers bgp_fix.yml).
+- name: Both eBGP neighbours are Established
+  ansible.builtin.shell: vtysh -c 'show bgp summary json'
+  register: bgp
+  until: >-
+    (bgp.stdout | from_json).ipv4Unicast.peers is defined and
+    (bgp.stdout | from_json).ipv4Unicast.peers | dict2items
+      | selectattr('value.state', 'equalto', 'Established') | list | length
+      == (groups['peer_router'] | length)
+  retries: 10
+  delay: 3
+  changed_when: false

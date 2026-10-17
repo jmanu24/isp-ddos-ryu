@@ -1,0 +1,177 @@
+---
+# reconnect_peering_domain.yml -- one-shot, idempotent reconnection of the
+# Peering (External Peering / BGP interconnection) domain, validating each
+# piece before moving on, and finishing with two end-to-end proofs on `br`:
+#
+#   br -> peer-router(s) [each pings + opens TCP/80 to victim from its own
+#   data address] -> orchestrator (nfcapd + exabgp + ryu-manager)
+#      -> BGP sessions -> NetFlow arrives -> FlowSpec installs AND drops
+#         forwarded traffic AND is withdrawn
+#
+#   ansible-playbook playbooks/reconnect_peering_domain.yml
+#
+# Vars / flags:
+#   -e power_cycle=true    -> first power OFF br + both peers (Workstation
+#                             bridge), then bring them up in order. Default
+#                             false: each VM is only ensured powered ON.
+#   --tags <tag>           -> re-run just part: power, br, peers, orchestrator,
+#                             bgp, netflow, flowspec
+#   --skip-tags traffic    -> skip the two end-to-end checks that send test
+#                             traffic (netflow, flowspec); keep service checks
+#
+# Retries: every validation stage runs through tasks/retry_stage.yml. When a
+# stage fails, its remediation (tasks/peering/<stage>_fix.yml: restart the
+# service involved, re-create the route, re-attach the FlowSpec hooks, ...) is
+# applied and the stage is run again, up to max_attempts times in total
+# (default 3, -e max_attempts=5; pause between attempts -e retry_delay=10).
+# Only when the last attempt fails does the play fail, with that last error.
+# Remediation never restarts ryu-manager (that would drop the controller's
+# active blocks); it is only started if stopped.
+#
+# The end-to-end checks use UDP ports 39997 (NetFlow) and 39998 (FlowSpec)
+# toward victim, nothing listens there, at ~50 pps, far below every detector
+# threshold, so the running controller does not react to them. The FlowSpec
+# test route is withdrawn in an `always` block even if a check fails.
+# It talks to exabgp directly (FIFO), not through the controller.
+#
+# Prerequisites NOT handled here: pe and victim must be up (traffic crosses
+# them), and the 10.55.0.0/24 route on br is (re)created if missing.
+
+######################################################################
+# 0 -- power (Workstation bridge)
+######################################################################
+- name: Power state of the peering VMs
+  hosts: localhost
+  gather_facts: false
+  become: false
+  tags: [power]
+  vars:
+    power_cycle: false
+    ws_config: "{{ playbook_dir }}/../../../../.runtime/benign-lab/workstation.json"
+  tasks:
+    - name: Power OFF peers and br (power_cycle=true)
+      ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: "{{ item }}", pow_ip: "{{ hostvars[item].ansible_host }}", pow_action: "off" }
+      loop: [peer-router-2, peer-router, br]
+      when: power_cycle | bool
+
+    - name: Ensure pe and victim are on (every test packet crosses them)
+      ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: "{{ item }}", pow_ip: "{{ hostvars[item].ansible_host }}" }
+      loop: [pe, victim]
+
+######################################################################
+# 1 -- br: FRR, flow, softflowd, routes, FlowSpec hook chains
+######################################################################
+- name: "1/5  br -- power on + services, victim route, FlowSpec hooks"
+  hosts: br
+  gather_facts: false
+  tags: [br]
+  vars:
+    ws_config: "{{ playbook_dir }}/../../../../.runtime/benign-lab/workstation.json"
+    br_services: [central-server-addr, frr, softflowd-peering, flow]
+  tasks:
+    - ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: br, pow_ip: "{{ ansible_host }}" }
+
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: br
+        stage_checks: "{{ playbook_dir }}/tasks/peering/br_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/peering/br_fix.yml"
+        attempt: 1
+
+######################################################################
+# 2 -- peer routers: bird, route + connectivity to victim
+######################################################################
+- name: "2/5  peer routers -- power on, bird, connectivity to victim"
+  hosts: peer_router
+  gather_facts: false
+  tags: [peers]
+  vars:
+    ws_config: "{{ playbook_dir }}/../../../../.runtime/benign-lab/workstation.json"
+  tasks:
+    - ansible.builtin.include_tasks: tasks/power_on_workstation.yml
+      vars: { pow_vm: "{{ inventory_hostname }}", pow_ip: "{{ ansible_host }}" }
+
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: "{{ inventory_hostname }}"
+        stage_checks: "{{ playbook_dir }}/tasks/peering/peers_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/peering/peers_fix.yml"
+        attempt: 1
+
+######################################################################
+# 3 -- orchestrator: nfcapd, exabgp -> flow session, ryu-manager
+######################################################################
+- name: "3/5  orchestrator -- nfcapd, exabgp, ryu-manager"
+  hosts: orchestrator
+  gather_facts: false
+  tags: [orchestrator]
+  tasks:
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: orchestrator
+        stage_checks: "{{ playbook_dir }}/tasks/peering/orchestrator_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/peering/orchestrator_fix.yml"
+        attempt: 1
+
+######################################################################
+# 4 -- BGP sessions br <-> peers
+######################################################################
+- name: "4/5  br -- eBGP sessions with both peers"
+  hosts: br
+  gather_facts: false
+  tags: [bgp]
+  tasks:
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: bgp
+        stage_checks: "{{ playbook_dir }}/tasks/peering/bgp_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/peering/bgp_fix.yml"
+        attempt: 1
+
+######################################################################
+# 5 -- end-to-end proofs: NetFlow arrives, FlowSpec installs/drops/withdraws
+######################################################################
+- name: "5/5  end-to-end: NetFlow + FlowSpec"
+  hosts: peer-router
+  gather_facts: false
+  tags: [traffic]
+  vars:
+    victim: "{{ victim_ent_dc_addr }}"
+    peer_src_ip: 10.30.0.2   # peer-router's data address (the source NetFlow must show)
+    netflow_port: 39997
+    flowspec_port: 39998
+    probe_secs: 4
+    flowspec_route: >-
+      flow route { match { destination {{ victim_ent_dc_addr }}/32; protocol udp;
+      destination-port ={{ flowspec_port }}; } then { discard; } }
+  tasks:
+    - name: Peer can reach the victim
+      ansible.builtin.command: ping -c 2 -W 2 {{ victim }}
+      changed_when: false
+      tags: [netflow, flowspec]
+
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: netflow
+        stage_checks: "{{ playbook_dir }}/tasks/peering/netflow_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/peering/netflow_fix.yml"
+        attempt: 1
+      tags: [netflow]
+
+    - ansible.builtin.include_tasks: tasks/retry_stage.yml
+      vars:
+        stage_name: flowspec
+        stage_checks: "{{ playbook_dir }}/tasks/peering/flowspec_checks.yml"
+        stage_fix: "{{ playbook_dir }}/tasks/peering/flowspec_fix.yml"
+        attempt: 1
+      tags: [flowspec]
+
+    - name: Peering domain summary
+      ansible.builtin.debug:
+        msg: >-
+          Peering domain reconnected: services, eBGP (both peers), connectivity
+          to victim, NetFlow and FlowSpec install/enforce/withdraw all validated.
+      tags: [netflow, flowspec]

@@ -1,0 +1,95 @@
+---
+# FlowSpec end to end: install a test discard route, prove br drops forwarded
+# traffic with it, withdraw it. The withdraw runs in `always`, also when a
+# check fails or the attempt is retried.
+- name: FlowSpec | install, enforce and withdraw a test rule
+  block:
+    - name: FlowSpec | br egress counter before the control probe
+      ansible.builtin.shell: cat /sys/class/net/{{ br_backbone_iface }}/statistics/tx_packets
+      delegate_to: br
+      register: tx_a0
+      changed_when: false
+
+    - name: FlowSpec | control probe (no rule yet) must be forwarded
+      ansible.builtin.command: timeout {{ probe_secs }} hping3 --udp -p {{ flowspec_port }} -i u20000 -q {{ victim }}
+      register: probe_a
+      failed_when: probe_a.rc not in [0, 124]
+      changed_when: false
+
+    - name: FlowSpec | br egress counter after the control probe
+      ansible.builtin.shell: cat /sys/class/net/{{ br_backbone_iface }}/statistics/tx_packets
+      delegate_to: br
+      register: tx_a1
+      changed_when: false
+
+    - name: FlowSpec | announce the discard route through exabgp
+      ansible.builtin.shell: echo "announce {{ flowspec_route }}" > /run/exabgp/exabgp.in
+      delegate_to: orchestrator
+      changed_when: true
+
+    - name: FlowSpec | rule appears in br's nftables chain
+      ansible.builtin.shell: >-
+        nft list chain inet flowspecs flowspecs
+        | grep -c 'ip daddr {{ victim }} udp dport {{ flowspec_port }} drop'
+      delegate_to: br
+      register: rule_in
+      until: rule_in.stdout | trim | int >= 1
+      retries: 15
+      delay: 1
+      changed_when: false
+
+    - name: FlowSpec | br egress counter before the enforced probe
+      ansible.builtin.shell: cat /sys/class/net/{{ br_backbone_iface }}/statistics/tx_packets
+      delegate_to: br
+      register: tx_b0
+      changed_when: false
+
+    - name: FlowSpec | enforced probe (rule active) must be dropped at br
+      ansible.builtin.command: timeout {{ probe_secs }} hping3 --udp -p {{ flowspec_port }} -i u20000 -q {{ victim }}
+      register: probe_b
+      failed_when: probe_b.rc not in [0, 124]
+      changed_when: false
+
+    - name: FlowSpec | br egress counter after the enforced probe
+      ansible.builtin.shell: cat /sys/class/net/{{ br_backbone_iface }}/statistics/tx_packets
+      delegate_to: br
+      register: tx_b1
+      changed_when: false
+
+    - name: FlowSpec | assert the rule really drops forwarded traffic
+      vars:
+        forwarded_without: "{{ (tx_a1.stdout | int) - (tx_a0.stdout | int) }}"
+        forwarded_with: "{{ (tx_b1.stdout | int) - (tx_b0.stdout | int) }}"
+      ansible.builtin.assert:
+        that:
+          - forwarded_without | int >= 100
+          - (forwarded_with | int) * 5 <= (forwarded_without | int)
+        success_msg: >-
+          FlowSpec OK: br forwarded {{ forwarded_without }} packets without the rule
+          and {{ forwarded_with }} with it.
+        fail_msg: >-
+          FlowSpec rule is installed but not dropping: forwarded {{ forwarded_without }}
+          packets without the rule and {{ forwarded_with }} with it (need >=100 and a
+          5x reduction). Check the fs_forward hook chain on br.
+  always:
+    - name: FlowSpec | withdraw the test route (always)
+      ansible.builtin.shell: echo "withdraw {{ flowspec_route }}" > /run/exabgp/exabgp.in
+      delegate_to: orchestrator
+      changed_when: true
+
+    - name: FlowSpec | rule is removed from br's chain
+      ansible.builtin.shell: >-
+        nft list chain inet flowspecs flowspecs
+        | grep -c 'udp dport {{ flowspec_port }} drop' || true
+      delegate_to: br
+      register: rule_out
+      until: rule_out.stdout | trim | int == 0
+      retries: 15
+      delay: 1
+      changed_when: false
+
+    - name: FlowSpec | assert withdrawal
+      ansible.builtin.assert:
+        that: rule_out.stdout | trim | int == 0
+        success_msg: "FlowSpec withdraw OK: test rule removed from br."
+        fail_msg: "Test FlowSpec rule is STILL in br's chain; remove it by hand."

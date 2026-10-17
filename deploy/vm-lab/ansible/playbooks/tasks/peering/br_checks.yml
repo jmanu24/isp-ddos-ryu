@@ -1,0 +1,26 @@
+---
+# Checks for br (run via ../retry_stage.yml; any failure triggers br_fix.yml).
+- name: br services are active
+  ansible.builtin.command: systemctl is-active {{ item }}
+  loop: "{{ br_services }}"
+  changed_when: false
+
+- name: Forwarding is enabled (br routes peering -> victim)
+  ansible.builtin.command: sysctl -n net.ipv4.ip_forward
+  register: fwd
+  changed_when: false
+  failed_when: fwd.stdout | trim != '1'
+
+- name: Route to victim's subnet exists on the backbone NIC
+  ansible.builtin.command: ip route show {{ ent_dc_cidr }} dev {{ br_backbone_iface }}
+  register: victim_route
+  changed_when: false
+  failed_when: victim_route.stdout | trim == ''
+
+- name: FlowSpec hook chains (forward + input) jump to flowspecs
+  ansible.builtin.shell: |
+    for h in forward input; do
+      nft list chain inet flowspecs fs_$h 2>/dev/null | grep -q 'jump flowspecs' || exit 1
+    done
+    nft list chain inet flowspecs fs_forward | grep -q 'hook forward'
+  changed_when: false

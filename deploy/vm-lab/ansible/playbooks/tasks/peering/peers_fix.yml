@@ -1,0 +1,10 @@
+---
+# Remediation for one peer: restart bird so it re-establishes eBGP with br
+# and re-learns the victim route.
+- name: Restart bird
+  ansible.builtin.systemd: { name: bird, state: restarted }
+
+- name: Give the eBGP session time to come up
+  ansible.builtin.wait_for: { timeout: 8 }
+  delegate_to: localhost
+  become: false

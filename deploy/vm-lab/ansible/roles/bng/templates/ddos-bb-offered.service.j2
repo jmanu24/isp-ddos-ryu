@@ -1,0 +1,14 @@
+# Managed by Ansible (roles/bng)
+[Unit]
+Description=Per-subscriber offered-load counters on the access NIC (Broadband release hysteresis)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/ddos-bb-offered.nft
+ExecStop=/usr/sbin/nft delete table netdev {{ bng_offered_nft_table }}
+
+[Install]
+WantedBy=multi-user.target

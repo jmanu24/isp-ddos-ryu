@@ -1,0 +1,51 @@
+---
+# power_on_workstation.yml -- power ON one VMware Workstation Player VM via
+# the loopback Workstation bridge (.runtime/benign-lab/workstation.json: url
+# + token, the same API webtool/workstation_ops.py uses) and wait for SSH.
+# Idempotent: a VM already poweredOn is left alone. govc cannot reach these
+# VMs (they do not live on the ESXi host).
+#
+# Vars:
+#   pow_vm  -- VM name as the bridge knows it (e.g. br, peer-router)
+#   pow_ip  -- its management IP, for the SSH readiness wait
+#   pow_action -- "on" (default) or "off" (skips the SSH wait)
+#   ws_config  -- path of workstation.json
+#
+# Runs on the control node (delegate_to: localhost, become: false).
+
+- name: "power {{ pow_vm }} | {{ pow_action | default('on') }} via the Workstation bridge"
+  ansible.builtin.shell: |
+    python3 -I - "{{ ws_config }}" "{{ pow_vm }}" "{{ pow_action | default('on') }}" <<'PY'
+    import json, sys, urllib.request
+    cfg = json.load(open(sys.argv[1]))
+    name, action = sys.argv[2], sys.argv[3]
+    def call(path, payload=None):
+        body = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(cfg["url"] + path, data=body, headers={
+            "Authorization": "Bearer " + cfg["token"], "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.load(r)
+    state = call("/states").get(name)
+    if state is None:
+        sys.exit("unknown VM %r" % name)
+    want = "poweredOn" if action == "on" else "poweredOff"
+    if state == want:
+        print("unchanged"); sys.exit(0)
+    if not call("/power", {"name": name, "action": action}).get("ok"):
+        sys.exit("power %s failed for %s" % (action, name))
+    print("changed")
+    PY
+  register: pow_result
+  changed_when: pow_result.stdout | trim == 'changed'
+  delegate_to: localhost
+  become: false
+
+- name: "power {{ pow_vm }} | wait for SSH ({{ pow_ip }})"
+  ansible.builtin.wait_for:
+    host: "{{ pow_ip }}"
+    port: 22
+    timeout: 300
+    delay: 3
+  delegate_to: localhost
+  become: false
+  when: (pow_action | default('on')) == 'on'

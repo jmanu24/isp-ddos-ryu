@@ -1,0 +1,26 @@
+#!/bin/sh
+# Managed by Ansible (roles/br). Attaches flow's `flowspecs` chain to the
+# forward and input hooks (see flow.service.j2 for why).
+set -eu
+T="inet flowspecs"
+case "${1:-}" in
+  add)
+    # flow creates its chain asynchronously after start-up.
+    i=0
+    until nft list chain $T flowspecs >/dev/null 2>&1; do
+      i=$((i + 1)); [ "$i" -gt 50 ] && { echo "flowspecs chain never appeared" >&2; exit 1; }
+      sleep 0.2
+    done
+    for hook in forward input; do
+      nft add chain $T "fs_$hook" "{ type filter hook $hook priority 0 ; policy accept ; }"
+      nft flush chain $T "fs_$hook"
+      nft add rule $T "fs_$hook" jump flowspecs
+    done
+    ;;
+  remove)
+    for hook in forward input; do
+      nft flush chain $T "fs_$hook" 2>/dev/null || true
+    done
+    ;;
+  *) echo "usage: $0 add|remove" >&2; exit 2 ;;
+esac

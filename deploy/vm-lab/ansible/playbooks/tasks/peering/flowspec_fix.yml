@@ -1,0 +1,16 @@
+---
+# Remediation: restart flow on br (rebuilds the chain + hook chains) and
+# exabgp on orchestrator (rebuilds the session). Any test route left behind is
+# gone with flow's chain.
+- name: Restart flow on br
+  ansible.builtin.systemd: { name: flow, state: restarted }
+  delegate_to: br
+
+- name: Restart exabgp on orchestrator
+  ansible.builtin.systemd: { name: exabgp, state: restarted }
+  delegate_to: orchestrator
+
+- name: Give the FlowSpec session time to come up
+  ansible.builtin.wait_for: { timeout: 12 }
+  delegate_to: localhost
+  become: false

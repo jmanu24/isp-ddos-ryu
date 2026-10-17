@@ -1,0 +1,9 @@
+# Managed by Ansible (roles/bng)
+[Unit]
+Description=Compress FreeRADIUS accounting detail files from previous days
+
+[Service]
+Type=oneshot
+# Today's file is still being written (and tailed by the controller); anything
+# last modified more than a day ago is history. Nothing is deleted.
+ExecStart=/usr/bin/find /var/log/freeradius/radacct -type f -name 'detail-*' ! -name '*.gz' -mtime +0 -exec gzip -f {} +

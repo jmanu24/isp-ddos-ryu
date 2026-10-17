@@ -1,0 +1,11 @@
+# Managed by Ansible (roles/bng). A dedicated exec instance with wait=yes:
+# the stock `exec` instance has wait=no, and FreeRADIUS refuses to use the
+# %{exec:...} xlat unless it waits for the program's output ("'wait' must
+# be enabled to use exec xlat"). A separate instance leaves the stock one
+# (used by post-auth) untouched.
+exec mac_blocked {
+	wait = yes
+	input_pairs = request
+	shell_escape = yes
+	timeout = 3
+}

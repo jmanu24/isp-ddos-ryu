@@ -201,6 +201,147 @@
             }
   notify: restart freeradius
 
+# --- FreeRADIUS: per-MAC reject markers (immediate, no reload) --------
+# telemetry/broadband_adapter.py blocks a subscriber at the AAA layer by
+# creating a file named after its MAC in bng_radius_blocked_dir; the rule
+# below turns that into an Access-Reject. Verified on FreeRADIUS 3.0.26 that
+# the obvious alternative -- a `Auth-Type := Reject` line in `users` --
+# is NOT picked up by a reload: HUP answers "No files changed. Ignoring" and
+# `radmin hup files` does nothing either (the users data file isn't a
+# watched config file), so the MAC kept getting Access-Accept. A restart per
+# block/unblock does work but trips systemd's StartLimit (5 per 10s) as soon
+# as an attack involves several sessions.
+
+- name: Make sites-enabled/default the stock symlink to sites-available/default
+  # The role's edits below target sites-available/default, but on this lab
+  # sites-enabled/default had been replaced by a hand-edited REGULAR file
+  # (identical except for whitespace and Ansible's markers), so FreeRADIUS
+  # kept reading a copy the role never touched. Converge to the package's
+  # own layout so every edit here takes effect.
+  ansible.builtin.file:
+    src: ../sites-available/default
+    dest: /etc/freeradius/3.0/sites-enabled/default
+    state: link
+    force: true
+  notify: restart freeradius
+
+- name: Create the reject-marker directory
+  ansible.builtin.file:
+    path: "{{ bng_radius_blocked_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the mac_blocked lookup script
+  ansible.builtin.template:
+    src: mac_blocked.sh.j2
+    dest: /usr/local/bin/mac_blocked
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Define the mac_blocked exec module instance
+  ansible.builtin.template:
+    src: mac_blocked.module.j2
+    dest: /etc/freeradius/3.0/mods-available/mac_blocked
+    owner: root
+    group: freerad
+    mode: "0640"
+  notify: restart freeradius
+
+- name: Enable the mac_blocked module
+  ansible.builtin.file:
+    src: ../mods-available/mac_blocked
+    dest: /etc/freeradius/3.0/mods-enabled/mac_blocked
+    state: link
+  notify: restart freeradius
+
+- name: Reject every MAC that has a marker (last step before pap)
+  # Position is load-bearing. It must run AFTER `files`: this lab's `users`
+  # data file still carries a stray `DEFAULT Auth-Type := Accept` entry, and
+  # `files` applies it to every request, which would overwrite a Reject set
+  # earlier in authorize{} (observed: the rule evaluated TRUE and the
+  # request was accepted anyway). Right before `pap` is where the stock file
+  # itself says Auth-Type decisions belong ("this module should be listed
+  # last, so that the other modules get a chance to set Auth-Type"), and
+  # `pap` is unique in the file, so the anchor can't match another section.
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/sites-available/default
+    marker: "    # {mark} ANSIBLE MANAGED BLOCK -- reject blocked MACs"
+    insertbefore: '^\tpap$'
+    block: |
+              if ("%{mac_blocked:/usr/local/bin/mac_blocked %{Calling-Station-Id}}" == "1") {
+                      update control {
+                              Auth-Type := Reject
+                      }
+              }
+  notify: restart freeradius
+
+- name: Give each subscriber MAC a fixed IP (Framed-Pool of one address)
+  # Pools "subN" are defined in accel-ppp.conf.j2. Without this every re-login
+  # after a block draws a new lease from the shared pool
+  # (observed: 10.20.0.168 -> .169 for the same MAC). Same position as the
+  # reject rule: reply attributes set here survive until the Access-Accept,
+  # and a rejected MAC never reaches an accept anyway.
+  ansible.builtin.blockinfile:
+    path: /etc/freeradius/3.0/sites-available/default
+    marker: "    # {mark} ANSIBLE MANAGED BLOCK -- static IP per subscriber MAC"
+    insertbefore: '^\tpap$'
+    block: "{{ lookup('ansible.builtin.template', 'static_ip_map.j2') | indent(14, first=true) }}"
+  notify: restart freeradius
+
+- name: Install the per-subscriber offered-load counters (nft netdev ingress)
+  ansible.builtin.template:
+    src: ddos_bb_offered.nft.j2
+    dest: /etc/ddos-bb-offered.nft
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload ddos-bb-offered
+
+- name: Install the offered-load counters unit
+  ansible.builtin.template:
+    src: ddos-bb-offered.service.j2
+    dest: /etc/systemd/system/ddos-bb-offered.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload ddos-bb-offered
+
+- name: Enable the offered-load counters at boot
+  ansible.builtin.systemd:
+    name: ddos-bb-offered.service
+    enabled: true
+    daemon_reload: true
+
+- name: Install the daily compression of old accounting detail files
+  # acct-interim-interval is 1s now (see defaults): ~0.5 GB/day of detail log.
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - ddos-radacct-compress.service
+    - ddos-radacct-compress.timer
+
+- name: Enable the compression timer
+  ansible.builtin.systemd:
+    name: ddos-radacct-compress.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Verify the reject rule landed inside authorize{}, before pap
+  # blockinfile appends at end-of-file when its anchor doesn't match (a
+  # different stock layout), which would silently leave blocking disabled.
+  ansible.builtin.shell: |
+    awk '/^authorize \{/{a=1} a&&/reject blocked MACs/{r=1} a&&/^\tpap$/{ if (r) ok=1; exit } END{exit ok?0:1}' \
+      /etc/freeradius/3.0/sites-available/default
+  changed_when: false
+
 - name: Make FreeRADIUS's files module match by MAC (Calling-Station-Id),
         not User-Name -- every IPoE subscriber shares the same
         User-Name (see accel-ppp.conf.j2's [ipoe] comment), so
@@ -320,6 +461,66 @@
 - name: Enable and start accel-ppp
   ansible.builtin.systemd:
     name: accel-pppd.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+# --- Subscriber flow telemetry: conntrack sidecar ----------------------
+# telemetry/broadband_adapter.py reads every subscriber flow (real
+# destination, protocol, port and rate) from simulation/bng_flow_api.py,
+# which queries the kernel's conntrack table. FreeRADIUS accounting stays in
+# place for AAA but is not a telemetry source.
+
+- name: Install conntrack for subscriber flow accounting
+  ansible.builtin.apt:
+    name: conntrack
+    state: present
+    update_cache: true
+
+- name: Load the conntrack module at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/nf_conntrack.conf
+    content: "nf_conntrack\n"
+    mode: "0644"
+
+- name: Load the conntrack module now
+  ansible.builtin.command: modprobe nf_conntrack
+  changed_when: false
+
+- name: Enable per-flow packet/byte counters in conntrack
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-conntrack-acct.conf
+    content: "net.netfilter.nf_conntrack_acct = 1\n"
+    mode: "0644"
+  register: conntrack_acct_conf
+
+- name: Apply the conntrack accounting setting
+  ansible.builtin.command: sysctl -w net.netfilter.nf_conntrack_acct=1
+  changed_when: false
+
+- name: Create the sidecar directory
+  ansible.builtin.file:
+    path: /opt/isp-ddos-ryu
+    state: directory
+    mode: "0755"
+
+- name: Deploy the subscriber flow telemetry sidecar
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../simulation/bng_flow_api.py"
+    dest: /opt/isp-ddos-ryu/bng_flow_api.py
+    mode: "0755"
+  notify: restart bng-flow-api
+
+- name: Install the sidecar systemd unit
+  ansible.builtin.template:
+    src: bng-flow-api.service.j2
+    dest: /etc/systemd/system/bng-flow-api.service
+    mode: "0644"
+  notify: restart bng-flow-api
+
+- name: Enable and start the sidecar
+  ansible.builtin.systemd:
+    name: bng-flow-api.service
     daemon_reload: true
     enabled: true
     state: started

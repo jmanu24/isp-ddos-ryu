@@ -1,0 +1,20 @@
+---
+# Remediation for br: start what is stopped, re-create the victim route (the
+# role's oneshot swallows failures with `|| true`), restart flow (its
+# ExecStartPost re-attaches the hook chains), and re-attach them if needed.
+- name: Start stopped br services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+  loop: "{{ br_services }}"
+
+- name: Re-create the route to victim's subnet
+  ansible.builtin.systemd: { name: backbone-route, state: restarted }
+
+- name: Restart flow (re-attaches the FlowSpec hook chains)
+  ansible.builtin.systemd: { name: flow, state: restarted }
+
+- name: Make sure the hook chains exist
+  ansible.builtin.command: /usr/local/sbin/flowspec-hooks add
+  failed_when: false
+  changed_when: false

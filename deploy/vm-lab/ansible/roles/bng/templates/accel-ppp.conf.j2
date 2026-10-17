@@ -122,6 +122,16 @@ max-lease-time=86400
 [ip-pool]
 gw-ip-address={{ bng_access_addr }}/24
 {{ bng_pool_range }},name=bng_pool
+{% set static_prefix = bng_access_addr.split('.')[:3] | join('.') %}
+# One single-address pool per subscriber: FreeRADIUS answers
+# Framed-Pool := "subN" for MAC 02:00:00:00:00:NN (roles/bng's static IP
+# block in sites-available/default), so a re-login always lands on the same
+# address. accel-ppp's IPoE/DHCP mode ignores Framed-IP-Address in the
+# Access-Accept (observed: Offer yiaddr came from bng_pool regardless), but
+# honours Framed-Pool.
+{% for n in range(1, bng_subscriber_count + 1) %}
+{{ static_prefix }}.{{ bng_static_ip_offset + n }}-{{ bng_static_ip_offset + n }},name=sub{{ n }}
+{% endfor %}
 
 [dns]
 dns1=8.8.8.8
@@ -138,8 +148,10 @@ acct-timeout=3
 # Short interim interval -- this IS the real telemetry signal telemetry/
 # broadband_adapter.py's distributed-mode collect() tails (FreeRADIUS's
 # detail log gets one Interim-Update record per session every N
-# seconds, each carrying real Acct-Input/Output-Octets/-Packets).
-acct-interim-interval=5
+# seconds, each carrying real Acct-Input/Output-Octets/-Packets). It also
+# bounds how fast a flood can be detected: activation needs
+# BROADBAND_ACTIVATION_MIN_HITS reports (config/settings.py).
+acct-interim-interval={{ bng_acct_interim_interval }}
 
 server=127.0.0.1,{{ bng_radius_secret }},auth-port=1812,acct-port=1813,req-limit=0
 

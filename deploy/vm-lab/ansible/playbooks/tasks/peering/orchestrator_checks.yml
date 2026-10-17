@@ -1,0 +1,18 @@
+---
+# Checks for orchestrator (any failure triggers orchestrator_fix.yml).
+- name: Collector, route injector and controller are active
+  ansible.builtin.command: systemctl is-active {{ item }}
+  loop: [nfcapd, exabgp, ryu-manager]
+  changed_when: false
+
+- name: exabgp command FIFO exists
+  ansible.builtin.command: test -p /run/exabgp/exabgp.in
+  changed_when: false
+
+- name: exabgp holds its session with flow on br (:1790)
+  ansible.builtin.shell: ss -tn state established '( dport = :1790 )' | grep -c {{ br_mgmt_addr }}
+  register: exa_sess
+  until: exa_sess.stdout | trim | int >= 1
+  retries: 8
+  delay: 3
+  changed_when: false

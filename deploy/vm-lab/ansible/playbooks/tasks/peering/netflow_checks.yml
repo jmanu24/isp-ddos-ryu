@@ -1,0 +1,28 @@
+---
+# NetFlow end to end: a slow UDP probe peer -> victim must show up in nfcapd.
+- name: NetFlow | send a short, slow UDP probe peer -> victim
+  ansible.builtin.command: timeout {{ probe_secs }} hping3 --udp -p {{ netflow_port }} -i u20000 -q {{ victim }}
+  register: nf_probe
+  failed_when: nf_probe.rc not in [0, 124]
+  changed_when: false
+
+- name: NetFlow | the probe shows up in nfcapd's capture files
+  ansible.builtin.shell: >-
+    nfdump -R /var/cache/nfcapd/r1 -q -o csv
+    "src ip {{ peer_src_ip }} and dst ip {{ victim }} and proto udp and dst port {{ netflow_port }}"
+    2>/dev/null | grep -c ',UDP,'
+  delegate_to: orchestrator
+  register: nf_seen
+  until: nf_seen.stdout | trim | int > 0
+  retries: 12
+  delay: 5
+  failed_when: false
+  changed_when: false
+
+- name: NetFlow | assert
+  ansible.builtin.assert:
+    that: nf_seen.stdout | trim | int > 0
+    success_msg: "NetFlow OK: {{ nf_seen.stdout | trim }} flow records for the probe reached nfcapd."
+    fail_msg: >-
+      No NetFlow records for the probe. Check softflowd-peering on br
+      (exports to {{ orchestrator_addr }}:9995) and nfcapd on orchestrator.

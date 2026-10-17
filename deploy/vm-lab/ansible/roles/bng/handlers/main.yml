@@ -12,3 +12,15 @@
     name: accel-pppd.service
     daemon_reload: true
     state: restarted
+
+- name: reload ddos-bb-offered
+  ansible.builtin.systemd:
+    name: ddos-bb-offered.service
+    daemon_reload: true
+    state: restarted
+
+- name: restart bng-flow-api
+  ansible.builtin.systemd:
+    name: bng-flow-api.service
+    daemon_reload: true
+    state: restarted

@@ -1,0 +1,19 @@
+---
+# Directory of per-MAC reject markers (see tasks/main.yml, "per-MAC reject
+# markers"). Must match config/settings.py's BNG_DIST_FREERADIUS_BLOCKED_DIR:
+# telemetry/broadband_adapter.py creates/removes the files, the mac_blocked
+# lookup script reads them.
+bng_radius_blocked_dir: /var/lib/ddos-radius-blocked
+# Subscriber N (MAC 02:00:00:00:00:NN, created by roles/suscriptor) always
+# gets <access /24>.<bng_static_ip_offset + N> from RADIUS. Must stay above
+# the end of bng_pool_range (10.20.0.10-200) so statics never collide with
+# pool leases; any other MAC still draws from the pool.
+bng_static_ip_offset: 200
+# Counter table read by telemetry/broadband_adapter.py (config/settings.py
+# BNG_DIST_OFFERED_NFT_TABLE / _CHAIN -- keep them identical).
+bng_offered_nft_table: ddos_bb
+bng_offered_nft_chain: offered
+# Seconds between accounting Interim-Updates per session. 1s keeps broadband
+# detection under ~3s (2 reports); the extra detail-log volume is handled by
+# the daily compression below.
+bng_acct_interim_interval: 1

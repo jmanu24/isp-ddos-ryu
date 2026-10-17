@@ -1,0 +1,195 @@
+---
+# mobile_actuation_one_ue.yml -- actuation test for ONE UE (var `ue_name`).
+#
+#   idle    UE quiet                        (reference floor)
+#   before  UL flood running, no RC action  (what the UE pushes)
+#   during  RC block (PRB quota squeezed)   (the actuation must collapse it)
+#   after   RC unblock, flood still running (the quota must be restored)
+#
+# KPM (RRU.PrbUsedUl, DRB.UEThpUl) is read from the bridge in every phase and
+# the actuator's own /status is checked after each command. The flood is a
+# plain UDP sender in the UE's namespace; its rate is kept below the
+# controller's KPM detection threshold (PRB>=45 AND thp>=500 kbps) so the
+# running controller does not also throttle the UE.
+- name: Actuation test | pick the UE
+  ansible.builtin.set_fact:
+    t_ue: "{{ ue_table[ue_name] }}"
+    kpm_log: []
+    act_cmd_block: { imsi: "{{ ue_table[ue_name].imsi }}", action: block, duration: 60, attack_type: ACTUATION_TEST }
+    act_cmd_unblock: { imsi: "{{ ue_table[ue_name].imsi }}", action: unblock, duration: 60, attack_type: ACTUATION_TEST }
+
+- name: Preflight | the bridge delivers KPM for this UE
+  ansible.builtin.shell: >-
+    docker exec python_xapp_runner curl -s -m4 http://localhost:8767/kpm |
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for s in d.get('samples',[]) if s.get('imsi')=='{{ t_ue.imsi }}'))"
+  register: pre_kpm
+  until: pre_kpm.stdout | trim | int > 0
+  retries: 8
+  delay: 3
+  changed_when: false
+
+- name: Preflight | the RC actuator answers /status
+  ansible.builtin.shell: docker exec rc_actuator_runner curl -s -m4 http://localhost:8768/status
+  register: pre_act
+  failed_when: "'enforced' not in pre_act.stdout"
+  changed_when: false
+
+
+- name: "Actuation test | {{ ue_name }}"
+  block:
+    - name: Install the UDP sender on the UE host
+      ansible.builtin.copy:
+        dest: /tmp/mobile_test_udp.py
+        mode: "0755"
+        content: |
+          import socket, sys, time
+          dst, port, pps, size, secs = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          data = b"x" * size
+          per_tick = max(1, pps // 100)
+          end = time.time() + secs
+          while time.time() < end:
+              for _ in range(per_tick):
+                  try:
+                      s.sendto(data, (dst, port))
+                  except OSError:
+                      pass
+              time.sleep(0.01)
+      delegate_to: "{{ t_ue.host }}"
+
+    - name: "Phase idle | UE quiet"
+      ansible.builtin.include_tasks: mobile_kpm_sample.yml
+      vars: { kt_phase: idle, kt_imsi: "{{ t_ue.imsi }}", kt_secs: "{{ idle_secs }}", kt_every: "{{ sample_every }}" }
+
+    - name: Start the UL flood in the UE namespace
+      ansible.builtin.shell: >-
+        ip netns exec {{ t_ue.netns }} setsid nohup timeout {{ flood_total_secs }}
+        python3 /tmp/mobile_test_udp.py {{ victim_ent_dc_addr }} {{ flood_port }} {{ flood_pps }} {{ flood_bytes }} {{ flood_total_secs }}
+        >/dev/null 2>&1 < /dev/null &
+      delegate_to: "{{ t_ue.host }}"
+      changed_when: true
+
+    - name: Let the flood reach the radio before measuring
+      ansible.builtin.wait_for: { timeout: "{{ settle_secs }}" }
+      delegate_to: localhost
+      become: false
+
+    - name: "Phase before | flood on, no RC action"
+      ansible.builtin.include_tasks: mobile_kpm_sample.yml
+      vars: { kt_phase: before, kt_imsi: "{{ t_ue.imsi }}", kt_secs: "{{ phase_secs }}", kt_every: "{{ sample_every }}" }
+
+    - name: RC block | squeeze the UE's PRB quota
+      ansible.builtin.shell: >-
+        docker exec rc_actuator_runner curl -s -m5 -o /dev/null -w '%{http_code}'
+        -X POST -H 'Content-Type: application/json' -d '{{ act_cmd_block | to_json }}' http://localhost:8768/rc
+      register: blk
+      failed_when: blk.stdout | trim != '202'
+      changed_when: true
+
+    - name: RC block | wait for the control to take effect
+      ansible.builtin.wait_for: { timeout: "{{ settle_secs }}" }
+      delegate_to: localhost
+      become: false
+
+    - name: RC block | the actuator recorded and enforced it
+      ansible.builtin.shell: docker exec rc_actuator_runner curl -s -m4 http://localhost:8768/status
+      register: st_block
+      until: >-
+        (st_block.stdout | from_json).enforced[t_ue.imsi] is defined and
+        (st_block.stdout | from_json).enforced[t_ue.imsi].action == 'block'
+      retries: 6
+      delay: 2
+      changed_when: false
+
+    - name: "Phase during | RC block active"
+      ansible.builtin.include_tasks: mobile_kpm_sample.yml
+      vars: { kt_phase: during, kt_imsi: "{{ t_ue.imsi }}", kt_secs: "{{ phase_secs }}", kt_every: "{{ sample_every }}" }
+
+    - name: RC unblock | restore the PRB quota
+      ansible.builtin.shell: >-
+        docker exec rc_actuator_runner curl -s -m5 -o /dev/null -w '%{http_code}'
+        -X POST -H 'Content-Type: application/json' -d '{{ act_cmd_unblock | to_json }}' http://localhost:8768/rc
+      register: unb
+      failed_when: unb.stdout | trim != '202'
+      changed_when: true
+
+    - name: RC unblock | wait for the control to take effect
+      ansible.builtin.wait_for: { timeout: "{{ settle_secs }}" }
+      delegate_to: localhost
+      become: false
+
+    - name: RC unblock | the actuator recorded it
+      ansible.builtin.shell: docker exec rc_actuator_runner curl -s -m4 http://localhost:8768/status
+      register: st_unblock
+      until: >-
+        (st_unblock.stdout | from_json).enforced[t_ue.imsi] is defined and
+        (st_unblock.stdout | from_json).enforced[t_ue.imsi].action == 'unblock'
+      retries: 6
+      delay: 2
+      changed_when: false
+
+    - name: "Phase after | RC unblocked, flood still running"
+      ansible.builtin.include_tasks: mobile_kpm_sample.yml
+      vars: { kt_phase: after, kt_imsi: "{{ t_ue.imsi }}", kt_secs: "{{ phase_secs }}", kt_every: "{{ sample_every }}" }
+
+    - name: Results | per-sample KPM table
+      ansible.builtin.command: python3 -I {{ playbook_dir }}/files/mobile_kpm_report.py
+      args:
+        stdin: "{{ kpm_log | to_json | b64encode }}"
+      register: kpm_table
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Results | KPM per sample (idle / before / during / after)
+      ansible.builtin.debug:
+        msg: "{{ kpm_table.stdout_lines }}"
+
+    - name: Results | averages per phase
+      ansible.builtin.command: python3 -I {{ playbook_dir }}/files/mobile_kpm_report.py --stats
+      args:
+        stdin: "{{ kpm_log | to_json | b64encode }}"
+      register: kpm_stats_out
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: "Results | {{ ue_name }} summary"
+      vars:
+        s: "{{ kpm_stats_out.stdout | from_json }}"
+      ansible.builtin.debug:
+        msg:
+          - "{{ ue_name }} (imsi {{ t_ue.imsi }}) -- average UL throughput / PRB used per phase:"
+          - "  idle   : {{ s.idle.thp_ul }} kbps / PRB {{ s.idle.prb_ul }}  ({{ s.idle.n }} samples)"
+          - "  before : {{ s.before.thp_ul }} kbps / PRB {{ s.before.prb_ul }}  ({{ s.before.n }} samples)  <- flood, no RC action"
+          - "  during : {{ s.during.thp_ul }} kbps / PRB {{ s.during.prb_ul }}  ({{ s.during.n }} samples)  <- RC block"
+          - "  after  : {{ s.after.thp_ul }} kbps / PRB {{ s.after.prb_ul }}  ({{ s.after.n }} samples)  <- RC unblock, flood continues"
+
+    - name: Results | assert the actuation worked
+      vars:
+        s: "{{ kpm_stats_out.stdout | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - s.before.n > 0 and s.during.n > 0 and s.after.n > 0
+          - s.before.thp_ul | float >= min_before_kbps | float
+          - s.during.thp_ul | float <= (s.before.thp_ul | float) * (max_during_ratio | float)
+          - s.after.thp_ul | float >= (s.before.thp_ul | float) * (min_after_ratio | float)
+        success_msg: >-
+          Actuation OK for {{ ue_name }}: UL {{ s.before.thp_ul }} -> {{ s.during.thp_ul }}
+          (blocked) -> {{ s.after.thp_ul }} kbps (restored).
+        fail_msg: >-
+          Actuation check failed for {{ ue_name }}: before={{ s.before.thp_ul }}, during={{ s.during.thp_ul }},
+          after={{ s.after.thp_ul }} kbps. Need before >= {{ min_before_kbps }}, during <= {{ max_during_ratio }}x before,
+          after >= {{ min_after_ratio }}x before. If 'before' is low the flood did not reach the radio or KPM is stale.
+  always:
+    - name: Cleanup | restore the PRB quota whatever happened
+      ansible.builtin.shell: >-
+        docker exec rc_actuator_runner curl -s -m5 -o /dev/null
+        -X POST -H 'Content-Type: application/json' -d '{{ act_cmd_unblock | to_json }}' http://localhost:8768/rc
+      changed_when: true
+      failed_when: false
+
+    - name: Cleanup | stop the flood
+      ansible.builtin.shell: pkill -f '[m]obile_test_udp.py' || true
+      delegate_to: "{{ t_ue.host }}"
+      changed_when: false

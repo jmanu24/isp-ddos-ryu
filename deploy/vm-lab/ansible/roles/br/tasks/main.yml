@@ -74,9 +74,10 @@
   # interface local to r1, topologies/star_topology.py's
   # add_central_server()) -- must match config/settings.py's
   # PEERING_CENTRAL_SERVER_IP exactly, so telemetry/bgp_adapter.py's
-  # existing filtering and flow's --hooked `input`-chain blocking (which
-  # only evaluates LOCALLY DELIVERED traffic, not forwarded traffic)
-  # both keep working unchanged. A oneshot unit, not a one-off `ip addr
+  # existing filtering and the `input`-hook FlowSpec chain (locally
+  # delivered traffic) keep working unchanged; forwarded traffic is covered
+  # by the `forward`-hook chain (see flow.service.j2).
+  # A oneshot unit, not a one-off `ip addr
   # add` command -- confirmed needed this whole session: manual `ip`
   # state on these VMs does not survive a reboot.
   ansible.builtin.template:
@@ -91,12 +92,23 @@
     enabled: true
     state: started
 
+- name: Install the FlowSpec hook helper
+  ansible.builtin.template:
+    src: flowspec-hooks.sh.j2
+    dest: /usr/local/sbin/flowspec-hooks
+    mode: "0755"
+  notify: restart flow
+  tags: [flowspec_hooks]
+
 - name: Deploy flow systemd unit
   ansible.builtin.template:
     src: flow.service.j2
     dest: /etc/systemd/system/flow.service
     mode: "0644"
-  notify: reload systemd
+  notify:
+    - reload systemd
+    - restart flow
+  tags: [flowspec_hooks]
 
 - name: Stop and remove the old local nfcapd unit (moved to orchestrator)
   # Cleanup for VMs already provisioned before nfcapd moved off br --

@@ -1,0 +1,16 @@
+# Managed by Ansible (roles/bng)
+[Unit]
+Description=Subscriber flow telemetry (conntrack) API for the DDoS controller
+After=network-online.target accel-pppd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=BNG_ACCESS_CIDR={{ bb_access_cidr }}
+Environment=BNG_ACCESS_IP={{ bng_access_addr | default('10.20.0.1') }}
+ExecStart=/usr/bin/python3 /opt/isp-ddos-ryu/bng_flow_api.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

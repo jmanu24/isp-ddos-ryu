@@ -1,0 +1,28 @@
+---
+# Checks for one peer router (any failure triggers peers_fix.yml).
+- name: bird is active
+  ansible.builtin.command: systemctl is-active bird
+  changed_when: false
+
+- name: Route to victim is learned from br over eBGP
+  ansible.builtin.shell: ip route get {{ victim_ent_dc_addr }} | head -1
+  register: peer_route
+  until: "'via ' ~ br_peering_addr in peer_route.stdout"
+  retries: 10
+  delay: 3
+  changed_when: false
+
+- name: Connectivity | ICMP from this peer's data address to victim
+  # -I pins the source to the peer's own eBGP/data address (not its
+  # management one), so the packet takes the br -> pe -> victim path.
+  ansible.builtin.command: ping -c 3 -W 2 -I {{ peer_router_id }} {{ victim_ent_dc_addr }}
+  changed_when: false
+
+- name: Connectivity | TCP connect to victim's HTTP service (port 80)
+  ansible.builtin.shell: timeout 5 bash -c 'exec 3<>/dev/tcp/{{ victim_ent_dc_addr }}/80'
+  args: { executable: /bin/bash }
+  changed_when: false
+
+- name: Connectivity | summary
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} ({{ peer_router_id }}) -> victim {{ victim_ent_dc_addr }}: route {{ peer_route.stdout | trim }}; ICMP + TCP/80 OK"

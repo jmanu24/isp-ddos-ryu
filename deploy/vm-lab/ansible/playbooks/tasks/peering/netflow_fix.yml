@@ -1,0 +1,14 @@
+---
+# Remediation: restart the exporter (softflowd on br) and the collector (nfcapd).
+- name: Restart softflowd-peering on br
+  ansible.builtin.systemd: { name: softflowd-peering, state: restarted }
+  delegate_to: br
+
+- name: Restart nfcapd on orchestrator
+  ansible.builtin.systemd: { name: nfcapd, state: restarted }
+  delegate_to: orchestrator
+
+- name: Let the exporter and collector settle
+  ansible.builtin.wait_for: { timeout: 5 }
+  delegate_to: localhost
+  become: false

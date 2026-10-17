@@ -17,15 +17,15 @@
 # Must match config/settings.py's PEERING_DIST_FLOW_PORT and
 # webtool/peering_ops.py's exabgp config (`connect 1790;`).
 #
-# --hooked is load-bearing, not decoration: without it, flow's nftables
-# rule is created as a REGULAR (non-base) chain that nothing ever jumps
-# to, so it's created but never evaluated by the kernel -- confirmed via
-# this exact failure mode during the Mininet-mode spike (see webtool/
-# peering_ops.py's own long comment on this flag). --hooked attaches
-# directly to nftables' `input` hook, which is why 10.99.0.1/32 is added
-# to br's own loopback (this role's "Add dummy central_server address"
-# task) -- traffic to it is locally delivered, not forwarded, matching
-# what --hooked actually hooks.
+# NOT --hooked: that flag attaches flow's chain to nftables' `input` hook,
+# which only sees LOCALLY DELIVERED traffic. An attack toward victim is
+# FORWARDED by br, so the rule was created (and showed up in `nft list`)
+# but never matched a packet -- measured on the lab: ens224 tx stayed at
+# ~570 pps with the discard rule installed. Without --hooked flow creates
+# a regular chain that must be `jump`ed to from a base chain in the SAME
+# table, so ExecStartPost adds base chains on the `forward` and `input`
+# hooks that jump to it. ExecStop empties them first: nft refuses to delete
+# the flowspecs chain (flow does that on exit) while a jump references it.
 [Unit]
 Description=flow -- BGP FlowSpec to nftables (Peering domain)
 After=network-online.target
@@ -33,7 +33,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/flow run -b {{ br_mgmt_addr }}:1790 -l 65001 -r 65002 -i {{ br_mgmt_addr }} -a {{ orchestrator_addr }} --hooked
+ExecStart=/usr/local/bin/flow run -b {{ br_mgmt_addr }}:1790 -l 65001 -r 65002 -i {{ br_mgmt_addr }} -a {{ orchestrator_addr }}
+ExecStartPost=/usr/local/sbin/flowspec-hooks add
+ExecStop=/usr/local/sbin/flowspec-hooks remove
 Restart=on-failure
 RestartSec=2
 

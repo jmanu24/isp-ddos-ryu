@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
 #
 # Idempotent installer for accel-ppp (github.com/accel-ppp/accel-ppp), the
-# real open-source BRAS/BNG this project uses to replace BNGBlaster in the
-# Broadband domain's distributed VM lab (see bngblaster_broadband_pipeline_
-# status memory for why: BNGBlaster's sendto() succeeded but the frame was
-# invisible to every external observer on this lab, an unresolved bug).
+# real open-source BRAS/BNG used in the Broadband domain's distributed VM
+# lab.
 #
-# accel-ppp has no precompiled .deb releases the way rtbrick/bngblaster does
-# (see deploy/install_bngblaster.sh) -- every documented install path is a
-# source build via cmake, on Debian/Ubuntu/CentOS. This mirrors that
-# script's own idempotent/--check-only/--version shape, just git-clone+cmake
-# instead of downloading a release asset.
+# accel-ppp has no precompiled .deb releases -- every documented install
+# path is a source build via cmake, on Debian/Ubuntu/CentOS.
 #
-# NOT yet verified against a real run (unlike install_bngblaster.sh, which
-# accumulated several real-run fixes) -- this Mac had no route to the lab's
+# NOT yet verified against a real run -- this Mac had no route to the lab's
 # MGMT network when this was written. Flags/deps below are accel-ppp's own
 # documented build requirements; expect the first real run to need fixes,
 # same as every other piece of this lab did.

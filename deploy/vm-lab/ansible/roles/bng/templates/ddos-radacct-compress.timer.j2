@@ -1,0 +1,10 @@
+# Managed by Ansible (roles/bng)
+[Unit]
+Description=Daily compression of old FreeRADIUS accounting detail files
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

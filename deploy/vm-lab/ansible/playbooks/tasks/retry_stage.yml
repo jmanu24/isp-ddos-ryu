@@ -1,0 +1,50 @@
+---
+# retry_stage.yml -- run one validation stage; when it fails, apply that
+# stage's remediation and run it again, up to max_attempts times in total.
+# The play only fails once the last attempt has failed (the failure message
+# carries the last check's own error).
+#
+# Vars (set by the caller):
+#   stage_name    -- label for messages
+#   stage_checks  -- task file with the checks (must fail when something is wrong)
+#   stage_fix     -- task file that tries to repair what the checks found
+#   attempt       -- current attempt, starts at 1
+#   max_attempts, retry_delay -- from the play (defaults below)
+#
+# Recursion: the rescue branch includes this file again with attempt + 1, so
+# every attempt is a fresh run of the checks, never a partial continuation.
+
+- name: "{{ stage_name }} | attempt {{ attempt | default(1) }} of {{ max_attempts | default(3) }}"
+  block:
+    - ansible.builtin.include_tasks: "{{ stage_checks }}"
+  rescue:
+    - name: "{{ stage_name }} | attempt {{ attempt | default(1) }} failed"
+      ansible.builtin.debug:
+        msg: "{{ ansible_failed_result.msg | default('see the output above') }}{{ ' (failed items: ' ~ (ansible_failed_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list | string) ~ ')' if ansible_failed_result.results is defined else '' }}"
+
+    - name: "{{ stage_name }} | out of attempts"
+      ansible.builtin.fail:
+        msg: >-
+          {{ stage_name }} still failing after {{ max_attempts | default(3) }} attempts.
+          Last error: {{ ansible_failed_result.msg | default('see the output above') }}{{ ' (failed items: ' ~ (ansible_failed_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list | string) ~ ')' if ansible_failed_result.results is defined else '' }}
+      when: (attempt | default(1) | int) >= (max_attempts | default(3) | int)
+
+    - name: "{{ stage_name }} | remediation"
+      ansible.builtin.include_tasks: "{{ stage_fix }}"
+
+    - name: "{{ stage_name }} | wait before retrying"
+      ansible.builtin.wait_for:
+        timeout: "{{ retry_delay | default(10) }}"
+      delegate_to: localhost
+      become: false
+
+    # A separate fact: `attempt: "{{ attempt + 1 }}"` would be a recursive
+    # template reference.
+    - name: "{{ stage_name }} | next attempt number"
+      ansible.builtin.set_fact:
+        _next_attempt: "{{ (attempt | default(1) | int) + 1 }}"
+
+    - name: "{{ stage_name }} | retry"
+      ansible.builtin.include_tasks: retry_stage.yml
+      vars:
+        attempt: "{{ _next_attempt }}"

@@ -1,0 +1,14 @@
+---
+# Remediation: restart both ends of the sessions (FRR on br, bird on peers).
+- name: Restart bird on every peer router
+  ansible.builtin.systemd: { name: bird, state: restarted }
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['peer_router'] }}"
+
+- name: Restart FRR on br
+  ansible.builtin.systemd: { name: frr, state: restarted }
+
+- name: Give the sessions time to establish
+  ansible.builtin.wait_for: { timeout: 15 }
+  delegate_to: localhost
+  become: false

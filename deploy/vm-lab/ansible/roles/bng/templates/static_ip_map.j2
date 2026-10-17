@@ -1,0 +1,7 @@
+{% for n in range(1, bng_subscriber_count + 1) %}
+if (Calling-Station-Id =~ /^02:00:00:00:00:{{ '%02x' % n }}$/i) {
+        update reply {
+                Framed-Pool := "sub{{ n }}"
+        }
+}
+{% endfor %}

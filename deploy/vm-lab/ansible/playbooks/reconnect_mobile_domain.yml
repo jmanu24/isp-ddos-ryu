@@ -20,6 +20,14 @@
 #                             still ensured powered ON (idempotent) in order.
 #   --skip-tags victim     -> skip the per-UE data-plane ping (pe/victim down)
 #   --tags <play tag>      -> re-run just part (e.g. --tags xapps)
+#   --tags tests           -> ONLY the actuation test (no bring-up, no power
+#                             actions): RC block/unblock with the KPM printed
+#                             before, during and after. Same as running
+#                             playbooks/test_mobile_actuation.yml directly.
+#   -e run_actuation_tests=false -> bring-up only, skip the actuation test that
+#                             otherwise runs at the end (default: runs).
+#   -e '{"test_ues": ["ue1","ue4"]}' and the other knobs documented in
+#                             test_mobile_actuation.yml select UEs/rates/phases.
 #
 # NOTE: this is deliberately sequential (each VM boots before the next node
 # starts), which is slower but is the reliable, validated order. It matches
@@ -378,3 +386,9 @@
           - "KPM /kpm samples: {{ kpm_samples.stdout | trim }}{{ '  <-- WARNING: 0 samples, KPM not reaching the bridge -- investigate e2term/submgr delivery.' if (kpm_samples.stdout | trim | int == 0) else '  (KPM pipeline OK)' }}"
           - "Per-UE attach + victim reachability validated in the UE plays above."
           - "Mobile domain reconnection complete."
+
+######################################################################
+# 16 -- actuation test (RC block/unblock, KPM before/during/after)
+######################################################################
+- import_playbook: test_mobile_actuation.yml
+  when: run_actuation_tests | default(true) | bool

@@ -1,0 +1,37 @@
+---
+# mobile_kpm_sample.yml -- sample the KPM bridge for ONE UE during a phase and
+# append the samples to the `kpm_log` fact (a list of dicts).
+#
+# Vars: kt_phase (label), kt_imsi, kt_secs (duration), kt_every (seconds
+# between reads). Runs on the RIC host (the bridge API is only reachable
+# inside its container, hence docker exec).
+- name: "KPM | {{ kt_phase }} | sampling {{ kt_secs }}s every {{ kt_every }}s"
+  ansible.builtin.shell: |
+    python3 - <<'PY'
+    import json, subprocess, time
+    imsi, secs, every, phase = "{{ kt_imsi }}", {{ kt_secs }}, {{ kt_every }}, "{{ kt_phase }}"
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        row = {"phase": phase, "t": round(time.time() - t0, 1), "prb_ul": None, "thp_ul": None,
+               "thp_dl": None, "age": None}
+        try:
+            out = subprocess.run(
+                ["docker", "exec", "python_xapp_runner", "curl", "-s", "-m", "3", "http://localhost:8767/kpm"],
+                capture_output=True, text=True, timeout=8).stdout
+            for s in json.loads(out).get("samples", []):
+                if s.get("imsi") == imsi:
+                    m = s.get("metrics", {})
+                    row.update(prb_ul=m.get("RRU.PrbUsedUl"), thp_ul=m.get("DRB.UEThpUl"),
+                               thp_dl=m.get("DRB.UEThpDl"),
+                               age=round(time.time() - s.get("updated_at", time.time()), 1))
+        except Exception as exc:
+            row["error"] = str(exc)[:60]
+        print(json.dumps(row))
+        time.sleep(every)
+    PY
+  register: kt_out
+  changed_when: false
+
+- name: "KPM | {{ kt_phase }} | keep the samples"
+  ansible.builtin.set_fact:
+    kpm_log: "{{ (kpm_log | default([])) + (kt_out.stdout_lines | map('from_json') | list) }}"
