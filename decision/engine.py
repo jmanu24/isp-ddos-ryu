@@ -29,7 +29,6 @@ class DecisionEngine:
             "SYN_FLOOD": 1.0,
             "UDP_FLOOD": 0.9,
             "ICMP_FLOOD": 0.8,
-            "LOW_SLOW": 1.2,
             "DDOS_DISTRIBUTED": 1.3,
             # A distributed flood whose sources span multiple domains at
             # once needs coordinated mitigation across separate control

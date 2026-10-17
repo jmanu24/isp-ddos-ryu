@@ -7,14 +7,14 @@ import uuid
 from pathlib import Path
 _IMPLEMENTATION=None
 
-KEYS=('SYN_THRESHOLD','UDP_THRESHOLD','ICMP_THRESHOLD','DECISION_THRESHOLD','DIST_PPS_THRESHOLD','DIST_ENTROPY_THRESHOLD','LOW_SLOW_NEW_FLOWS','LOW_SLOW_MOBILE_MAX_PPS','LOW_SLOW_DETECTION_ENABLED','COLLECT_INTERVAL','DETECTION_CROSS_DOMAIN_CORRELATION')
+KEYS=('SYN_THRESHOLD','UDP_THRESHOLD','ICMP_THRESHOLD','DECISION_THRESHOLD','DIST_PPS_THRESHOLD','DIST_ENTROPY_THRESHOLD','MOBILE_KPM_MIN_CARRIER_PPS','ENTERPRISE_ACTIVATION_MIN_HITS','ENTERPRISE_ACTIVATION_WINDOW_S','PEERING_ACTIVATION_MIN_HITS','PEERING_ACTIVATION_WINDOW_S','MOBILE_SYN_ACTIVATION_MIN_HITS','MOBILE_SYN_ACTIVATION_WINDOW_S','PEERING_RELEASE_QUIET_S','BROADBAND_ACTIVATION_MIN_HITS','BROADBAND_ACTIVATION_WINDOW_S','BROADBAND_RELEASE_QUIET_S','COLLECT_INTERVAL','DETECTION_CROSS_DOMAIN_CORRELATION')
 
 def thresholds(settings):
     values={k:getattr(settings,k) for k in KEYS if hasattr(settings,k)}
     global _IMPLEMENTATION
     if _IMPLEMENTATION is None:
         _IMPLEMENTATION={}
-        for relative in ('controller/ryu_controller_2.py','orchestration/controller.py','detection/engine.py','decision/engine.py'):
+        for relative in ('controller/ryu_controller_2.py','orchestration/controller.py','detection/engine.py','decision/engine.py','telemetry/openflow_adapter.py','telemetry/mobile_adapter.py','telemetry/broadband_adapter.py','collectors/ddos_collector.py'):
             try:_IMPLEMENTATION[relative]=hashlib.sha256((Path(__file__).resolve().parents[1]/relative).read_bytes()).hexdigest()
             except OSError:_IMPLEMENTATION[relative]=None
     return dict(values=values,implementation_hashes=_IMPLEMENTATION,hash=hashlib.sha256(json.dumps(dict(values=values,implementation=_IMPLEMENTATION),sort_keys=True).encode()).hexdigest())

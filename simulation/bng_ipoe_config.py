@@ -1,17 +1,12 @@
 """
 bng_ipoe_config.py — per-scenario parameters for the Broadband domain's
 distributed-mode attack simulator (simulation/bng_subscriber_agent.py),
-driven by real per-subscriber IPs (accel-ppp on `bng`), REPLACING
-simulation/bng_config.py's BNGBlaster session-traffic parameters -- see
-bngblaster_broadband_pipeline_status memory for why BNGBlaster itself
-was dropped (an unresolved packet-transmission bug on this lab).
+driven by real per-subscriber IPs (accel-ppp on `bng`).
 
-Same "comfortably past config/settings.py's threshold for the matching
-attack_type" sizing convention bng_config.py's own _SCENARIO_PARAMS
-used, just against the real detection thresholds:
+Sized "comfortably past config/settings.py's threshold for the matching
+attack_type", against the real detection thresholds:
   SYN_THRESHOLD=10 pps, UDP_THRESHOLD=200 pps, ICMP_THRESHOLD=150 pps
   DIST_MIN_SOURCES=5, DIST_ENTROPY_THRESHOLD=0.7 (near-equal per-source rate)
-  LOW_SLOW_MOBILE_MAX_PPS=8.0 (ceiling), LOW_SLOW_MOBILE_MIN_SOURCES=5
 
 subscriber_count picks how many of the macvlan-backed subscriber
 sessions (roles/suscriptor's setup_macvlans.sh.j2, macvlan1..N) get
@@ -91,10 +86,8 @@ SCENARIO_PARAMS = {
         subscriber_count=8, protocol="ICMP", dst_port=0,
         pps=50.0, autostart=False,
     ),
-    # 8 subscribers (>= LOW_SLOW_MOBILE_MIN_SOURCES=5), 1 pps each --
-    # well under LOW_SLOW_MOBILE_MAX_PPS=8.0, deliberately not a flood.
-    # Autostarts the moment the agent comes up, same as BNGBlaster's own
-    # low_and_slow scenario did (this domain's standing baseline).
+    # 8 subscribers, 1 pps each -- deliberately not a flood. Autostarts
+    # the moment the agent comes up (this domain's standing baseline).
     "low_and_slow": dict(
         subscriber_count=8, protocol="TCP_SYN", dst_port=443,
         pps=1.0, autostart=True,

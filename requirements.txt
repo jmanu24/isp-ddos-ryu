@@ -11,7 +11,7 @@
 # no conflicting constraint in the same resolution.
 #
 # Confirmed on TWO real runs -- this lab's fresh orchestrator VM (Python
-# 3.10) AND the existing Mininet-based Ubuntu test VM's own system-wide
+# 3.10) AND the earlier Ubuntu test VM's own system-wide
 # install (Python 3.8), both currently broken, predating and unrelated
 # to anything about the distributed-VM lab -- that PyPI's osrg/ryu
 # package (unmaintained since ~2021) does
@@ -53,4 +53,3 @@ eventlet==0.36.1
 # 'collections' has no attribute 'MutableMapping'" the moment eventlet's
 # greendns support tries to import it.
 dnspython>=2.0.0
-prometheus-client==0.20.0

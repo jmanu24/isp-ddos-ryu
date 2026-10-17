@@ -1,6 +1,8 @@
 from dataclasses import asdict
 from core.experiment_audit import emit as audit_emit
+import json
 import logging
+import os
 import time
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
@@ -11,8 +13,6 @@ from core.models import CorrelatedEvent, DetectionResult, MitigationAction
 from decision.engine import DecisionEngine, Decision
 from telemetry.base import DomainAdapter
 from mitigation.openflow_mitigator import OpenFlowMitigator, PROTO_NUMBERS
-from web import metrics
-from web.state import dashboard_state
 
 
 _THRESHOLD_BY_PROTOCOL = {
@@ -119,6 +119,14 @@ class OrchestrationController:
         # that source, which is indistinguishable from "the attacker
         # stopped" if presence is the only signal available).
         self._mobile_block_started_at: Dict[Tuple[str, str, int, str], float] = {}
+        # key -> time.time() of the last cycle whose bgp telemetry still
+        # showed offered load at/above the release threshold for that
+        # block (see _bgp_offered_load_present). Starts at the block time.
+        self._bgp_offered_last_seen: Dict[Tuple[str, str, int, str], float] = {}
+        # Same idea for broadband: last cycle in which the blocked
+        # subscriber's MAC was still sending at/above the release threshold
+        # (see _broadband_release_wait).
+        self._bb_offered_last_seen: Dict[Tuple[str, str, int, str], float] = {}
 
         # (src_ip, dst_ip, dst_port, protocol) -> MitigationAction currently
         # enforced, only for the openflow domain (the only one with a real
@@ -178,14 +186,6 @@ class OrchestrationController:
         # one of these can't be trusted to scope a block to.
         self._interswitch_ports: set = set()
 
-        # (attack_type, domain) pairs that had live detections in the
-        # previous process() cycle. Used to zero out ATTACK_PACKET/BYTE_RATE
-        # gauges for types that are no longer active — Prometheus Gauges
-        # retain their last value forever otherwise, making Grafana show
-        # a stale non-zero rate long after the attack ended.
-        self._prev_detection_labels: Set[Tuple[str, str]] = set()
-        self._prev_mitigation_labels: Set[Tuple[str, str, str]] = set()
-
     # ------------------------------------------------------------------
     # Datapath lifecycle (called from the Ryu controller)
     # ------------------------------------------------------------------
@@ -224,29 +224,8 @@ class OrchestrationController:
         "winner" slot each cycle and only ever get mitigated one at a
         time, alternating cycle to cycle as their relative scores shift.
         """
-        # Zero out rate gauges for (attack_type, domain) pairs that were
-        # active last cycle but are absent this cycle — Prometheus Gauges
-        # hold their last value forever, so without this Grafana keeps
-        # displaying stale attack rates after an attack ends.
-        current_detection_labels: Set[Tuple[str, str]] = {
-            (d.attack_type, d.domain) for d in detections
-        }
-        for attack_type, domain in self._prev_detection_labels - current_detection_labels:
-            metrics.record_attack_rate(attack_type, domain, 0, 0)
-        self._prev_detection_labels = current_detection_labels
-
         if not detections:
-            # Still need to clear any stale mitigation rate gauges from the
-            # previous cycle — the mitigation reset at the bottom of this
-            # method won't run if we exit early.
-            for attack_type, action_name, domain in self._prev_mitigation_labels:
-                metrics.record_mitigation_rate(attack_type, action_name, domain, 0, 0)
-            self._prev_mitigation_labels = set()
             return []
-
-        for d in detections:
-            metrics.record_detection(d.attack_type, d.domain)
-            metrics.record_attack_rate(d.attack_type, d.domain, d.pps, d.bps)
 
         groups: Dict[Tuple[str, str, int, str], List[DetectionResult]] = defaultdict(list)
         for d in detections:
@@ -313,15 +292,6 @@ class OrchestrationController:
                         enterprise_actions[0].dst_ip, list(all_sources)
                     )
 
-        # Zero out mitigation rate gauges for (attack_type, action, domain)
-        # triples that were dispatched last cycle but not this one.
-        current_mitigation_labels: Set[Tuple[str, str, str]] = {
-            (a.attack_type, a.action, a.domain) for a in all_actions
-        }
-        for attack_type, action_name, domain in self._prev_mitigation_labels - current_mitigation_labels:
-            metrics.record_mitigation_rate(attack_type, action_name, domain, 0, 0)
-        self._prev_mitigation_labels = current_mitigation_labels
-
         return all_actions
 
     # ------------------------------------------------------------------
@@ -337,8 +307,8 @@ class OrchestrationController:
         Build one MitigationAction per affected domain.
         Chooses the mitigation action type based on attack type and domain.
 
-        DDOS_DISTRIBUTED, MULTIDOMAIN_DISTRIBUTED_ATTACK, and mobile-
-        domain LOW_SLOW are the exception to "one action per detection":
+        DDOS_DISTRIBUTED and MULTIDOMAIN_DISTRIBUTED_ATTACK are the
+        exception to "one action per detection":
         each carries a real per-source list (`DetectionResult.sources`),
         which is first partitioned by each source's OWN real domain
         (`DetectionResult.source_domains`) rather than assumed to all
@@ -364,27 +334,20 @@ class OrchestrationController:
           NEVER blocked network-wide; they'll get caught once a host-port
           sighting for them arrives in a later cycle.
         - PER_SOURCE_MITIGATION_DOMAINS sources that are ALSO per-source
-          mitigation levers (mobile UEs, BNGBlaster subscriber sessions):
+          mitigation levers (mobile UEs, BNG subscriber sessions):
           no destination-wide network lever the way an OpenFlow drop rule
           is, so a "*" src_ip can't be dispatched as a single action as
           OpenFlow can — one action per contributing source instead, each
           quarantined individually through the existing per-source
           block/unblock machinery.
         - bgp sources: despite also being a PER_SOURCE_MITIGATION_DOMAINS
-          member (for its single-source dispatch path and PRESENCE_BLIND_
-          DOMAINS TTL release), a FlowSpec discard route IS a destination-
+          member (for its single-source dispatch path and its offered-load
+          release hysteresis), a FlowSpec discard route IS a destination-
           wide lever like OpenFlow's — one aggregate action, src_ip="*",
           never one per source. Confirmed necessary, not just tidier: one
           action per (spoofed, virtually-unique-per-packet) source under
           real DDoS testing produced thousands of redundant dispatches
           for what should have been a single route.
-
-        OpenFlow's own LOW_SLOW flow-count variant also uses src_ip="*"
-        but carries no per-source IP list at all (it's a flow-count
-        signature, not a list of attackers), so it's left as a single
-        network-wide action via the normal path below — that one has no
-        per-source location to scope to in the first place, unlike
-        DDOS_DISTRIBUTED/MULTIDOMAIN_DISTRIBUTED_ATTACK.
 
         A detection whose OWN live sources are all one domain still gets
         relabeled MULTIDOMAIN_DISTRIBUTED_ATTACK if another domain
@@ -420,25 +383,21 @@ class OrchestrationController:
             # originally labeled with a single-domain type (DDOS_DISTRIBUTED,
             # SYN_FLOOD, etc.) -- those blocks were the first-mover detections
             # that now belong to the same multidomain event. Without this,
-            # the dashboard and UNTHROTTLE logs keep showing the original
+            # the UNTHROTTLE logs keep showing the original
             # single-domain label for those blocks even after the escalation.
             if effective_attack_type == "MULTIDOMAIN_DISTRIBUTED_ATTACK":
-                needs_sync = False
                 for action in self._active_blocks.values():
-                    if action.dst_ip == d.dst_ip and action.attack_type != "MULTIDOMAIN_DISTRIBUTED_ATTACK":
+                    if action.dst_ip == d.dst_ip:
                         action.attack_type = "MULTIDOMAIN_DISTRIBUTED_ATTACK"
-                        needs_sync = True
                 for action in self._active_mobile_blocks.values():
-                    if action.dst_ip == d.dst_ip and action.attack_type != "MULTIDOMAIN_DISTRIBUTED_ATTACK":
+                    if action.dst_ip == d.dst_ip:
                         action.attack_type = "MULTIDOMAIN_DISTRIBUTED_ATTACK"
-                        needs_sync = True
-                if needs_sync:
-                    self._sync_dashboard_blocks()
+                self._publish_active_blocks()
 
             action_type = self._action_for(effective_attack_type, d.domain)
 
             if (
-                effective_attack_type in ("DDOS_DISTRIBUTED", "MULTIDOMAIN_DISTRIBUTED_ATTACK", "LOW_SLOW")
+                effective_attack_type in ("DDOS_DISTRIBUTED", "MULTIDOMAIN_DISTRIBUTED_ATTACK")
                 and d.sources
             ):
                 # Partition this detection's contributing sources by their
@@ -451,9 +410,7 @@ class OrchestrationController:
                 # aggregates telemetry across domains toward one dst_ip,
                 # so one detection's sources can genuinely span more than
                 # one domain (that's exactly what
-                # MULTIDOMAIN_DISTRIBUTED_ATTACK means, and
-                # analyze_low_slow_mobile's LOW_SLOW can mix
-                # PER_SOURCE_MITIGATION_DOMAINS members too). Routing ALL
+                # MULTIDOMAIN_DISTRIBUTED_ATTACK means). Routing ALL
                 # of them through one domain's mitigation either silently
                 # drops the others (enterprise's OpenFlow location lookup
                 # never resolves spoofed mobile/BNG sources) or misroutes
@@ -536,11 +493,9 @@ class OrchestrationController:
                         # dedup key becomes ("*", dst_ip, dst_port,
                         # protocol), stable across cycles regardless of how
                         # many (or how ephemeral) the contributing sources
-                        # are. check_mobile_unblocks() already handles
-                        # src_ip="*" (its own `if src_ip == "*":` branch)
-                        # and releases PRESENCE_BLIND_DOMAINS members like
-                        # bgp on a fixed wall-clock duration regardless of
-                        # src_ip, so no change needed there.
+                        # are. check_mobile_unblocks() releases it on
+                        # offered-load hysteresis (_bgp_offered_load_present),
+                        # which also handles src_ip="*".
                         actions.append(MitigationAction(
                             domain=src_domain,
                             device_id=d.device_id,
@@ -553,16 +508,11 @@ class OrchestrationController:
                             attack_type=effective_attack_type,
                             pps=d.pps,
                             bps=d.bps,
-                            # Overrides the dataclass's 60s default -- see
-                            # settings.PEERING_UNBLOCK_HOLD_S's own comment
-                            # for why this domain specifically gets a
-                            # shorter fixed hold than broadband/mobile.
-                            duration=settings.PEERING_UNBLOCK_HOLD_S,
                         ))
 
                     elif src_domain in settings.PER_SOURCE_MITIGATION_DOMAINS:
                         # domains in PER_SOURCE_MITIGATION_DOMAINS (mobile
-                        # UEs, BNGBlaster subscriber sessions) have
+                        # UEs, BNG subscriber sessions) have
                         # inherently per-source mitigation -- there's no
                         # destination-wide network lever the way an
                         # OpenFlow drop rule is -- so a "*" src_ip can't
@@ -574,8 +524,7 @@ class OrchestrationController:
                         # IP (see check_mobile_unblocks). bgp is also a
                         # PER_SOURCE_MITIGATION_DOMAINS member (for the
                         # single-source dispatch path and its
-                        # PRESENCE_BLIND_DOMAINS TTL-release, both below/
-                        # elsewhere) but never reaches this branch -- the
+                        # offered-load release, both below/elsewhere) but never reaches this branch -- the
                         # bgp-specific one above always intercepts it
                         # first.
                         for source in sources_subset:
@@ -586,8 +535,7 @@ class OrchestrationController:
                                 # d.device_id (just one representative
                                 # contributing event's) -- contributing
                                 # sources can each be attached to a
-                                # different simulated gNB (see
-                                # ul_traffic_simulator.py's --gnb-count),
+                                # different gNB,
                                 # so using d.device_id for all of them
                                 # mislabeled every one except the
                                 # representative's with the wrong gNB.
@@ -619,7 +567,7 @@ class OrchestrationController:
             if d.domain in settings.PER_SOURCE_MITIGATION_DOMAINS:
                 # _scoped_ingress below resolves an OpenFlow switch+port
                 # via LearningSwitch's host-location tracking -- not
-                # applicable here (neither a mobile UE nor a BNGBlaster
+                # applicable here (neither a mobile UE nor a BNG
                 # subscriber session has an OpenFlow ingress port concept).
                 # d.device_id is already the real gNB/BNG id for this
                 # source (see the per-UE/per-session branch above), which
@@ -715,7 +663,7 @@ class OrchestrationController:
             return "bgp_flowspec_discard"
         if attack_type in (
             "SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD", "DDOS_DISTRIBUTED",
-            "MULTIDOMAIN_DISTRIBUTED_ATTACK", "LOW_SLOW",
+            "MULTIDOMAIN_DISTRIBUTED_ATTACK",
         ):
             return "block"
         return "rate_limit"
@@ -728,9 +676,6 @@ class OrchestrationController:
         which would otherwise re-log every cycle for as long as the
         attack stays active.
         """
-        metrics.record_mitigation(action.attack_type, action.action, action.domain)
-        metrics.record_mitigation_rate(action.attack_type, action.action, action.domain, action.pps, action.bps)
-
         if action.domain == "enterprise":
             is_new = True
 
@@ -742,22 +687,15 @@ class OrchestrationController:
                     # Only set on first block, not every re-evaluation --
                     # the same flow can flip between classifications cycle
                     # to cycle right at the edge of a threshold/entropy
-                    # boundary (e.g. LOW_SLOW one cycle, SYN_FLOOD the
-                    # next, for the literal same attack -- see
-                    # DDoSDetectionEngine's grace-period comments for why
-                    # this race exists). Overwriting _active_blocks[key]
+                    # boundary (e.g. SYN_FLOOD one cycle, DDOS_DISTRIBUTED
+                    # the next, for the literal same attack). Overwriting _active_blocks[key]
                     # on every re-evaluation made the eventual UNBLOCK
                     # line report whichever attack_type happened to be
                     # classified LAST, not the one that was actually
                     # logged as the block -- confusing when they differ.
                     self._active_blocks[key] = action
+                    self._publish_active_blocks()
                     self._below_threshold_streak[key] = 0
-                    metrics.set_active_blocks(len(self._active_blocks))
-                    self._sync_dashboard_blocks()
-                    # Counted per distinct block event, not per cycle an
-                    # already-active one gets re-evaluated — see is_new
-                    # above and the docstring.
-                    metrics.record_block_endpoints(action.src_ip, action.dst_ip)
 
             # Install the actual protective rule — cleanup of any stray
             # forwarding/permit rules for this group happens once, after
@@ -776,9 +714,10 @@ class OrchestrationController:
             # command (and re-log "MITIGATION") every single pipeline
             # cycle — check_mobile_unblocks() is what eventually clears
             # this once the source's reported throughput actually drops
-            # (or, for PRESENCE_BLIND_DOMAINS members like bgp, once its
-            # fixed wall-clock window elapses). Shared by every
-            # PER_SOURCE_MITIGATION_DOMAINS member (mobile UEs, BNGBlaster
+            # (or, for bgp, once its offered load has stayed quiet for
+            # PEERING_RELEASE_QUIET_S; for broadband, once its fixed
+            # wall-clock window elapses). Shared by every
+            # PER_SOURCE_MITIGATION_DOMAINS member (mobile UEs, BNG
             # sessions, bgp FlowSpec routes) -- the dict key carries no
             # domain field, just (src_ip, dst_ip, dst_port, protocol),
             # which is already unambiguous since a given src_ip belongs to
@@ -798,9 +737,11 @@ class OrchestrationController:
             # threshold/entropy boundary; overwriting here would make the
             # eventual UNTHROTTLE line report the wrong attack_type).
             self._active_mobile_blocks[key] = action
+            self._publish_active_blocks()
             self._mobile_below_threshold_streak[key] = 0
             self._mobile_block_started_at[key] = time.time()
-            self._sync_dashboard_blocks()
+            self._bgp_offered_last_seen[key] = self._mobile_block_started_at[key]
+            self._bb_offered_last_seen[key] = self._mobile_block_started_at[key]
 
             adapter = self._adapters.get(action.domain)
             if adapter:
@@ -816,21 +757,42 @@ class OrchestrationController:
 
         return True
 
-    def active_block_counts_by_domain(self) -> Dict[str, int]:
-        """For web/metrics.py's ddos_active_blocks_by_domain (per-domain
-        Grafana dashboards' "active blocks" panel) -- both _active_blocks
-        (openflow's own dict) and _active_mobile_blocks (shared by every
-        config.settings.PER_SOURCE_MITIGATION_DOMAINS member) store
-        MitigationActions that carry their own .domain, so this just
-        groups by that instead of needing a separate counter per domain
-        threaded through every block/unblock call site.
+    def _publish_active_blocks(self) -> None:
+        """Atomically write the current active blocks (both dicts) to
+        settings.ACTIVE_BLOCKS_STATE_PATH as a JSON list, so out-of-process
+        readers (analysis/run_vm_lab_trials.py's mitigation_withdrawn probe)
+        can tell whether a specific block is still enforced. Best effort:
+        a write failure is logged at debug level and never affects
+        mitigation."""
+        path = settings.ACTIVE_BLOCKS_STATE_PATH
+        if not path:
+            return
+        blocks = [
+            {
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "dst_port": dst_port,
+                "protocol": protocol,
+                "attack_type": action.attack_type,
+                "domain": action.domain,
+            }
+            for store in (self._active_blocks, self._active_mobile_blocks)
+            for (src_ip, dst_ip, dst_port, protocol), action in store.items()
+        ]
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.tmp"
+            with open(tmp, "w") as f:
+                json.dump(blocks, f)
+            os.replace(tmp, path)
+        except OSError as exc:
+            self._logger.debug(log_line("controller", "ORCHESTRATION", "ACTIVE_BLOCKS_WRITE_FAILED", str(exc)))
 
-        Only includes domains with at least one block active RIGHT NOW
-        -- a domain that just dropped to zero won't have a key here at
-        all. The caller is responsible for explicitly zeroing a domain's
-        gauge once it disappears from this dict (a missing Prometheus
-        label keeps showing its last value forever, it doesn't reset).
-        """
+    def active_block_counts_by_domain(self) -> Dict[str, int]:
+        """Active blocks per domain (both _active_blocks and
+        _active_mobile_blocks store MitigationActions that carry their own
+        .domain). Only includes domains with at least one block active
+        RIGHT NOW. Reported in the experiment audit's per-cycle record."""
         counts: Dict[str, int] = defaultdict(int)
         for action in self._active_blocks.values():
             counts[action.domain] += 1
@@ -849,8 +811,7 @@ class OrchestrationController:
         (dst_ip, dst_port, protocol) — DDOS_DISTRIBUTED blocks are
         always keyed by src_ip="*" (scoped by physical ingress
         switch+port instead, not by which fake IP a packet claims to be
-        from) and LOW_SLOW's flow-count variant has no source at all, so
-        both rely on this fallback. LearningSwitch checks this before
+        from), so it relies on this fallback. LearningSwitch checks this before
         installing a new per-source forwarding rule, so a flow already
         covered by an active block doesn't get a pointless one-shot
         permit entry — the drop rule would win on priority anyway, but
@@ -878,7 +839,7 @@ class OrchestrationController:
         than openflow drop-rule-counter-based.
 
         sources: the detection's own per-source UE list, when it has one
-        (DetectionResult.sources, populated for mobile-domain LOW_SLOW/
+        (DetectionResult.sources, populated for mobile-domain
         DDOS_DISTRIBUTED). Those are dispatched as one action per real
         UE IP, not one action keyed by the literal "*" (see _build_
         actions's mobile branch) -- src_ip="*" alone would never match
@@ -897,58 +858,6 @@ class OrchestrationController:
                 for source in sources
             )
         return False
-
-    def active_block_pairs_and_dsts(self) -> Tuple[Set[Tuple[str, str]], Set[str]]:
-        """
-        (src_ip, dst_ip) pairs and dst_ips currently covered by an active
-        openflow block (_active_blocks; deliberately excludes
-        _active_mobile_blocks -- the LOW_SLOW callers this feeds are
-        openflow-only). For merging into analyze_low_slow's exclude_dsts
-        / analyze_low_slow_single_source's exclude_pairs alongside the
-        current cycle's own flagged_pairs/flagged_dsts, so a pair already
-        under an active block from an EARLIER cycle's classification
-        can't get a fresh, different classification once its volumetric
-        signal drops out and the post-flood grace window
-        (_RECENT_FLOOD_GRACE_CYCLES) expires.
-
-        Without this, a stale DDoSCollector port-set entry for an already
-        -blocked, now-finished attack (lingering up to
-        LOW_SLOW_PORT_IDLE_TTL=90s with its old distinct-port count still
-        >= LOW_SLOW_NEW_FLOWS) gets misread as a brand new LOW_SLOW
-        attack once the grace window passes -- re-blocking the same
-        attacker under the wrong label and replacing the original
-        SYN_FLOOD action with a LOW_SLOW one. is_active_block() alone
-        only silences the resulting *log line*/metric for that fresh
-        (wrong) classification; this stops the reclassification itself
-        from happening in the first place.
-        """
-        pairs = {(src, dst) for (src, dst, _port, _proto) in self._active_blocks}
-        dsts = {dst for (_src, dst, _port, _proto) in self._active_blocks}
-        return pairs, dsts
-
-    def is_mobile_blocked(self, src_ip: str, dst_ip: str) -> bool:
-        """
-        True if this source (mobile UE or BNGBlaster session -- see
-        config.settings.PER_SOURCE_MITIGATION_DOMAINS) already has an
-        active per-source block toward this destination, regardless of
-        attack type/protocol/port. Kept its original "_mobile" name (only
-        mobile existed when it was written) -- _active_mobile_blocks is
-        shared by every PER_SOURCE_MITIGATION_DOMAINS member, not mobile-
-        only, despite the name.
-
-        Queried by DDoSDetectionEngine.analyze_low_slow_mobile to exclude
-        already-quarantined sources from its low-rate source count: a
-        successful throttle (from ANY attack type -- UDP/SYN/ICMP flood,
-        DDOS_DISTRIBUTED) drops a source's reported rate to near-zero,
-        which falls squarely inside LOW_SLOW_MOBILE_MAX_PPS's "low rate"
-        band -- without this exclusion, the mitigation's own side effect
-        on a group of sources gets misread as a brand new LOW_SLOW attack
-        forming on top of the one already being handled (observed: a DDOS_
-        DISTRIBUTED block immediately followed by a LOW_SLOW detection
-        for the exact same sources and destination, caused entirely by
-        their own quarantine noise).
-        """
-        return any(key[0] == src_ip and key[1] == dst_ip for key in self._active_mobile_blocks)
 
     def is_validated_flow(self, src_ip: str, dst_ip: str) -> bool:
         """
@@ -997,11 +906,11 @@ class OrchestrationController:
 
     def sweep_blocked_forwarding(self, body) -> None:
         """
-        Delete any L3 forwarding rule (priority=FORWARDING_PRIORITY) whose
+        Delete any L3 forwarding rule (priority=FORWARDING_PRIORITY, or its
+        SYN twin) whose
         (src_ip, dst_ip) is currently under an active block — either that
-        exact source individually (DDOS_DISTRIBUTED's per-source blocks)
-        or a destination-wide "*" block (LOW_SLOW's flow-count variant,
-        which has no per-source list to scope to).
+        exact source individually or a "*" block carrying the specific
+        sources detection flagged (DDOS_DISTRIBUTED's per-location blocks).
 
         clear_forwarding_rules() at block time only knows the sources the
         detection had already seen by then. Sources that slip in during the
@@ -1034,29 +943,20 @@ class OrchestrationController:
         # itself inflate that traffic's measured pps enough to look like
         # a fresh attack.
         wildcard_known_sources: Dict[str, Set[str]] = defaultdict(set)
-        # LOW_SLOW's flow-count-only variant is also a "*"-src block but
-        # carries no per-source list at all (it's a flow-count
-        # signature, not a list of attackers -- see analyze_low_slow),
-        # so scoping to known sources isn't possible for it; the only
-        # sweep it CAN do is "clear every forwarding rule toward this
-        # destination", same as before this fix.
-        wildcard_broad_dsts: Set[str] = set()
         blocked_pairs = set()
         for (src_ip, dst_ip, _, _), action in self._active_blocks.items():
             if src_ip != "*":
                 blocked_pairs.add((src_ip, dst_ip))
-            elif action.sources:
-                wildcard_known_sources[dst_ip].update(action.sources)
             else:
-                wildcard_broad_dsts.add(dst_ip)
+                wildcard_known_sources[dst_ip].update(action.sources)
 
-        if not wildcard_known_sources and not wildcard_broad_dsts and not blocked_pairs:
+        if not wildcard_known_sources and not blocked_pairs:
             return
 
         stale_sources_by_dst: Dict[str, List[str]] = defaultdict(list)
 
         for stat in body:
-            if stat.priority != self.of_mitigator.FORWARDING_PRIORITY:
+            if stat.priority not in (self.of_mitigator.FORWARDING_PRIORITY, self.of_mitigator.SYN_TWIN_PRIORITY):
                 continue
 
             match = stat.match
@@ -1071,8 +971,7 @@ class OrchestrationController:
                 continue
 
             if (
-                dst_ip in wildcard_broad_dsts
-                or src_ip in wildcard_known_sources.get(dst_ip, ())
+                src_ip in wildcard_known_sources.get(dst_ip, ())
                 or (src_ip, dst_ip) in blocked_pairs
             ):
                 stale_sources_by_dst[dst_ip].append(src_ip)
@@ -1179,7 +1078,7 @@ class OrchestrationController:
 
         Returns the unblock MitigationActions issued this cycle (empty if
         none) instead of logging them itself — the caller (ryu_controller_2.
-        py's _run_pipeline) folds them into the same MITIGATION dashboard/
+        py's _run_pipeline) folds them into the same MITIGATION
         logger line every other domain's actions go through, the same
         pattern check_mobile_unblocks() uses.
         """
@@ -1221,21 +1120,9 @@ class OrchestrationController:
                 ))
 
                 del self._active_blocks[key]
+                self._publish_active_blocks()
                 del self._below_threshold_streak[key]
                 self._forget_block_traffic(key)
-                metrics.set_active_blocks(len(self._active_blocks))
-                self._sync_dashboard_blocks()
-                # Zero out the attack/mitigation rate gauges for this
-                # (attack_type, domain) if no other active block still
-                # carries the same type — the gauge would otherwise stay
-                # at the last attack's pps until the next process() cycle
-                # that happens to see zero detections of this type.
-                still_active_types = {
-                    a.attack_type for a in self._active_blocks.values()
-                }
-                if attack_type not in still_active_types:
-                    metrics.record_attack_rate(attack_type, "enterprise", 0, 0)
-                    metrics.record_mitigation_rate(attack_type, "block", "enterprise", 0, 0)
                 # Force re-validation: a flow that was just under attack
                 # shouldn't get its forwarding rules trusted again without
                 # going through at least one more clean cycle. Scoped to
@@ -1260,7 +1147,7 @@ class OrchestrationController:
         (_active_blocks) and mobile/broadband blocks (_active_mobile_blocks).
         Returns True if a block was found and removed, False otherwise.
 
-        Used by the web UI's /api/blocks/unblock endpoint. Logged as
+        Used by config/baseline.py to clear mitigations. Logged as
         MANUAL_UNBLOCK so it's distinguishable from the automatic path.
         """
         key = (src_ip, dst_ip, dst_port, protocol)
@@ -1269,10 +1156,9 @@ class OrchestrationController:
             original = self._active_blocks[key]
             self.of_mitigator.unblock(src_ip, dst_ip, dst_port, protocol)
             del self._active_blocks[key]
+            self._publish_active_blocks()
             self._below_threshold_streak.pop(key, None)
             self._forget_block_traffic(key)
-            metrics.set_active_blocks(len(self._active_blocks))
-            self._sync_dashboard_blocks()
             self._logger.info(log_line(
                 original.domain, "MITIGATION", "MANUAL_UNBLOCK",
                 f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} "
@@ -1297,14 +1183,16 @@ class OrchestrationController:
             if adapter:
                 adapter.apply_mitigation(unblock_action)
             del self._active_mobile_blocks[key]
+            self._publish_active_blocks()
             self._mobile_below_threshold_streak.pop(key, None)
             self._mobile_block_started_at.pop(key, None)
+            self._bgp_offered_last_seen.pop(key, None)
+            self._bb_offered_last_seen.pop(key, None)
             if src_ip == "*":
                 for attacker in getattr(original, "sources", []):
                     self._validated_flows.discard((attacker, dst_ip))
             else:
                 self._validated_flows.discard((src_ip, dst_ip))
-            self._sync_dashboard_blocks()
             self._logger.info(log_line(
                 domain, "MITIGATION", "MANUAL_UNBLOCK",
                 f"source={src_ip} destination={dst_ip}:{dst_port}/{protocol} "
@@ -1314,31 +1202,55 @@ class OrchestrationController:
 
         return False
 
-    def _sync_dashboard_blocks(self) -> None:
-        """Push a snapshot of all active blocks to DashboardState."""
-        import datetime as _dt
-        blocks = []
-        for (src_ip, dst_ip, dst_port, protocol), action in self._active_blocks.items():
-            blocks.append({
-                "src_ip": src_ip,
-                "dst_ip": dst_ip,
-                "dst_port": dst_port,
-                "protocol": protocol,
-                "attack_type": action.attack_type,
-                "domain": action.domain,
-                "blocked_at": getattr(action, "_blocked_at", None),
-            })
-        for (src_ip, dst_ip, dst_port, protocol), action in self._active_mobile_blocks.items():
-            blocks.append({
-                "src_ip": src_ip,
-                "dst_ip": dst_ip,
-                "dst_port": dst_port,
-                "protocol": protocol,
-                "attack_type": action.attack_type,
-                "domain": action.domain,
-                "blocked_at": getattr(action, "_blocked_at", None),
-            })
-        dashboard_state.set_active_blocks(blocks)
+    def _bgp_offered_load_present(self, key, bgp_events) -> bool:
+        """True if this cycle's bgp telemetry shows the offered load a
+        FlowSpec block was installed against still at/above its release
+        threshold (UNBLOCK_RATIO x the threshold that triggered it, same
+        rule as check_unblocks()). Matches the block's destination,
+        protocol (TCP_SYN counts as TCP) and port (0 = any), and -- for a
+        per-source block -- its source; a "*" block sums every source
+        toward the destination. Not every cycle carries bgp events (see
+        settings.PEERING_RELEASE_QUIET_S), so "no events" is simply
+        "not present" here; the caller applies the quiet window."""
+        src_ip, _dst_ip, dst_port, protocol = key
+        pps = 0.0
+        for e in bgp_events:
+            ev_proto = "TCP" if e.protocol == "TCP_SYN" else e.protocol
+            if ev_proto != protocol:
+                continue
+            if dst_port and e.dst_port != dst_port:
+                continue
+            if src_ip != "*" and e.src_ip != src_ip:
+                continue
+            pps += e.pps
+        if src_ip == "*":
+            threshold = settings.DIST_PPS_THRESHOLD
+        else:
+            threshold = _THRESHOLD_BY_PROTOCOL.get(protocol, settings.UDP_THRESHOLD)
+        return pps >= threshold * self.UNBLOCK_RATIO
+
+    def _broadband_release_wait(self, key, original) -> bool:
+        """True while a broadband block must be held. Offered-load
+        hysteresis: the subscriber's session is terminated, so accounting
+        says nothing; BroadbandAdapter.offered_pps() reports what its MAC
+        still sends into bng. The block is released only after that rate has
+        stayed below UNBLOCK_RATIO x the triggering threshold for
+        BROADBAND_RELEASE_QUIET_S. With no fresh measurement it falls back
+        to the block's fixed wall-clock duration -- never to "quiet"."""
+        src_ip, _dst_ip, _dst_port, protocol = key
+        now = time.time()
+        started_at = self._mobile_block_started_at.get(key, now)
+        adapter = self._adapters.get("broadband")
+        pps = None
+        if adapter is not None and src_ip != "*" and hasattr(adapter, "offered_pps"):
+            pps = adapter.offered_pps(src_ip, protocol)
+        if pps is None:
+            return now - started_at < original.duration
+        threshold = _THRESHOLD_BY_PROTOCOL.get(protocol, settings.UDP_THRESHOLD)
+        if pps >= threshold * self.UNBLOCK_RATIO:
+            self._bb_offered_last_seen[key] = now
+        last_seen = self._bb_offered_last_seen.setdefault(key, started_at)
+        return now - last_seen < settings.BROADBAND_RELEASE_QUIET_S
 
     def check_mobile_unblocks(self, correlated: List[CorrelatedEvent]) -> List[MitigationAction]:
         """
@@ -1358,9 +1270,8 @@ class OrchestrationController:
 
         The signal used instead is presence, not rate: a UE still inside
         its attack window keeps reporting telemetry toward the same
-        dst_ip even while throttled to near-zero (see ul_traffic_
-        simulator.py's UE.sample() -- dst_ip only reverts to the UE's
-        normal destination once the attack genuinely stops). So a block
+        dst_ip even while throttled to near-zero (dst_ip only reverts to
+        the UE's normal destination once the attack genuinely stops). So a block
         is only released once this exact (src_ip, dst_ip, protocol) has
         produced *zero* matching telemetry events for UNBLOCK_CONFIRM_
         CYCLES consecutive cycles -- i.e. the UE stopped reporting
@@ -1368,7 +1279,7 @@ class OrchestrationController:
 
         Returns the unblock MitigationActions issued this cycle (empty if
         none) instead of logging them itself — the caller (ryu_controller_2.
-        py's _run_pipeline) folds them into the same MITIGATION dashboard/
+        py's _run_pipeline) folds them into the same MITIGATION
         logger line every other domain's actions go through, so mobile
         unblocks read exactly like an openflow one instead of a separate,
         differently-formatted message.
@@ -1402,7 +1313,7 @@ class OrchestrationController:
             original = self._active_mobile_blocks[key]
             domain = original.domain
 
-            # Domains in PRESENCE_BLIND_DOMAINS can't use the presence
+            # broadband (PRESENCE_BLIND_DOMAINS) can't use the presence
             # signal below at all -- their block (BroadbandAdapter's
             # session-stop) doesn't throttle the source, it cuts it off
             # entirely, so collect() produces literally zero
@@ -1420,7 +1331,32 @@ class OrchestrationController:
             # is still flooding once that window ends and gets
             # re-detected, fine, that's a fresh block with its own fresh
             # window, not an instant bounce.
-            if domain in settings.PRESENCE_BLIND_DOMAINS:
+            if domain == "bgp":
+                # Offered-load hysteresis -- see settings.PEERING_RELEASE_
+                # QUIET_S. The telemetry here is captured BEFORE the
+                # FlowSpec drop, so it keeps showing the attack for as long
+                # as it lasts even while the block works; the block is
+                # released only after the offered load has stayed below
+                # the release threshold for the whole quiet window.
+                now = time.time()
+                c = by_domain_dst.get((domain, dst_ip))
+                bgp_events = [e for e in c.events if e.domain == "bgp"] if c is not None else []
+                adapter = self._adapters.get(domain)
+                if self._bgp_offered_load_present(key, bgp_events):
+                    self._bgp_offered_last_seen[key] = now
+                elif adapter is not None and not adapter.is_connected():
+                    # Telemetry source down: absence of events is not
+                    # evidence the attack ended -- keep holding.
+                    self._bgp_offered_last_seen[key] = now
+                last_seen = self._bgp_offered_last_seen.setdefault(
+                    key, self._mobile_block_started_at.get(key, now)
+                )
+                if now - last_seen < settings.PEERING_RELEASE_QUIET_S:
+                    continue
+            elif domain == "broadband":
+                if self._broadband_release_wait(key, original):
+                    continue
+            elif domain in settings.PRESENCE_BLIND_DOMAINS:
                 started_at = self._mobile_block_started_at.get(key, time.time())
                 if time.time() - started_at < original.duration:
                     continue
@@ -1436,12 +1372,10 @@ class OrchestrationController:
                 # comes from DetectionResult, which carries either the
                 # *normalized* tag (DDoSDetectionEngine._normalize_
                 # protocol turns "TCP_SYN" into "TCP" for OpenFlow's
-                # benefit) or a hardcoded placeholder ("UDP" for
-                # analyze_low_slow_mobile's protocol-agnostic detections)
-                # -- neither of which equals the real TelemetryEvent.
+                # benefit), which doesn't equal the real TelemetryEvent.
                 # protocol ("TCP_SYN" or whatever the source actually
                 # sends), so the comparison always failed and every
-                # SYN_FLOOD/DDOS_DISTRIBUTED/LOW_SLOW block unblocked
+                # SYN_FLOOD/DDOS_DISTRIBUTED block unblocked
                 # itself after exactly UNBLOCK_CONFIRM_CYCLES regardless
                 # of whether the attack was still running.
                 still_present = c is not None and any(
@@ -1498,11 +1432,11 @@ class OrchestrationController:
 
             # Reaching here means either the presence-streak gate above
             # already confirmed UNBLOCK_CONFIRM_CYCLES of absence, or
-            # (PRESENCE_BLIND_DOMAINS) the fixed wall-clock window already
-            # elapsed -- either way, release it now.
+            # (broadband) the fixed wall-clock window / (bgp) the offered-
+            # load quiet window already elapsed -- either way, release it now.
             #
             # Carries the original block's attack_type/device_id through
-            # so the dashboard/logger line reads "UNTHROTTLE ... gNB=1
+            # so the logger line reads "UNTHROTTLE ... gNB=1
             # ..." instead of a blank attack_type or "gNB=unknown" -- same
             # gNB/BNG the source was throttled on, since releasing it is
             # the same control-plane operation, just in reverse.
@@ -1524,18 +1458,11 @@ class OrchestrationController:
             unblock_actions.append(unblock_action)
 
             del self._active_mobile_blocks[key]
+            self._publish_active_blocks()
             self._mobile_below_threshold_streak.pop(key, None)
             self._mobile_block_started_at.pop(key, None)
-            self._sync_dashboard_blocks()
-            still_active_types = {
-                a.attack_type for a in self._active_mobile_blocks.values()
-            }
-            if attack_type not in still_active_types:
-                metrics.record_attack_rate(attack_type, domain, 0, 0)
-                # original.action, not a hardcoded "block" -- true for
-                # mobile/broadband (always "block") but bgp's own action
-                # string is "bgp_flowspec_discard" (see _action_for).
-                metrics.record_mitigation_rate(attack_type, original.action, domain, 0, 0)
+            self._bgp_offered_last_seen.pop(key, None)
+            self._bb_offered_last_seen.pop(key, None)
             # Same per-flow re-validation as check_unblocks() -- see
             # _validated_flows' declaration comment. original.sources
             # covers a wildcard block; src_ip alone covers the normal

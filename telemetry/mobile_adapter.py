@@ -17,14 +17,7 @@ class MobileNetworkAdapter(DomainAdapter):
     Telemetry + mitigation adapter for the Mobile Network Domain (real
     srsRAN Project + Open5GS VM lab -- see docs/ran-testing.md).
 
-    REPLACES the earlier ns-3/mmwave-LENA-oran simulated-scenario design
-    (static config/ue_ip_map.csv + a KPM-CSV tail, both built against
-    that fork's fake IMSI/IP assignment -- see git history for
-    oran_bridge/amf_ue_ngap_id.py and oran_bridge/ue_ip_map.py, kept
-    around only as historical reference for a scenario this lab no
-    longer runs). That design produced synthetic numbers with no real
-    backing at all; this one is built entirely on real, live testbed
-    state.
+    Built entirely on real, live testbed state.
 
     Telemetry (collect()): a single HTTP GET per cycle to
     oran_bridge/ue_telemetry_api.py -- a small persistent service that

@@ -24,8 +24,8 @@ discard route produces a real nftables rule, and withdrawing it removes
 that same rule (`nft list ruleset` verified empty afterward). Still
 unverified: TTL-driven withdrawal specifically (the spike withdrew
 manually via the FIFO, not through MitigationAction.duration expiring),
-and the measured *effect* on real traffic once wired into the Mininet
-topology's r1 (see docs/peering-plan.md §6). Per implementation-design.md §5's state machine,
+and the measured *effect* on real traffic once wired into the VM lab's
+`br` (see docs/peering-plan.md §6). Per implementation-design.md §5's state machine,
 apply()/announce()/withdraw() returning True here means DISPATCHED/
 ACCEPTED -- do not report it to the UI/logs as APPLIED or VERIFIED
 without the readback/effect measurement implementation-design.md §5

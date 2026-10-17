@@ -3,6 +3,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import config.settings as settings
 from core.log_format import log_line
+from forwarding.syn_twin import syn_twin_match
 from core.models import MitigationAction
 from mitigation.base import MitigationAdapter
 
@@ -39,7 +40,10 @@ class OpenFlowMitigator(MitigationAdapter):
 
     # Priority LearningSwitch uses for its L3 (ipv4_src/ipv4_dst) forwarding
     # rules — needed to delete exactly those entries, not the drop rules.
-    FORWARDING_PRIORITY = 10
+    FORWARDING_PRIORITY = settings.FORWARDING_PRIORITY
+
+    # Priority of each L3 rule's SYN twin -- deleted together with it.
+    SYN_TWIN_PRIORITY = settings.SYN_TWIN_PRIORITY
 
     # How many send_msg calls clear_forwarding_rules() makes between
     # cooperative yields. A distributed attack's source list can run into
@@ -207,7 +211,8 @@ class OpenFlowMitigator(MitigationAdapter):
         for datapath in self._datapaths.values():
             for src_ip in sources:
                 self._delete_forwarding_rule(datapath, src_ip, dst_ip)
-                calls += 1
+                self._delete_syn_twin_rule(datapath, src_ip, dst_ip)
+                calls += 2
                 if calls % self.YIELD_EVERY == 0:
                     self._yield_fn()
 
@@ -295,6 +300,24 @@ class OpenFlowMitigator(MitigationAdapter):
             command=ofproto.OFPFC_DELETE_STRICT,
             priority=self.FORWARDING_PRIORITY,
             match=match,
+            out_port=ofproto.OFPP_ANY,
+            out_group=ofproto.OFPG_ANY,
+        )
+        datapath.send_msg(mod)
+
+    def _delete_syn_twin_rule(self, datapath, src_ip: str, dst_ip: str) -> None:
+        """Strict-deletes the SYN twin of this pair's L3 rule (see
+        forwarding/syn_twin.py). Deleting a rule that doesn't exist is a
+        silent no-op in OpenFlow, so this is safe for pairs that never got
+        one (provisional rules)."""
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        mod = parser.OFPFlowMod(
+            datapath=datapath,
+            command=ofproto.OFPFC_DELETE_STRICT,
+            priority=self.SYN_TWIN_PRIORITY,
+            match=syn_twin_match(parser, src_ip, dst_ip),
             out_port=ofproto.OFPP_ANY,
             out_group=ofproto.OFPG_ANY,
         )

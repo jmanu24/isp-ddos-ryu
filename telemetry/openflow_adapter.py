@@ -13,55 +13,7 @@ from collectors.ddos_collector import DDoSCollector
 
 _PROTO_NAMES = {1: "ICMP", 6: "TCP", 17: "UDP"}
 
-# Address space simulation/ue_traffic_generator.py spoofs mobile UE
-# source IPs from (10.60.0.x in the ring topology). That traffic is real
-# packets crossing these same OpenFlow switches, but it is NOT this
-# domain's traffic to detect or mitigate -- MobileNetworkAdapter's own
-# KPM CSV pipeline (fed by simulation/ue_kpm_monitor.py's real nftables
-# measurement of that same traffic) is the intended detector/mitigator
-# for it. Without this exclusion, this domain's own packet-in/flow-stats
-# detection races it and virtually always wins (it reacts within one
-# packet-in instead of one KPM-CSV poll cycle), firing a network-wide
-# drop rule before -- or instead of -- the mobile-domain RC command
-# queue ever gets a chance to throttle the UE at the RAN level, defeating
-# the entire point of simulating that path.
-#
-# /16, not /24: topologies/star_topology.py's simulation/gnb_pool.py
-# splits UEs per gNB, one /24 per switch (10.60.<i>.0/24, i=1..4) --
-# widened here to cover the whole range with headroom, rather than
-# tracking a growing list of per-gNB /24s. Does not overlap
-# _BNG_NETWORK_SUBNET (10.50.0.0/24) or _BNG_SESSION_SUBNETS
-# (10.61.x.0/24) below.
-_MOBILE_UE_SUBNET = ipaddress.ip_network("10.60.0.0/16")
-
-
-def _is_mobile_ue_source(ip: Optional[str]) -> bool:
-    if not ip:
-        return False
-    try:
-        return ipaddress.ip_address(ip) in _MOBILE_UE_SUBNET
-    except ValueError:
-        return False
-
-
-# Same exclusion, for the broadband domain -- deploy/setup_bng_netns.sh's
-# --bridge-into-mininet step plugs BNGBlaster's real network-side veth
-# (veth-n-peer) into one of this ring's OVS switches, so its real
-# session-traffic packets now physically transit this domain's switches
-# too. session-traffic's downstream leg carries src=10.50.0.x (the
-# network side), dst=10.61.<vid>.x (the session's own access-side IP) --
-# see that script's own comments -- so both ranges need excluding, not
-# just the network subnet alone, or the downstream leg would still be
-# visible to (and race) this domain's detection exactly like unexcluded
-# mobile UE traffic once did.
-_BNG_NETWORK_SUBNET = ipaddress.ip_network("10.50.0.0/24")
-# Must match deploy/setup_bng_netns.sh's MAX_VLAN.
-_BNG_MAX_VLAN = 8
-_BNG_SESSION_SUBNETS = [
-    ipaddress.ip_network(f"10.61.{vid}.0/24") for vid in range(1, _BNG_MAX_VLAN + 1)
-]
-
-# Distributed-VM data-plane ranges that cross the shared PE OpenFlow
+# Other domains' data-plane ranges that cross the shared PE OpenFlow
 # bridge but belong to another detector. The PE sees mobile and fixed
 # traffic after NAT (10.91.0.2 / 10.92.0.2), while peering keeps the
 # external source (10.30.0.2). Treating those transit addresses as
@@ -87,24 +39,10 @@ def _is_distributed_non_enterprise_source(ip: Optional[str]) -> bool:
     return any(addr in net for net in _DISTRIBUTED_NON_ENTERPRISE_SUBNETS)
 
 
-def _is_bng_source(ip: Optional[str]) -> bool:
-    if not ip:
-        return False
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return False
-    return addr in _BNG_NETWORK_SUBNET or any(addr in net for net in _BNG_SESSION_SUBNETS)
-
-
 def _is_simulated_domain_source(ip: Optional[str]) -> bool:
     """Union of every other domain's simulated-traffic address space that
     happens to also transit this domain's real OpenFlow switches."""
-    return (
-        _is_mobile_ue_source(ip)
-        or _is_bng_source(ip)
-        or _is_distributed_non_enterprise_source(ip)
-    )
+    return _is_distributed_non_enterprise_source(ip)
 
 
 def _is_simulated_domain_flow(src_ip: Optional[str], dst_ip: Optional[str]) -> bool:
@@ -140,7 +78,7 @@ _FLOW_META_TTL = settings.VALIDATED_FLOW_HARD_TIMEOUT
 class OpenFlowAdapter(DomainAdapter):
     """
     Telemetry adapter for the Enterprise Services domain, implemented over
-    an OpenFlow / SDN (Mininet) topology -- "OpenFlow"/"SDN" is the
+    an OpenFlow / SDN topology -- "OpenFlow"/"SDN" is the
     technical mechanism, "Enterprise" is the domain it represents in the
     controller's 4-domain model (Enterprise, Mobile, Broadband, External
     Peering). Kept the class/file name "OpenFlow" since that's the real,
@@ -183,10 +121,6 @@ class OpenFlowAdapter(DomainAdapter):
         # None means "trust every sighting" (used in tests / when this
         # filtering isn't wired up).
         self._is_host_port = is_host_port
-        # dst_ip -> count of currently-stalled (old, low-byte) flows
-        # toward it, accumulated across all switches this cycle — see
-        # FlowCollector.count_low_volume_flows.
-        self._low_volume_flow_counts: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Push handlers — called from Ryu event callbacks
@@ -197,13 +131,6 @@ class OpenFlowAdapter(DomainAdapter):
         Process an OFPFlowStatsReply body and convert flows to TelemetryEvents.
         Called by the controller's flow_stats_reply_handler.
         """
-        for dst_ip, count in self._flow_collector.count_low_volume_flows(
-            body, exclude_flow=_is_simulated_domain_flow
-        ).items():
-            self._low_volume_flow_counts[dst_ip] = (
-                self._low_volume_flow_counts.get(dst_ip, 0) + count
-            )
-
         flows = self._flow_collector.process_stats(dpid, body, exclude_flow=_is_simulated_domain_flow)
         events: List[TelemetryEvent] = []
 
@@ -212,8 +139,36 @@ class OpenFlowAdapter(DomainAdapter):
             dst_ip = flow.get("dst_ip") or "0.0.0.0"
 
             meta = self._fresh_meta(src_ip, dst_ip)
+
+            if flow.get("syn_only"):
+                # The SYN twin rule's counters: exactly this pair's bare-SYN
+                # volume. The port is a best effort from the pair's TCP
+                # sighting (the twin matches no port); 0 means "any TCP
+                # port" to the mitigator.
+                tcp_port = meta["dst_port"] if meta and meta["protocol"] in ("TCP", "TCP_SYN") else 0
+                events.append(TelemetryEvent(
+                    domain=self.domain_name,
+                    device_id=str(dpid),
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=tcp_port,
+                    protocol="TCP_SYN",
+                    pps=flow["packet_rate"],
+                    bps=flow["byte_rate"],
+                ))
+                continue
+
             if meta:
                 proto = meta["protocol"]
+                if proto == "TCP_SYN":
+                    # The packet-in tag describes ONE packet (a bare SYN),
+                    # never all the volume accumulated in this L3 rule,
+                    # which may be established-connection traffic. Labeling
+                    # that volume TCP_SYN would count it toward
+                    # SYN_THRESHOLD. SYN floods are classified from the
+                    # packet-in events instead (on_packet_in), where each
+                    # packet is individually tagged.
+                    proto = "TCP"
                 dst_port = meta["dst_port"]
             else:
                 proto = _PROTO_NAMES.get(flow["protocol"], "IP")
@@ -252,9 +207,7 @@ class OpenFlowAdapter(DomainAdapter):
 
         if _is_simulated_domain_source(result["dst_ip"]):
             # This whole window's destination belongs to another
-            # simulated domain (a mobile UE, or -- once bridged via
-            # deploy/setup_bng_netns.sh's --bridge-into-mininet -- a BNG
-            # session/network address) -- e.g. a real host's ICMP echo
+            # other domain (a mobile UE or a BNG session) -- e.g. a real host's ICMP echo
             # replies flowing back toward a flooded UE's spoofed source.
             # Every src_ip in this result shares the same dst_ip
             # (DDoSCollector.process_packet windows per destination), so
@@ -383,13 +336,6 @@ class OpenFlowAdapter(DomainAdapter):
             return meta
         return None
 
-    def collect_low_volume_flow_counts(self) -> Dict[str, int]:
-        """Drain and return this cycle's dst_ip -> stalled-flow-count
-        accumulated across all switches, for low-and-slow detection."""
-        counts = self._low_volume_flow_counts
-        self._low_volume_flow_counts = {}
-        return counts
-
     def get_source_ingress(self, src_ip: str, dst_ip: str) -> Tuple[Optional[int], Optional[int]]:
         """
         (dpid, in_port) of the genuine HOST port this (src_ip, dst_ip)
@@ -408,20 +354,6 @@ class OpenFlowAdapter(DomainAdapter):
         if meta and meta["dpid"] is not None:
             return meta["dpid"], meta["in_port"]
         return None, None
-
-    def get_connection_port_counts(self) -> Dict[Tuple[str, str], dict]:
-        """
-        (src_ip, dst_ip) -> {"count", "dst_port", "protocol"} — for
-        single-source low-and-slow detection (many real connections from
-        one attacker, all collapsed into one L3 forwarding rule, so
-        OpenFlow flow stats alone can't tell them apart; packet-in is the
-        only place each connection's own src_port/dst_port is visible).
-        """
-        return self._ddos_collector.get_connection_port_counts()
-
-    def clear_connection_ports(self, src_ip: str, dst_ip: str) -> None:
-        """See DDoSCollector.clear_connection_ports."""
-        self._ddos_collector.clear_connection_ports(src_ip, dst_ip)
 
     # ------------------------------------------------------------------
     # DomainAdapter interface

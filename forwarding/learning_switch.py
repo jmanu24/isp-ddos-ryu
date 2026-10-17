@@ -11,13 +11,14 @@ from ryu.lib.packet import icmp
 
 import config.settings as settings
 from core.log_format import log_line
+from forwarding.syn_twin import syn_twin_match
 
 
 class LearningSwitch:
 
     # Lifetime, in seconds, of the provisional flow installed for a
-    # destination that hasn't been validated yet. Far shorter than the
-    # detection cycle (COLLECT_INTERVAL=5s in config/settings.py), so it
+    # destination that hasn't been validated yet. Only a few detection
+    # cycles long (COLLECT_INTERVAL=0.5s in config/settings.py), so it
     # never amounts to a long-term trust decision — it just keeps a
     # high-rate flood from punting every single packet to the controller
     # (which would starve the detection pipeline itself of CPU time) while
@@ -72,9 +73,7 @@ class LearningSwitch:
 
         # (dpid, port) pairs where the router's interface lives, learned
         # from ARP replies/requests whose src_ip ends in ".1" (this
-        # codebase's gateway-IP convention — see ryu_controller_2.py's
-        # topology builder, which excludes the same IPs from the host
-        # list shown on the dashboard). Needed to tell a genuine HOST
+        # codebase's gateway-IP convention). Needed to tell a genuine HOST
         # port apart from a router-facing one: both pass the "not an
         # inter-switch link" test that _host_location uses, but a block
         # must never be scoped to the router's port — that's not where
@@ -105,18 +104,6 @@ class LearningSwitch:
         if self._is_interswitch_port and self._is_interswitch_port(dpid, port_no):
             return False
         return (dpid, port_no) not in self._router_ports
-
-    def get_known_hosts(self):
-        """
-        [{ip, dpid, port}, ...] for every IP with a confirmed edge-port
-        location — used to draw hosts on the topology graph.
-        """
-        hosts = []
-        for ip, mac in self._ip_to_mac.items():
-            location = self._host_location.get(mac)
-            if location:
-                hosts.append({"ip": ip, "dpid": location[0], "port": location[1]})
-        return hosts
 
     def add_flow(
         self,
@@ -307,12 +294,30 @@ class LearningSwitch:
                     # metadata for that pair would never get refreshed.
                     self.add_flow(
                         datapath,
-                        priority=10,
+                        priority=settings.FORWARDING_PRIORITY,
                         match=match,
                         actions=actions,
                         idle_timeout=60,
                         hard_timeout=settings.VALIDATED_FLOW_HARD_TIMEOUT
                     )
+
+                    if settings.SYN_TWIN_ENABLED:
+                        # Same output and lifetime as the rule above, one
+                        # priority higher, matching only bare SYNs: its
+                        # counters are this pair's exact SYN rate, which the
+                        # L3 rule's can't tell apart from its other traffic
+                        # (config/settings.py's SYN_TWIN_PRIORITY). Only for
+                        # validated (long-lived) rules: a provisional rule
+                        # lives 2s and keeps sending packets to the
+                        # controller, where each one is tagged individually.
+                        self.add_flow(
+                            datapath,
+                            priority=settings.SYN_TWIN_PRIORITY,
+                            match=syn_twin_match(parser, ip_pkt.src, ip_pkt.dst),
+                            actions=actions,
+                            idle_timeout=60,
+                            hard_timeout=settings.VALIDATED_FLOW_HARD_TIMEOUT
+                        )
 
                 else:
 
@@ -323,7 +328,7 @@ class LearningSwitch:
                     # switch so a flood doesn't starve the controller.
                     self.add_flow(
                         datapath,
-                        priority=10,
+                        priority=settings.FORWARDING_PRIORITY,
                         match=match,
                         actions=actions,
                         idle_timeout=0,

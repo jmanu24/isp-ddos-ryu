@@ -43,12 +43,13 @@ returns pre-joined, ready-to-use rows so mobile_adapter.py's own job is
 just "GET a URL and build TelemetryEvents", nothing more.
 """
 
+import collections
 import ipaddress
 import json
 import os
 import re
 import subprocess
-from typing import Dict
+from typing import Deque, Dict, Optional, Tuple
 import threading
 import time
 import urllib.error
@@ -68,6 +69,10 @@ GNB_ID_BIT_LENGTH = 22
 NCI_BIT_LENGTH = 36
 
 CONNTRACK_POLL_INTERVAL_S = 1.0
+# New-TCP-connection rate (see _conntrack_syn_event_loop): sliding window the
+# per-second rate is averaged over, and the size one bare SYN is reported as.
+SYN_RATE_WINDOW_S = 2.0
+SYN_FRAME_BYTES = 60
 LOG_POLL_INTERVAL_S = 0.5
 # How long a pending amf_ue_ngap_id (seen via the RAN_UE_NGAP_ID/
 # AMF_UE_NGAP_ID line) stays eligible to be matched against the next
@@ -93,6 +98,61 @@ _SESSION_REMOVED_RE = re.compile(
 
 _PROTO_NAMES = {"icmp": "ICMP", "tcp": "TCP", "udp": "UDP"}
 
+# One line of `conntrack -E -e NEW -p tcp`, e.g.
+#   [NEW] tcp      6 120 SYN_SENT src=10.45.1.4 dst=10.55.0.100 sport=42190 dport=443 [UNREPLIED] src=...
+# SYN_SENT is the state of an entry created by a bare SYN (with
+# nf_conntrack_tcp_loose=1 a mid-stream packet can also create one, but not
+# in SYN_SENT), so each matching line is exactly one connection attempt.
+_CT_NEW_SYN_RE = re.compile(
+    r"^\s*\[NEW\]\s+tcp\s+\d+\s+\d+\s+SYN_SENT\s+"
+    r"src=(?P<src>[\d.]+)\s+dst=(?P<dst>[\d.]+)\s+sport=\d+\s+dport=(?P<dport>\d+)"
+)
+
+
+def parse_new_syn_event(line: str) -> Optional[Tuple[str, str, int]]:
+    """(src, dst, dport) for a NEW TCP connection attempt whose source is in
+    the UE pool, else None (other state, other protocol, or not a UE)."""
+    m = _CT_NEW_SYN_RE.match(line)
+    if not m:
+        return None
+    try:
+        if ipaddress.ip_address(m.group("src")) not in UE_POOL:
+            return None
+    except ValueError:
+        return None
+    return m.group("src"), m.group("dst"), int(m.group("dport"))
+
+
+class SynRateWindow:
+    """Connection attempts per second per (src, dst, dport), averaged over a
+    sliding window. Counting NEW events instead of reading `conntrack -L`
+    is what makes a SYN flood measurable at all: its entries live for a few
+    hundred milliseconds (the victim answers RST / the UPF reaps them), so
+    they rarely survive two polls and the list-based packet deltas read as
+    0, a burst, 0, a burst... (measured: 0/173/0/307/0/1158 pps for a flood
+    of ~900 attempts/s)."""
+
+    def __init__(self, window_s: float = SYN_RATE_WINDOW_S, clock=time.monotonic):
+        self.window_s = window_s
+        self._clock = clock
+        self._events: Dict[Tuple[str, str, int], Deque[float]] = {}
+
+    def record(self, key: Tuple[str, str, int]) -> None:
+        self._events.setdefault(key, collections.deque()).append(self._clock())
+
+    def rates(self) -> Dict[Tuple[str, str, int], float]:
+        cutoff = self._clock() - self.window_s
+        out = {}
+        for key in list(self._events):
+            q = self._events[key]
+            while q and q[0] < cutoff:
+                q.popleft()
+            if q:
+                out[key] = len(q) / self.window_s
+            else:
+                del self._events[key]
+        return out
+
 
 class _State:
     def __init__(self):
@@ -108,7 +168,10 @@ class _State:
         self.kpm_by_imsi = {}
         self.log_connected = False
         self.conntrack_connected = False
+        self.syn_events_connected = False
         self.kpm_connected = False
+        # New-TCP-connection rate per (src, dst, dport) -- guarded by `lock`.
+        self.syn_window = SynRateWindow()
 
 
 state = _State()
@@ -374,8 +437,70 @@ def _conntrack_poll_loop():
 
 
 # ---------------------------------------------------------------------
+# 3b. New-TCP-connection rate (conntrack event stream)
+# ---------------------------------------------------------------------
+
+def _conntrack_syn_event_loop():
+    """Streams `conntrack -E -e NEW -p tcp` and counts connection attempts
+    per (UE, destination, port). The stream is restarted if conntrack exits
+    (e.g. its netlink buffer overflowed under a flood)."""
+    while True:
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                ["sudo", "conntrack", "-E", "-e", "NEW", "-p", "tcp"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            )
+            with state.lock:
+                state.syn_events_connected = True
+            for line in proc.stdout:
+                key = parse_new_syn_event(line)
+                if key is not None:
+                    with state.lock:
+                        state.syn_window.record(key)
+        except OSError:
+            pass
+        finally:
+            with state.lock:
+                state.syn_events_connected = False
+            if proc is not None:
+                proc.kill()
+        time.sleep(1.0)
+
+
+# ---------------------------------------------------------------------
 # 4. HTTP API
 # ---------------------------------------------------------------------
+
+def build_flow_rows(flows, syn_rates, sessions, kpm_by_imsi, now=None):
+    """The /telemetry flow rows: the `conntrack -L` flows plus one TCP_SYN row
+    per (UE, destination, port) with connection attempts in the window, every
+    row joined with its UE's identity and KPM. The TCP_SYN pps is the attempt
+    rate (one bare SYN each), not a delta of entry counters."""
+    now = time.time() if now is None else now
+    all_flows = list(flows)
+    for (src, dst, dport), rate in syn_rates.items():
+        all_flows.append({
+            "src_ip": src, "dst_ip": dst, "protocol": "TCP_SYN", "dst_port": dport,
+            "pps": rate, "bps": rate * SYN_FRAME_BYTES, "updated_at": now,
+        })
+
+    rows = []
+    for f in all_flows:
+        sess = sessions.get(f["src_ip"])
+        kpm = kpm_by_imsi.get(sess["imsi"]) if sess else None
+        rows.append({
+            **f,
+            "imsi": sess["imsi"] if sess else None,
+            "amf_ue_ngap_id": sess["amf_ue_ngap_id"] if sess else None,
+            "nr_cell_id": sess["nr_cell_id"] if sess else None,
+            "gnb_id": sess["gnb_id"] if sess else None,
+            "cell_local_id": sess["cell_local_id"] if sess else None,
+            "kpm": kpm["metrics"] if kpm else {},
+            "kpm_updated_at": kpm["updated_at"] if kpm else None,
+        })
+    return rows
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -390,25 +515,14 @@ class Handler(BaseHTTPRequestHandler):
         with state.lock:
             sessions = dict(state.sessions)
             flows = list(state.flows.values())
+            syn_rates = state.syn_window.rates()
             kpm_by_imsi = dict(state.kpm_by_imsi)
             log_connected = state.log_connected
             conntrack_connected = state.conntrack_connected
+            syn_events_connected = state.syn_events_connected
             kpm_connected = state.kpm_connected
 
-        rows = []
-        for f in flows:
-            sess = sessions.get(f["src_ip"])
-            kpm = kpm_by_imsi.get(sess["imsi"]) if sess else None
-            rows.append({
-                **f,
-                "imsi": sess["imsi"] if sess else None,
-                "amf_ue_ngap_id": sess["amf_ue_ngap_id"] if sess else None,
-                "nr_cell_id": sess["nr_cell_id"] if sess else None,
-                "gnb_id": sess["gnb_id"] if sess else None,
-                "cell_local_id": sess["cell_local_id"] if sess else None,
-                "kpm": kpm["metrics"] if kpm else {},
-                "kpm_updated_at": kpm["updated_at"] if kpm else None,
-            })
+        rows = build_flow_rows(flows, syn_rates, sessions, kpm_by_imsi)
 
         session_rows = []
         for ip, sess in sessions.items():
@@ -429,6 +543,7 @@ class Handler(BaseHTTPRequestHandler):
             "sessions": session_rows,
             "log_connected": log_connected,
             "conntrack_connected": conntrack_connected,
+            "syn_events_connected": syn_events_connected,
             "kpm_connected": kpm_connected,
             "session_count": len(sessions),
         }).encode("utf-8")
@@ -443,6 +558,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     threading.Thread(target=_log_tail_loop, daemon=True).start()
     threading.Thread(target=_conntrack_poll_loop, daemon=True).start()
+    threading.Thread(target=_conntrack_syn_event_loop, daemon=True).start()
     threading.Thread(target=_kpm_poll_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
     server.serve_forever()

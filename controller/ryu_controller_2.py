@@ -1,8 +1,6 @@
 import time
 import logging
 from config.baseline import baseline_active
-from collections import defaultdict
-from typing import Dict
 
 from ryu.base import app_manager
 from ryu.controller import ofp_event
@@ -14,9 +12,7 @@ from ryu.controller.handler import (
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib import hub
 from ryu.topology import event
-from ryu.topology.api import get_switch, get_link
-
-import threading
+from ryu.topology.api import get_link
 
 # force=True re-applies this format even though Ryu's own startup already
 # attached handlers to the root logger — without it, basicConfig() would be
@@ -48,12 +44,6 @@ from detection.engine import DDoSDetectionEngine
 # Stages 4 + 5 — Decision Engine + Orchestration & Control
 from orchestration.controller import OrchestrationController
 # ──────────────────────────────────────────────────────────────────────────
-
-# Web dashboard
-from web.state import dashboard_state
-from web.socket_server import start_server, emit_update
-from web import metrics
-from web.api import set_orchestrator
 
 import config.settings as settings
 from dataclasses import asdict
@@ -122,7 +112,7 @@ def _detection_log_lines(d) -> list:
     was simply never written under that domain's own bracket. A plain
     (non-distributed) detection has no source_domains at all, so this is
     a single-element, unchanged-behavior list for it. Pulled out as a
-    pure function (no logger/dashboard dependency) so it's unit-testable
+    pure function (no logger dependency) so it's unit-testable
     without a Ryu runtime."""
     contributing_domains = sorted(set(d.source_domains.values())) if d.source_domains else [d.domain]
     domains_field = ",".join(contributing_domains)
@@ -179,39 +169,25 @@ class FlowStatsIDS(app_manager.RyuApp):
         # ── Stage 1: Telemetry Collection ────────────────────────────
         self.of_adapter = OpenFlowAdapter(is_host_port=self.forwarding.is_host_port)
 
-        # MobileNetworkAdapter and BroadbandAdapter are real now (real
-        # E2/KPM pipeline via simulation/parse_xapp_kpm_log.py's CSV for
-        # mobile, real BNGBlaster pipeline via simulation/
-        # bng_traffic_simulator.py's CSV + control socket for broadband
-        # -- see each module's docstring). of_adapter IS the Enterprise
+        # MobileNetworkAdapter and BroadbandAdapter read the real VM lab
+        # (Open5GS/srsRAN telemetry API for mobile, FreeRADIUS accounting
+        # on the BNG for broadband -- see each module's docstring).
+        # of_adapter IS the Enterprise
         # domain (OpenFlow/SDN over the PE-facing topology) -- there is
         # no separate Enterprise adapter/stub; External Peering (BGP)
         # is instrumented per docs/peering-plan.md.
         self.all_adapters = [
             self.of_adapter,
             MobileNetworkAdapter(logger=self.logger),
-            # bng_host left unset -- BroadbandAdapter picks the right
-            # default itself (Mininet's "bng-blaster-1" label, or the
-            # distributed lab's real suscriptor SSH host) based on
-            # settings.BNG_DISTRIBUTED_MODE. A hardcoded value here would
-            # silently override that selection in distributed mode.
             BroadbandAdapter(logger=self.logger),
             BGPPeeringAdapter(logger=self.logger, async_poll=True),
         ]
-
-        # Domains that had at least one active mitigation block as of the
-        # last cycle -- see _run_pipeline's metrics.set_active_blocks_by_domain
-        # call for why this is needed (a domain dropping to zero blocks
-        # needs an explicit 0 sent, or its Grafana gauge just keeps
-        # showing the last nonzero value forever).
-        self._known_active_block_domains = set()
 
         # ── Stages 2-5: Correlation → Detection → Decision → Control ─
         # cross_domain toggles "multidomain" (default) vs. "isolated"
         # detection -- see settings.DETECTION_CROSS_DOMAIN_CORRELATION's
         # own comment. A process-start setting (not hot-reloaded):
-        # changing it needs a ryu-manager restart, same as
-        # PEERING_DISTRIBUTED_MODE/BNG_DISTRIBUTED_MODE below.
+        # changing it needs a ryu-manager restart.
         self.correlator  = MultidomainCorrelator(
             cross_domain=settings.DETECTION_CROSS_DOMAIN_CORRELATION
         )
@@ -224,13 +200,8 @@ class FlowStatsIDS(app_manager.RyuApp):
             logger=self.logger,
         )
 
-        set_orchestrator(self.orchestrator)
-
         # ── Monitoring loop ───────────────────────────────────────────
         self.monitor_thread = hub.spawn(self._monitor)
-
-        # ── Web dashboard ─────────────────────────────────────────────
-        threading.Thread(target=start_server, daemon=True).start()
 
         detection_mode = "multidomain" if settings.DETECTION_CROSS_DOMAIN_CORRELATION else "isolated"
         self.logger.info(log_line("controller", "STARTUP", f"DETECTION_MODE={detection_mode}"))
@@ -242,32 +213,7 @@ class FlowStatsIDS(app_manager.RyuApp):
 
     def _update_topology(self):
         try:
-            nodes = [
-                {"id": str(sw.dp.id), "label": f"s{sw.dp.id}", "group": "switch"}
-                for sw in get_switch(self, None)
-            ]
             raw_links = get_link(self, None)
-            links = [
-                {"source": str(lk.src.dpid), "target": str(lk.dst.dpid)}
-                for lk in raw_links
-            ]
-
-            # Hosts LearningSwitch has confirmed an edge-port location for
-            # — drawn as extra nodes linked to the switch they're attached
-            # to, so the graph isn't just switches floating with no leaves.
-            # Router/gateway interfaces (always x.x.x.1 by this project's
-            # topology convention) are skipped — they clutter the graph
-            # with one node per subnet for what's conceptually one device.
-            for host in self.forwarding.get_known_hosts():
-                if host["ip"].endswith(".1"):
-                    continue
-
-                host_id = f"host-{host['ip']}"
-                nodes.append({"id": host_id, "label": host["ip"], "group": "host"})
-                links.append({"source": host_id, "target": str(host["dpid"])})
-
-            dashboard_state.update_topology(nodes, links)
-            emit_update()
 
             # Every (dpid, port_no) on either side of a discovered switch-
             # switch link — mitigation must never trust one of these as
@@ -286,28 +232,24 @@ class FlowStatsIDS(app_manager.RyuApp):
 
     @set_ev_cls(event.EventSwitchEnter)
     def switch_enter_handler(self, ev):
-        dashboard_state.add_event("Switch added to topology")
         self._update_topology()
 
     @set_ev_cls(event.EventSwitchLeave)
     def switch_leave_handler(self, ev):
-        dashboard_state.add_event("Switch removed from topology")
         # Forgets this dpid's OpenFlowMitigator datapath -- without this,
         # a disconnected switch's entry lingered forever, and a future
         # block decided to target it (e.g. reusing the same dpid after a
-        # Mininet restart) could resolve to a stale, no-longer-valid
+        # switch restart) could resolve to a stale, no-longer-valid
         # datapath handle.
         self.orchestrator.deregister_datapath(ev.switch.dp.id)
         self._update_topology()
 
     @set_ev_cls(event.EventLinkAdd)
     def link_add_handler(self, ev):
-        dashboard_state.add_event("New link detected")
         self._update_topology()
 
     @set_ev_cls(event.EventLinkDelete)
     def link_delete_handler(self, ev):
-        dashboard_state.add_event("Link removed")
         self._update_topology()
 
     # ------------------------------------------------------------------
@@ -325,10 +267,6 @@ class FlowStatsIDS(app_manager.RyuApp):
 
         # Register datapath with the OpenFlow mitigator
         self.orchestrator.register_datapath(datapath)
-
-        dashboard_state.add_switch(datapath.id)
-        dashboard_state.add_event(f"Switch connected: {datapath.id}")
-        emit_update()
 
         self.logger.info(log_line("enterprise", "FORWARDING", "SWITCH_CONNECTED", f"id={datapath.id}"))
 
@@ -356,7 +294,6 @@ class FlowStatsIDS(app_manager.RyuApp):
             for dp in list(self.datapaths.values()):
                 try:
                     self._request_flow_stats(dp)
-                    self._request_port_stats(dp)
                 except Exception as e:
                     self.logger.error(log_line("enterprise", "TELEMETRY", "ERROR", str(e)))
 
@@ -402,34 +339,7 @@ class FlowStatsIDS(app_manager.RyuApp):
             except Exception as e:
                 self.logger.error(log_line(adapter.domain_name, "TELEMETRY", "ERROR", str(e)))
 
-        # Per-domain traffic KPI for Grafana -- every domain's collect()
-        # output, aggregated regardless of whether anything crosses a
-        # detection threshold this cycle, so each domain's dashboard has
-        # a baseline "is telemetry even flowing" panel instead of only
-        # ever showing attack-triggered spikes. Computed for every
-        # adapter (even ones that returned nothing this cycle) so a
-        # domain that goes quiet correctly drops to 0 instead of its
-        # gauge keeping its last nonzero value forever.
-        events_by_domain = defaultdict(list)
-        for e in all_events:
-            events_by_domain[e.domain].append(e)
-        for adapter in self.all_adapters:
-            domain_events = events_by_domain.get(adapter.domain_name, [])
-            metrics.update_domain_traffic(
-                adapter.domain_name,
-                pps=sum(e.pps for e in domain_events),
-                bps=sum(e.bps for e in domain_events),
-                active_sources=len({e.src_ip for e in domain_events}),
-            )
-
-        # Same zero-fill concern for "active blocks by domain" -- a
-        # domain whose last block just got released needs an explicit 0
-        # sent this cycle, not just silently dropping out of the dict
-        # active_block_counts_by_domain() returns.
         block_counts = self.orchestrator.active_block_counts_by_domain()
-        domains_to_zero = self._known_active_block_domains - block_counts.keys()
-        metrics.set_active_blocks_by_domain({**{d: 0 for d in domains_to_zero}, **block_counts})
-        self._known_active_block_domains = set(block_counts.keys())
 
         audit_observed={}
         for event in all_events:
@@ -450,20 +360,9 @@ class FlowStatsIDS(app_manager.RyuApp):
         # drop rules' own counters (sampled in flow_stats_reply_handler),
         # not by `correlated`, since a blocked flow's packets never reach
         # this pipeline's telemetry again. Returned (not logged internally)
-        # so it goes through the same MITIGATION dashboard/logger line as
+        # so it goes through the same MITIGATION logger line as
         # every other domain's actions below.
         openflow_unblock_actions = self.orchestrator.check_unblocks()
-
-        # Reset DDoSCollector's distinct-port tracking for whatever just
-        # got unblocked -- otherwise the OLD port count from the attack
-        # that just ended lingers for up to LOW_SLOW_PORT_IDLE_TTL (90s)
-        # and gets immediately misread as a brand-new LOW_SLOW attack
-        # the very next cycle, using entirely stale data. src_ip="*"
-        # (DDOS_DISTRIBUTED-style network-wide blocks) has no single
-        # pair to clear -- skipped, harmless no-op anyway.
-        for action in openflow_unblock_actions:
-            if action.src_ip != "*":
-                self.of_adapter.clear_connection_ports(action.src_ip, action.dst_ip)
 
         # Mobile-domain blocks unblock off this cycle's own telemetry
         # instead (see check_mobile_unblocks's docstring) -- a RAN-side
@@ -472,110 +371,27 @@ class FlowStatsIDS(app_manager.RyuApp):
         # convention as openflow_unblock_actions above.
         mobile_unblock_actions = self.orchestrator.check_mobile_unblocks(correlated)
 
-        # Stage 3 — detect attack types. Low-and-slow is checked
-        # independently of `correlated`/pps-based detection — it's a flow
-        # *count* signature (many stalled connections), not a volumetric
-        # one, so it can fire even on a cycle with no other traffic. A
-        # destination/pair already flagged by a volumetric flood this
-        # cycle is excluded from the low-and-slow checks — a fast flood
-        # whose tool randomizes its source port per packet (hping3
-        # --flood does) looks just like "many distinct connections"
-        # otherwise, and shouldn't get double-reported as LOW_SLOW too.
-        flood_detections = self.detector.analyze(correlated) if correlated else []
-        # Merges in pairs/dsts that were a volumetric flood within the
-        # last few cycles, not just this exact one -- closes a race where
-        # a flow-stats data gap on the same cycle LOW_SLOW's count first
-        # crosses its threshold would otherwise let it fire uncontested
-        # and permanently lock in the wrong classification (see
-        # DDoSDetectionEngine._RECENT_FLOOD_GRACE_CYCLES's docstring).
-        flagged_dsts = {d.dst_ip for d in flood_detections} | self.detector.recent_flood_dsts()
-        flagged_pairs = {(d.src_ip, d.dst_ip) for d in flood_detections} | self.detector.recent_flood_pairs()
-
-        # Also exclude anything already under an active openflow block,
-        # regardless of which cycle/attack_type put it there -- once the
-        # grace window above expires, a stale DDoSCollector port-count
-        # entry for an already-blocked, now-finished attack would
-        # otherwise get freshly (and wrongly) classified as LOW_SLOW,
-        # replacing the original action with a mislabeled one. See
-        # OrchestrationController.active_block_pairs_and_dsts's docstring.
-        active_pairs, active_dsts = self.orchestrator.active_block_pairs_and_dsts()
-        flagged_dsts |= active_dsts
-        flagged_pairs |= active_pairs
-
-        # Fetched once, reused for both detection input and Grafana metrics
-        # below — so the "concurrent/new connections" panels show the real
-        # value every cycle, not just when LOW_SLOW actually fires.
-        low_volume_flow_counts = self.of_adapter.collect_low_volume_flow_counts()
-        connection_port_counts = self.of_adapter.get_connection_port_counts()
-
-        for dst_ip, count in low_volume_flow_counts.items():
-            metrics.update_stalled_flows(dst_ip, count)
-
-        for (src_ip, dst_ip), info in connection_port_counts.items():
-            metrics.update_connection_counts(src_ip, dst_ip, info["count"], info["new_connections"])
-
-        detections = list(flood_detections)
-        # settings.LOW_SLOW_DETECTION_ENABLED gates all three variants at
-        # once -- see that flag's own comment. low_volume_flow_counts/
-        # connection_port_counts are still collected and fed to metrics
-        # above regardless (pure observability, not detection/mitigation),
-        # so the Grafana panels stay live even with this off.
-        if settings.LOW_SLOW_DETECTION_ENABLED:
-            detections += self.detector.analyze_low_slow(
-                low_volume_flow_counts,
-                exclude_dsts=flagged_dsts,
-            )
-            detections += self.detector.analyze_low_slow_single_source(
-                connection_port_counts,
-                exclude_pairs=flagged_pairs,
-            )
-            # Mobile-domain low-and-slow: many distinct UEs simultaneously
-            # holding a low, sub-threshold rate toward the same destination --
-            # see analyze_low_slow_mobile's docstring for why this needs its
-            # own signal instead of reusing the two flow-count-based variants
-            # above (OpenFlow-only telemetry).
-            detections += self.detector.analyze_low_slow_mobile(
-                correlated,
-                exclude_dsts=flagged_dsts,
-                is_blocked=self.orchestrator.is_mobile_blocked,
-            )
+        # Stage 3 — detect attack types.
+        # Called every cycle even with nothing correlated, so the detector's
+        # activation window keeps ageing.
+        detections = self.detector.analyze(correlated)
 
         # Drop detections for a (src, dst, port, protocol) already under
-        # an active block BEFORE they reach metrics/validate/process --
-        # not just before the log line. Once a flow is blocked, its real
-        # traffic stops reaching FlowCollector (the drop rule's packets
-        # are filtered out), but DDoSCollector's distinct-port set for
-        # that pair lingers for up to LOW_SLOW_PORT_IDLE_TTL (90s), and
-        # the post-flood grace window (_RECENT_FLOOD_GRACE_CYCLES) is much
-        # shorter than that -- once it expires, analyze_low_slow_single_
-        # source starts "re-detecting" the very same already-mitigated
-        # attack as LOW_SLOW every cycle. The log line was already
-        # silenced for this case, but metrics.record_detection() (in
-        # orchestrator.process()) was not, polluting the LOW_SLOW Grafana
-        # panel with phantom counts for an attack that's already handled.
+        # an active block BEFORE they reach validate/process --
+        # not just before the log line -- so an attack that's already
+        # handled doesn't keep re-logging every cycle.
         detections = [
             d for d in detections
             if not self.orchestrator.is_active_block(d.src_ip, d.dst_ip, d.dst_port, d.protocol, sources=d.sources)
         ]
 
         # Surface every NEW detection in the event log, classified — this
-        # is the descriptive "what's happening" signal; raw traffic
-        # numbers live in Grafana via /metrics instead.
+        # is the descriptive "what's happening" signal.
         for d in detections:
             audit_emit(self.logger,'detection',detection=asdict(d),thresholds=audit_thresholds(settings))
 
             for msg in _detection_log_lines(d):
-                dashboard_state.add_event(msg)
                 self.logger.warning(msg)
-
-            # Dashboard's "attacks" panel (web/api.py, web/socket_server.py,
-            # templates/index.html all read dashboard_state.attacks) is
-            # switch-rate-shaped (dpid/byte_rate/packet_rate) -- only
-            # OpenFlow-domain detections have a real dpid (d.device_id) to
-            # report it under; a mobile-domain UE has no switch to attribute
-            # the rate to.
-            if d.domain == "enterprise" and d.device_id.isdigit():
-                dashboard_state.add_attack(int(d.device_id), d.bps, d.pps)
 
         # Mark destinations seen clean this cycle as validated — only now
         # can LearningSwitch start caching forwarding rules for them. Must
@@ -598,14 +414,10 @@ class FlowStatsIDS(app_manager.RyuApp):
         actions = self.orchestrator.process(detections) if detections else []
         actions += unblock_actions
 
-        # Reflect mitigations in the dashboard
+        # Report mitigations in the log
         for action in actions:
             msg = _format_mitigation_message(action)
-            dashboard_state.add_event(msg)
             self.logger.warning(msg)
-
-        if detections or actions:
-            emit_update()
 
     # ------------------------------------------------------------------
     # FLOW STATS
@@ -627,48 +439,7 @@ class FlowStatsIDS(app_manager.RyuApp):
         self.orchestrator.record_block_traffic(dpid, ev.msg.body)
 
         # Stage 1 — push raw stats into the OpenFlow telemetry adapter
-        events = self.of_adapter.on_flow_stats(dpid, ev.msg.body)
-
-        # Traffic numbers go to Prometheus/Grafana, not the console or the
-        # event log — classification (Stage 3, in _run_pipeline) is what
-        # gets logged as an event.
-        total_bps = sum(e.bps for e in events)
-        total_pps = sum(e.pps for e in events)
-        metrics.update_switch_stats(dpid, total_bps, total_pps)
-        dashboard_state.update_stats(dpid, total_bps, total_pps)
-
-        # Same totals, broken down by protocol (TCP/UDP/ICMP/IP) — not by
-        # physical port, since these are flow-derived events and don't
-        # reliably carry in_port (LearningSwitch's L3-only match doesn't
-        # either, for flow-stats-sourced ones).
-        bps_by_proto: Dict[str, float] = defaultdict(float)
-        pps_by_proto: Dict[str, float] = defaultdict(float)
-        for e in events:
-            proto = "TCP" if e.protocol == "TCP_SYN" else e.protocol
-            bps_by_proto[proto] += e.bps
-            pps_by_proto[proto] += e.pps
-        for proto in bps_by_proto:
-            metrics.update_switch_protocol_stats(
-                dpid, proto, bps_by_proto[proto], pps_by_proto[proto]
-            )
-
-    # ------------------------------------------------------------------
-    # PORT STATS
-    # ------------------------------------------------------------------
-
-    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
-    def port_stats_reply_handler(self, ev):
-        dpid = ev.msg.datapath.id
-        ofproto = ev.msg.datapath.ofproto
-
-        for stat in sorted(ev.msg.body, key=lambda x: x.port_no):
-
-            if stat.port_no == ofproto.OFPP_LOCAL:
-                continue
-
-            # Raw port counters go straight to Prometheus/Grafana — no
-            # console dump.
-            metrics.update_port_stats(dpid, stat.port_no, stat)
+        self.of_adapter.on_flow_stats(dpid, ev.msg.body)
 
     # ------------------------------------------------------------------
     # HELPERS
@@ -677,10 +448,3 @@ class FlowStatsIDS(app_manager.RyuApp):
     def _request_flow_stats(self, datapath):
         parser = datapath.ofproto_parser
         datapath.send_msg(parser.OFPFlowStatsRequest(datapath))
-
-    def _request_port_stats(self, datapath):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-        datapath.send_msg(
-            parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
-        )

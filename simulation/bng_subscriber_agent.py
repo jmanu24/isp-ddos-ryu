@@ -1,11 +1,7 @@
 """
 bng_subscriber_agent.py — persistent per-subscriber session + attack-
 traffic control daemon, run on `suscriptor` (Broadband domain,
-distributed VM lab). REPLACES simulation/bng_agent.py's BNGBlaster
-wrapper -- see bngblaster_broadband_pipeline_status memory for why:
-BNGBlaster's own sendto() succeeded but the frame was invisible to
-every external observer on this lab, an unresolved bug. This project's
-real BNG-side telemetry now comes from FreeRADIUS's own accounting
+distributed VM lab). This project's real BNG-side telemetry comes from FreeRADIUS's own accounting
 records on `bng` itself (telemetry/broadband_adapter.py tails those
 over SSH) -- this daemon's only job is making real IPoE-backed
 subscriber sessions exist against accel-ppp and driving real attack
@@ -122,10 +118,7 @@ _RESYNC_INTERVAL_S = 5
 # Real per-session byte/packet counters come from FreeRADIUS's own
 # accounting on `bng` (telemetry/broadband_adapter.py tails those) --
 # but RADIUS accounting has no L4 visibility at all (it's a volumetric
-# total, not a flow breakdown), same limitation BNGBlaster's own
-# session-streams had (see simulation/bng_config.py's old module
-# docstring: "the synthetic producer already knows what it's
-# simulating"). This state file is that same convention's new home --
+# total, not a flow breakdown). This state file carries that metadata --
 # broadband_adapter.py's distributed-mode collect() ALSO reads this
 # (over plain HTTP now, not SSH -- see _StateHTTPHandler below) to learn
 # which protocol/dst_port each currently-attacking subscriber's IP is

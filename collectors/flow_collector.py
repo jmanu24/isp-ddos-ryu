@@ -102,6 +102,10 @@ class FlowCollector:
                 "dst_ip": dst_ip,
                 "protocol": proto,
                 "dst_port": dst_port,
+                # True for the SYN twin rule (forwarding/syn_twin.py): all of
+                # this flow's volume is bare SYNs by construction, whatever
+                # any packet-in metadata says about the pair.
+                "syn_only": stat.priority == settings.SYN_TWIN_PRIORITY,
                 "byte_rate": byte_rate,
                 "packet_rate": packet_rate,
                 "bytes": stat.byte_count,
@@ -115,44 +119,3 @@ class FlowCollector:
             }
 
         return flows
-
-    @staticmethod
-    def count_low_volume_flows(body, exclude_flow=None):
-        """
-        dst_ip -> number of currently active flows that have lived at
-        least LOW_SLOW_MIN_AGE seconds but still total under
-        LOW_SLOW_MIN_BYTES — the signature of a low-and-slow attack
-        (e.g. Slowloris): many concurrent connections trickling just
-        enough data to stay open, never crossing any pps/bps threshold,
-        unlike a volumetric flood. The age check matters — without it, a
-        brand-new legitimate connection that simply hasn't sent much yet
-        would look identical to a stalled one for the first few seconds.
-
-        exclude_flow: optional Callable[[str, str], bool] -- see process_stats.
-        """
-        counts = defaultdict(int)
-
-        for stat in body:
-            if stat.priority >= settings.MITIGATION_DROP_PRIORITY:
-                continue
-
-            match = stat.match
-
-            if match.get("eth_type") != 0x0800:
-                continue
-
-            dst_ip = match.get("ipv4_dst")
-
-            if not dst_ip:
-                continue
-
-            if exclude_flow and exclude_flow(match.get("ipv4_src"), dst_ip):
-                continue
-
-            if (
-                stat.duration_sec >= settings.LOW_SLOW_MIN_AGE
-                and stat.byte_count < settings.LOW_SLOW_MIN_BYTES
-            ):
-                counts[dst_ip] += 1
-
-        return counts

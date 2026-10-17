@@ -83,7 +83,7 @@ class DetectionResult:
     Output of the DDoS Detection Engine.
     Produced when a CorrelatedEvent exceeds attack thresholds.
 
-    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "LOW_SLOW" | "DDOS_DISTRIBUTED" | "MULTIDOMAIN_DISTRIBUTED_ATTACK"
+    attack_type : "SYN_FLOOD" | "UDP_FLOOD" | "ICMP_FLOOD" | "DDOS_DISTRIBUTED" | "MULTIDOMAIN_DISTRIBUTED_ATTACK"
     score       : raw metric ratio (observed / threshold)
     confidence  : 0.0–1.0, boosted when attack spans multiple domains
     sources     : distinct source IPs contributing — only populated for
@@ -92,11 +92,10 @@ class DetectionResult:
     source_device_ids : src_ip -> that source's own device_id (e.g. real
                   gNB id for a mobile UE) — only populated alongside
                   `sources`. A mobile multi-source attack's contributing
-                  UEs can each be attached to a *different* gNB (see
-                  simulation/ul_traffic_simulator.py's --gnb-count), so
+                  UEs can each be attached to a *different* gNB, so
                   `device_id` above (one representative event's gNB) is
                   NOT a stand-in for every source's own gNB the way it is
-                  for dst_port/protocol, which the simulator's attack
+                  for dst_port/protocol, which the attack
                   config genuinely does apply identically to the whole
                   group.
     source_domains : src_ip -> that source's own domain ("enterprise"|
@@ -117,7 +116,7 @@ class DetectionResult:
                   whole network
     pps/bps     : the representative event's measured rate at detection
                   time — carried through purely for observability
-                  (Grafana "attack byte/packet rate by type" panels)
+                  (audit records)
     """
     domain: str
     device_id: str
@@ -164,8 +163,7 @@ class MitigationAction:
                   drop rule to a single switch+port instead of the whole
                   network
     pps/bps     : the triggering detection's measured rate — carried
-                  through purely for observability (Grafana "mitigation
-                  byte/packet rate by type" panels)
+                  through purely for observability (audit records)
     """
     domain: str
     device_id: str

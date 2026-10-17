@@ -11,7 +11,7 @@ is_connected() reflects whether the last collect() cycle could read the
 nfcapd capture directory at all -- it does NOT confirm the BGP session
 to r1 is up. Real nftables installation via `flow` IS confirmed (see
 docs/peering-plan.md §2.2), but only against a standalone spike, not
-yet against r1 inside the actual Mininet topology; apply_mitigation()
+yet against `br` in the VM lab; apply_mitigation()
 logs this caveat explicitly rather than reporting a confirmed block.
 """
 import logging
@@ -24,6 +24,7 @@ from core.log_format import log_line
 from core.models import MitigationAction, TelemetryEvent
 from mitigation.peering_backend import PeeringBackend
 from telemetry.base import DomainAdapter
+
 
 
 class BGPPeeringAdapter(DomainAdapter):
@@ -101,19 +102,19 @@ class BGPPeeringAdapter(DomainAdapter):
                 timestamp=now,
             )
             for record in records
-            # softflowd captures BOTH directions of traffic on r1-ext0 --
-            # without this, a target's own reply traffic (e.g. the
-            # kernel's automatic ICMP "port unreachable" backscatter to a
-            # UDP flood hitting a closed port) gets treated as an inbound
-            # attack too. Denylist, not an allowlist of the one known real
-            # peer_ext address -- a DDoS scenario needs spoofed traffic
-            # from many different (fake) source IPs to still pass through.
-            # See PEERING_CENTRAL_SERVER_IP's own comment in
-            # config/settings.py for the real incident this fixes.
+            # softflowd captures BOTH directions of traffic on br's
+            # external interface -- without this, the victim stand-in's
+            # own reply traffic (e.g. the kernel's automatic ICMP "port
+            # unreachable" backscatter to a UDP flood hitting a closed
+            # port) gets treated as an inbound attack too. Denylist, not
+            # an allowlist of the one known external peer: a DDoS
+            # scenario needs spoofed traffic from many different (fake)
+            # source IPs to still pass through. See
+            # PEERING_CENTRAL_SERVER_IP's own comment in config/settings.py
+            # for the real incident this fixes.
             if record["src_ip"] not in (
                 settings.PEERING_CENTRAL_SERVER_IP,
-                settings.PEERING_DIST_BR_PEERING_IP if settings.PEERING_DISTRIBUTED_MODE
-                else settings.PEERING_R1_EXTERNAL_IP,
+                settings.PEERING_DIST_BR_PEERING_IP,
             )
         ]
 

@@ -8,7 +8,7 @@ files to PEERING_NFCAPD_DIR (see config/settings.py). This collector
 never speaks the wire protocol itself -- it shells out to `nfdump`
 (same suite as nfcapd) to decode each new capture file into per-flow CSV
 records, the same "read via the vendor's own tool" pattern the rest of
-this project uses (e.g. BNGBlaster telemetry) instead of reimplementing
+this project uses instead of reimplementing
 IPFIX/NetFlow decoding here.
 
 See docs/peering-plan.md for the FlowSpec-dataplane-support spike --
@@ -17,13 +17,12 @@ whether mitigation/peering_backend.py's announcements actually get
 installed by r1's FRR.
 
 nfcapd ALWAYS runs on the same host as this collector (wherever the
-controller runs -- `orchestrator` in the distributed-VM lab, r1's own
-namespace in Mininet mode) -- softflowd is configured to export its
+controller runs -- `orchestrator` in the VM lab) -- softflowd is configured to export its
 NetFlow stream THERE directly (settings.orchestrator_addr in
 deploy/vm-lab/ansible/roles/br's softflowd-peering.service.j2, instead
 of the 127.0.0.1 it used to point at when nfcapd ran alongside it on
-`br`). That earlier remote-nfcapd-plus-SSH design was a Mininet-era
-artifact kept past its usefulness: NetFlow export is UDP fire-and-
+`br`). That earlier remote-nfcapd-plus-SSH design was an artifact kept
+past its usefulness: NetFlow export is UDP fire-and-
 forget and already meant to be pointed at wherever the collector lives,
 so redirecting the export is strictly simpler than polling a remote
 host's disk over SSH for files this collector never needed to be
