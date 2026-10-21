@@ -1,0 +1,54 @@
+# victim/syn_protection.yml -- the D7/4.4.2 "protected resource" toggle
+# (docs/PROTECTED_RESOURCE.md).
+#
+# Always-run, always-idempotent: it pins BOTH sysctls to an explicit value
+# every time, one way or the other, rather than only acting when the
+# vulnerable state is requested -- so the un-toggle path (re-run with
+# victim_vulnerable_syn_enabled left at its default false) is this exact
+# same task, not a separate script, and the live value is never "whatever
+# was left over from the last run that touched it".
+#
+#   - net.ipv4.tcp_syncookies: 1 (default/original) vs 0 (vulnerable).
+#     With cookies on, a SYN flood never actually occupies the half-open
+#     accept queue (the kernel answers statelessly instead) -- confirmed
+#     live against this exact host: TcpExt.ListenOverflows=0 and
+#     TCPReqQFullDrop=0 across 18 days and every flood run against it so
+#     far, all absorbed by TCPReqQFullDoCookies. See docs/PROTECTED_RESOURCE.md
+#     §1 for the inventory this was read from.
+#
+#   - net.ipv4.tcp_synack_retries: 5 (default/original, ~63 s half-open
+#     residence) vs 2 (vulnerable, ~3 s). With syncookies off, a flood at
+#     a fixed rate R fills the (unchanged, still 128-slot) queue and keeps
+#     it saturated for as long as R exceeds the queue's drain rate
+#     (~backlog/residence); once saturated, a NEW arrival -- attacker's or
+#     benign -- only gets in when a slot frees, at a rate shared across
+#     everyone competing for it. Composition 3's full aggregate
+#     (161.3 pps) and one domain's own share alone (19.2-69.1 pps, each
+#     already sub-threshold by the plan's own design) should therefore
+#     degrade the service by different amounts ONLY if that drain rate is
+#     short enough to matter against those specific numbers -- at the
+#     original 5 retries (~63 s) it is not (both fill the queue in well
+#     under a second and then look identical for the rest of the attack
+#     window). 2 is a starting point to validate empirically in the D7/4.4.2
+#     calibration (docs/PROTECTED_RESOURCE.md §4), not a value derived from
+#     a closed-form guarantee.
+#
+#   tcp_max_syn_backlog is deliberately left untouched (stays at 128): the
+#   measured benign-only concurrency ceiling against this exact victim
+#   (up to 79 simultaneous TCP connections, up to 64 new ones in the same
+#   second -- docs/PROTECTED_RESOURCE.md §1) sits close enough under 128
+#   that lowering it risks degrading C1, which the pass criterion
+#   explicitly forbids.
+- name: Pin the victim's TCP SYN accept-queue sysctls (vulnerable or original, per victim_vulnerable_syn_enabled)
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.vulnerable if victim_vulnerable_syn_enabled else item.original }}"
+    sysctl_file: /etc/sysctl.d/90-victim-syn-protection.conf
+    sysctl_set: true
+    state: present
+    reload: true
+  loop:
+    - { name: net.ipv4.tcp_syncookies, original: "1", vulnerable: "0" }
+    - { name: net.ipv4.tcp_synack_retries, original: "5", vulnerable: "2" }
+  loop_control:
+    label: "{{ item.name }}"

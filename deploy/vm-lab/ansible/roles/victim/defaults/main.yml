@@ -1,0 +1,12 @@
+# victim role defaults.
+#
+# victim_vulnerable_syn_enabled: the D7/4.4.2 "protected resource" toggle
+# (docs/PROTECTED_RESOURCE.md). false (the default) pins the victim's TCP
+# SYN accept-queue at its ORIGINAL kernel defaults (syncookies=1,
+# synack_retries=5) -- a normal `ansible-playbook site.yml` run never makes
+# the victim more fragile than it already was. true applies the reduced
+# values that let composition 3's syn_flood (and, to a lesser extent, a
+# single sub-threshold domain) actually exhaust the queue -- see
+# roles/victim/tasks/syn_protection.yml and docs/PROTECTED_RESOURCE.md for
+# the numbers and the reasoning.
+victim_vulnerable_syn_enabled: false

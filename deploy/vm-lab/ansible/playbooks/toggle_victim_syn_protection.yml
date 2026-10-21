@@ -1,0 +1,20 @@
+---
+# toggle_victim_syn_protection.yml -- the D7/4.4.2 "protected resource"
+# apply/revert for the victim's TCP SYN accept-queue (docs/PROTECTED_RESOURCE.md).
+# Standalone: it only runs roles/victim/tasks/syn_protection.yml, never the
+# rest of the victim role (so it never re-touches the ENT_DC interface or
+# restarts victim-http).
+#
+#   ansible-playbook playbooks/toggle_victim_syn_protection.yml \
+#       -e victim_vulnerable_syn_enabled=true     # apply the vulnerable state
+#   ansible-playbook playbooks/toggle_victim_syn_protection.yml
+#       # (no -e, i.e. the role's own default false) -- revert to the
+#       # original kernel defaults (syncookies=1, synack_retries=5)
+- name: Toggle the victim's TCP SYN accept-queue protection
+  hosts: victim
+  gather_facts: false
+  tasks:
+    - name: Apply the requested SYN accept-queue state
+      ansible.builtin.include_role:
+        name: victim
+        tasks_from: syn_protection

@@ -72,3 +72,6 @@
     name: victim-http
     enabled: true
     state: started
+
+- name: Pin the victim's TCP SYN accept-queue state (D7/4.4.2 protected-resource toggle, see the task file)
+  ansible.builtin.include_tasks: syn_protection.yml
