@@ -1,9 +1,10 @@
 # 4.4.2 — Recurso protegido: configuración de la víctima y su calibración
 
 Fecha: 2026-10-21. Repos: `isp-ddos-ryu` (rama `protected-resource-victim-syn`,
-pusheada), `traffic-generator-pucp` (rama `pilot-diagnosis`, con el cambio al
-generador de ataque y los scripts de calibración de este prompt — ver §8). No
-se tocó ninguna lógica de detección, decisión ni mitigación del controlador.
+pusheada), `traffic-generator-pucp` (rama `pilot-diagnosis`, pusheada, con el
+cambio al generador de ataque y los scripts de calibración de este prompt —
+ver §8). No se tocó ninguna lógica de detección, decisión ni mitigación del
+controlador.
 
 **Resultado: el criterio de paso se cumplió**, con el recurso protegido (§3)
 y, tras tu confirmación, un cambio real en `benign_lab.agent.attack_flood()`
@@ -280,19 +281,14 @@ de capacidad de referencia que enterprise.
 |---|---|---|
 | `roles/victim/tasks/syn_protection.yml`, `defaults/main.yml`, `playbooks/toggle_victim_syn_protection.yml`, `ansible.cfg` | `isp-ddos-ryu` | commiteado (`85b5acc`) y pusheado a `protected-resource-victim-syn` |
 | `/etc/sysctl.d/90-victim-syn-protection.conf` (víctima) | 10.10.0.100 | desplegado, sha256 `2e1195df…9e0`, coincide con el repo |
-| `benign_lab/agent.py` (`attack_flood()`, rama `syn_flood`) | `traffic-generator-pucp`, rama `pilot-diagnosis` | **sin commitear todavía** — desplegado en vivo a los 10 nodos, sha256 `be47f402e96ffe4259df129aa28cfbf3f789d0124d868e7d01a9a7f6d66220f2`, confirmado idéntico en cada nodo tras cada despliegue |
-| `tests/test_attack_generation.py` (3 pruebas nuevas) | `traffic-generator-pucp` | sin commitear todavía |
-| `scripts/generate_protected_resource_calibration_plan.py`, `register_protected_resource_plans.py`, `run_protected_resource_calibration.py` | `traffic-generator-pucp` | sin commitear todavía |
-| `data/attack_plans/composition3_enterprise_only.json` + entrada en `attack_plans_manifest.json` | `traffic-generator-pucp` | generado, hash `89e927a8694615757e970be978f9ef24832afc701c3aa9c6406e0dab8a79456d`, registrado en el servidor del panel |
+| `benign_lab/agent.py` (`attack_flood()`, rama `syn_flood`) | `traffic-generator-pucp`, rama `pilot-diagnosis` | commiteado (`5c7d33a`) y pusheado; desplegado en vivo a los 10 nodos, sha256 `be47f402e96ffe4259df129aa28cfbf3f789d0124d868e7d01a9a7f6d66220f2`, coincide con el commit |
+| `tests/test_attack_generation.py` (3 pruebas nuevas) | `traffic-generator-pucp` | commiteado (`5c7d33a`) y pusheado |
+| `scripts/generate_protected_resource_calibration_plan.py`, `register_protected_resource_plans.py`, `run_protected_resource_calibration.py` | `traffic-generator-pucp` | commiteado (`5c7d33a`) y pusheado |
+| `data/attack_plans/composition3_enterprise_only.json` + entrada en `attack_plans_manifest.json` | `traffic-generator-pucp` | generado, hash `89e927a8694615757e970be978f9ef24832afc701c3aa9c6406e0dab8a79456d`, registrado en el servidor del panel — `data/` está gitignorado en este repo, no se commitea |
 | `.runtime/benign-lab/calibration/protected_resource_calibration_manifest.json` | `isp-ddos-ryu` (datos) | run_ids + estados de las 3 corridas finales |
 
-**Nota**: el código del generador (`agent.py` + pruebas + scripts de
-calibración + el plan de ataque nuevo) está desplegado y validado en vivo,
-pero sigue sin commitear en `traffic-generator-pucp` — pendiente de tu
-confirmación para el commit/push, igual que se hizo con el resto de esta
-tesis. Mientras no se commitee, el repositorio y el despliegue están
-divergentes (hash documentado arriba para que no se pierda la trazabilidad
-en el ínterin).
+Repositorio y despliegue sin divergencias: el hash desplegado en los 10
+nodos coincide exactamente con el del commit `5c7d33a`.
 
 ## 9. Supuestos y límites
 
