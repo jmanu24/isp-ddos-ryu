@@ -94,13 +94,14 @@ ru_sdr:
 cell_cfg:
   # pci MUST be unique per DU -- confirmed on a real run: with no pci
   # set here at all, every DU (du, du2-du5) silently used srsdu's same
-  # default (1), and FlexRIC's nearRT-RIC identifies an E2 node by (among
+  # default (1), and the near-RT RIC identifies an E2 node by (among
   # other things) this cell identity -- multiple DUs registering with the
-  # SAME identity crashes the RIC itself outright:
-  # "nearRT-RIC: .../reg_e2_nodes.c:157: add_reg_e2_node: Assertion
-  # `it_node == end_node && "Trying to add an already existing E2 Node"'
-  # failed." (not a graceful rejection -- the whole RIC process dies,
-  # taking down every OTHER DU's/the CU's own E2 agent with it). `du` (no
+  # SAME identity crashed the RIC implementation used at the time
+  # outright (an unhandled assertion in its own E2-node registration
+  # code, not a graceful rejection -- the whole RIC process died, taking
+  # down every OTHER DU's/the CU's own E2 agent with it; not re-tested
+  # against oran-sc-ric's own behavior on a duplicate E2 node identity).
+  # `du` (no
   # suffix) keeps pci 1 (its pre-existing, already-validated value, see
   # du_num's own comment above for why it isn't unified with du{N}'s
   # arithmetic); du2-du5 get pci 2-5.

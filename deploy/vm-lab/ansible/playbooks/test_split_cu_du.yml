@@ -1,13 +1,22 @@
 ---
 # test_split_cu_du.yml -- split CU/DU across two real VMs (`ran` = CU,
-# `du` = DU, F1 over the real RAN network, not loopback): full attach,
-# real UP data-plane traffic, E2SM-KPM UE identification (amf_ue_ngap_id
-# + gnb_cu_ue_f1ap together in one CU-CP indication), and correlation
-# against core5g's own AMF/SMF/UPF session records. Confirmed working
-# end-to-end on a real run (2026-09-21) -- see docs/ran-testing.md SS8/SS9
-# for the full debugging story (an F1-U/N3 GTP-U port collision, a
-# 1-thread real-time worker pool from `du`'s original 4-vCPU sizing, and
-# an xApp display bug all had to be found and fixed to get here).
+# `du` = DU, F1 over the real RAN network, not loopback): full attach and
+# real UP data-plane traffic. Confirmed working end-to-end on a real run
+# (2026-09-21) -- see docs/ran-testing.md SS8 for the full debugging
+# story (an F1-U/N3 GTP-U port collision and a 1-thread real-time worker
+# pool from `du`'s original 4-vCPU sizing both had to be found and fixed
+# to get here).
+#
+# This playbook used to also cover E2SM-KPM UE identification and
+# correlation against core5g's own AMF/SMF/UPF session records (tags
+# kpm/correlate, see docs/ran-testing.md SS9) -- removed after the RIC
+# migration, since that KPM-capture step was built directly against the
+# previous near-RT RIC's own example xApp binary and does not carry over
+# to oran-sc-ric. The underlying srsRAN-side patch that makes
+# amf_ue_ngap_id and gnb_cu_ue_f1ap travel together in one KPM record
+# (docs/ran-testing.md SS9.1) is unaffected and still applies; only the
+# capture/correlate automation here needs re-porting to the current RIC's
+# own xApp tooling (oran_bridge/kpm_bridge_xapp.py), not done yet.
 #
 # Prerequisites: site.yml already run for core5g_open5gs, ric_oran_sc,
 # ran_srsran, du_srsran and ue_srsue -- this playbook only launches/tests
@@ -17,7 +26,7 @@
 #
 # Usage:
 #   ansible-playbook playbooks/test_split_cu_du.yml
-#   ansible-playbook playbooks/test_split_cu_du.yml --skip-tags victim,kpm,correlate
+#   ansible-playbook playbooks/test_split_cu_du.yml --skip-tags victim
 
 - name: Kill any stale CU and launch a fresh one
   hosts: ran_srsran
@@ -172,168 +181,3 @@
       ansible.builtin.debug:
         var: ping_victim.stdout_lines
       tags: [victim]
-
-    - name: "[kpm] Start a steady background traffic burst for the KPM
-            capture below to see real (non-zero) throughput (tag: kpm)"
-      ansible.builtin.shell: >-
-        setsid nohup ip netns exec ue1 ping -i 0.05 -s 1200
-        {{ victim_addr | default(bng_target_ip) | default('10.10.0.100') }}
-        > /tmp/ue_traffic_ping.log 2>&1 < /dev/null &
-      changed_when: true
-      tags: [kpm]
-
-- name: "[kpm] Capture E2SM-KPM and confirm amf_ue_ngap_id + gnb_cu_ue_f1ap
-        travel together in one CU-CP indication (tag: kpm)"
-  hosts: ric_oran_sc
-  gather_facts: false
-  tags: [kpm]
-  tasks:
-    - name: Find any running xapp_kpm_moni
-      ansible.builtin.shell: pgrep -f 'xapp_kpm_moni' || true
-      register: stale_xapp
-      changed_when: false
-
-    - name: Kill it
-      ansible.builtin.shell: "kill -9 {{ stale_xapp.stdout_lines | join(' ') }} 2>/dev/null; true"
-      when: stale_xapp.stdout_lines | length > 0
-      changed_when: true
-
-    - name: Confirm the near-RT RIC daemon is up (this lab has no systemd
-            unit for it -- confirmed on a real run that it can silently be
-            down from an earlier session, in which case CU/DU's own E2
-            agents never reconnect on their own either)
-      ansible.builtin.shell: pgrep -f nearRT-RIC || true
-      register: ric_pid
-      changed_when: false
-
-    - name: Launch it if it wasn't already running
-      ansible.builtin.shell: >-
-        cd /opt/flexric/build/examples/ric &&
-        rm -f /tmp/ric_stdout.log &&
-        setsid nohup ./nearRT-RIC -c /usr/local/etc/flexric/ric.conf
-        > /tmp/ric_stdout.log 2>&1 < /dev/null &
-      when: ric_pid.stdout == ""
-      changed_when: true
-
-    - name: Give a freshly-(re)started RIC a moment before subscribing --
-            if it was already up, CU/DU's E2 agents may still need a
-            fresh restart of THIS playbook's own CU/DU plays to reconnect
-      ansible.builtin.wait_for:
-        timeout: 3
-      delegate_to: localhost
-      when: ric_pid.stdout == ""
-
-    - name: Capture KPM indications for 12s (line-buffered so output
-            isn't stuck in libc's block-buffering when stdout isn't a tty)
-      ansible.builtin.shell: >-
-        rm -f /tmp/xapp_kpm_capture.log &&
-        cd /opt/flexric/build/examples/xApp/c/monitor &&
-        timeout 12 stdbuf -oL -eL ./xapp_kpm_moni -a {{ ric_addr }}
-        > /tmp/xapp_kpm_capture.log 2>&1 < /dev/null;
-        true
-      changed_when: true
-
-    - name: Extract the amf_ue_ngap_id + gnb_cu_ue_f1ap pair from the
-            same CU-CP indication (2 consecutive lines after the display
-            fix -- see flexric-kpm-moni-workaround.patch's own header)
-      ansible.builtin.shell: grep -A1 'amf_ue_ngap_id' /tmp/xapp_kpm_capture.log | head -2
-      register: correlation_pair
-      changed_when: false
-
-    - name: Report
-      ansible.builtin.debug:
-        msg: "{{ correlation_pair.stdout_lines }}"
-
-    - name: Fail if the CU-CP never carried a real UE ID at all (config
-            prerequisites test_kpm_validation.yml's own header documents
-            are almost certainly missing from cu_split.yaml)
-      ansible.builtin.fail:
-        msg: >-
-          No amf_ue_ngap_id ever appeared in the capture -- check
-          enable_cu_cp_e2 and e2sm_kpm_enabled in the deployed
-          cu_split.yaml, and that the CU's own E2 agent actually
-          reconnected to a running near-RT RIC (see this play's own
-          RIC-restart task above).
-      when: correlation_pair.stdout_lines | length == 0
-
-- name: "[correlate] Cross-reference the KPM-reported amf_ue_ngap_id
-        against core5g's own AMF/SMF/UPF session records (tag: correlate)"
-  hosts: core5g_open5gs
-  gather_facts: false
-  tags: [correlate]
-  tasks:
-    - name: Pull the amf_ue_ngap_id the KPM capture play (above) found
-      ansible.builtin.set_fact:
-        kpm_amf_ue_ngap_id: >-
-          {{ hostvars[groups['ric_oran_sc'][0]].correlation_pair.stdout
-             | regex_search('amf_ue_ngap_id = ([0-9]+)', '\1')
-             | first | default('') }}
-
-    - name: Fail early with a clear message if the KPM play (above,
-            --tags kpm) wasn't actually run in this same invocation
-      ansible.builtin.fail:
-        msg: >-
-          No amf_ue_ngap_id available from the KPM capture play -- this
-          tag depends on the [kpm] play above having run in the SAME
-          ansible-playbook invocation (don't --skip-tags kpm when using
-          --tags correlate, or the correlation_pair fact won't exist).
-      when: kpm_amf_ue_ngap_id == ''
-
-    - name: Find this UE's AMF_UE_NGAP_ID assignment line in the core's
-            own logs (open5gs-amfd, inside the combined docker container)
-      ansible.builtin.shell: >-
-        docker logs open5gs_5gc 2>&1 |
-        grep "AMF_UE_NGAP_ID\[{{ kpm_amf_ue_ngap_id }}\]" | tail -1
-      register: amf_line
-      changed_when: false
-      failed_when: amf_line.stdout == ""
-
-    - name: Find the SUPI resolution line for the same attach (docker's
-            own combined log interleaves amf/gmm/smf/upf lines by real
-            time, so it always follows the AMF_UE_NGAP_ID line above)
-      # NOT the "known UE by SUCI" line right after AMF_UE_NGAP_ID --
-      # confirmed on a real run: that line carries the SUCI (the
-      # encrypted/concealed identifier the UE sends BEFORE the AMF
-      # resolves it), literally "suci-...", never "imsi-...". The real
-      # SUPI only appears a few lines later once gmm resolves it,
-      # tagged "UE SUPI[imsi-...]" -- same format the SMF IP-allocation
-      # grep just below already searches for, so this greps for the
-      # SAME pattern this time, not a different (wrong) one.
-      ansible.builtin.shell: >-
-        docker logs open5gs_5gc 2>&1 |
-        grep -A30 "AMF_UE_NGAP_ID\[{{ kpm_amf_ue_ngap_id }}\]" |
-        grep -m1 'UE SUPI\[imsi-'
-      register: supi_line
-      changed_when: false
-
-    - name: Extract the imsi-... token from that line
-      ansible.builtin.set_fact:
-        supi: "{{ supi_line.stdout | regex_search('imsi-[0-9]+') | default('') }}"
-
-    - name: Find the SMF's IP allocation line for this SUPI
-      ansible.builtin.shell: >-
-        docker logs open5gs_5gc 2>&1 |
-        grep "UE SUPI\[{{ supi }}\]" | grep 'IPv4' | tail -1
-      register: smf_ip_line
-      changed_when: false
-      when: supi != ''
-
-    - name: Find the UPF's own F-SEID/session line closest in time to the
-            SMF allocation above (same "Added UPF-Sessions" burst)
-      ansible.builtin.shell: >-
-        docker logs open5gs_5gc 2>&1 |
-        grep -B3 -A1 "UE F-SEID.*IPv4\[$(echo '{{ smf_ip_line.stdout }}' |
-        grep -oE 'IPv4\[[0-9.]+\]' | grep -oE '[0-9.]+')\]" |
-        grep 'UE F-SEID' | tail -1
-      register: upf_line
-      changed_when: false
-      when: smf_ip_line.stdout is defined and smf_ip_line.stdout != ''
-
-    - name: Report the full RAN-to-core correlation chain
-      ansible.builtin.debug:
-        msg:
-          - "amf_ue_ngap_id (KPM, srscu's CU-CP):  {{ kpm_amf_ue_ngap_id }}"
-          - "AMF_UE_NGAP_ID (core AMF log):        {{ amf_line.stdout }}"
-          - "SUPI/IMSI (core AMF log):             {{ supi }}"
-          - "SMF session (DNN + allocated IP):     {{ smf_ip_line.stdout | default('not found') }}"
-          - "UPF session (F-SEID + APN):           {{ upf_line.stdout | default('not found') }}"

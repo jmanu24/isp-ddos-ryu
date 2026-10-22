@@ -195,11 +195,11 @@ project's own history and what srsRAN's docs say about themselves:
 
 2. **Near-RT RIC: O-RAN SC RIC, the DEFINITIVE stack (`ric_oran_sc`
    role).** Two earlier RIC integrations were tried and abandoned before
-   this one: (a) `deploy/setup_ns_oran_flexric.sh`, ns-3 simulation +
-   Orange's `ns-O-RAN-flexric` fork -- confirmed real bugs in that fork
+   this one: (a) an ns-3-based E2 simulation path built on top of a
+   third-party ns-3 O-RAN fork -- confirmed real bugs in that fork
    (a heap buffer overflow in ASN.1 measurement-name encoding,
-   `bad_any_cast`, PRB-threshold gating), all inside Orange's ns-3 code;
-   (b) FlexRIC built from source (`br-flexric`@`1a3903a7`, then `dev`) --
+   `bad_any_cast`, PRB-threshold gating), all inside that fork's own ns-3
+   code; (b) an earlier near-RT RIC implementation built from source --
    never got its KPM delivery reliably working against srsRAN Project's
    current E2SM-KPM encoder (see the oran-sc-ric-migration history for
    the full story). **O-RAN SC RIC** (`github.com/srsran/oran-sc-ric`,
@@ -260,7 +260,7 @@ project's own history and what srsRAN's docs say about themselves:
 
 `topology.yaml`'s `bgp:` block: `br_as=65000`, `peer_router_as=64512` --
 deliberately distinct from `FLOW_LOCAL_AS`/`EXABGP_LOCAL_AS` (65001/65002,
-see `webtool/peering_ops.py`), which stay reserved for the *internal*
+see `FLOW_LOCAL_AS`/`EXABGP_LOCAL_AS` in the br/orchestrator roles), which stay reserved for the *internal*
 `flow`↔`exabgp` FlowSpec control channel. This lab's `br`↔`peer-router`
 session is a separate, real eBGP session for genuine route exchange.
 
@@ -268,9 +268,9 @@ session is a separate, real eBGP session for genuine route exchange.
 ## BENIGN_V1 traffic tool
 
 The web-operated benign traffic tool is maintained in
-[`tools/benign-lab`](tools/benign-lab/README.md). The current deployment and
+`/home/ubuntu/traffic-generator-pucp` (separate project, outside this repository). The current deployment and
 verified host, namespace, interface and subscriber mappings are documented in
-[`CONNECTED_DEPLOYMENT.md`](tools/benign-lab/docs/CONNECTED_DEPLOYMENT.md).
+`docs/CONNECTED_DEPLOYMENT.md` in that project.
 Use that deployment report for the inspected live VM operating systems.
 
 The controller runs on Python 3.8; remote workers also support the inspected
@@ -286,6 +286,6 @@ and five-second ground truth windows are preserved.
 
 Credentials and experiment output belong under `.runtime/benign-lab/`, outside
 the versioned tool. The four domain capacities in `config/lab.connected.yaml` were measured
-experimentally; see `tools/benign-lab/docs/CAPACITY_CALIBRATION.md` and its
+experimentally; see `docs/CAPACITY_CALIBRATION.md` of that project and its
 raw `CAPACITY_MEASUREMENTS.json` report before interpreting a baseline. The connected pilot report records
 successful connectivity and observed payload shortfalls; it is not a baseline.

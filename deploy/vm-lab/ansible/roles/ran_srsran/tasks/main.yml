@@ -1,7 +1,7 @@
 ---
 # ran_srsran role -- srsRAN Project gNB (CU+DU+RU fused, no F1 split),
 # ZMQ RF driver (no SDR hardware), built with the E2 interface enabled --
-# this is what the ric_oran_sc role's FlexRIC actually talks to.
+# this is what the ric_oran_sc role's O-RAN SC RIC actually talks to.
 #
 # Replaces OCUDU (srsRAN Project's own successor fork, used earlier in
 # this lab's build -- see this file's own git history for the RACH-

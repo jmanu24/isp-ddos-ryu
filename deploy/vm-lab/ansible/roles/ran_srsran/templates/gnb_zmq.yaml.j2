@@ -103,19 +103,19 @@ cell_cfg:
 e2:
   enable_du_e2: true
   e2sm_kpm_enabled: true
-  # false, not true -- confirmed on a real run: FlexRIC's own bundled
-  # xapp_kpm_moni example (examples/xApp/c/monitor/xapp_kpm_moni.c) calls
-  # abort() via an assert() while decoding the RC RAN Function this gNB
-  # advertises when e2sm_rc_enabled is true --
-  # rc_dec_asn.c:dec_ran_func_ctrl_it: "Assertion
-  # `src->ric_CallProcessIDFormat_Type == NULL && "Not implemented"'
-  # failed" -- an unimplemented ASN.1 field in THIS FlexRIC build's RC
-  # service-model decoder, unrelated to and hit before the xApp ever
-  # gets to subscribing to KPM. Since RIC Control isn't otherwise used
-  # in this lab, disabling RC sidesteps it entirely -- confirmed on a
-  # real run: with this off, xapp_kpm_moni's subscription attempt no
-  # longer crashes -- see this file's own `metrics:` block below for
-  # what was still needed after that to get real per-UE KPM data out.
+  # false, not true -- confirmed on a real run against the near-RT RIC
+  # implementation used at the time: its own bundled KPM monitor xApp
+  # called abort() via an assert() while decoding the RC RAN Function
+  # this gNB advertises when e2sm_rc_enabled is true -- an unimplemented
+  # ASN.1 field in that RIC's own RC service-model decoder, unrelated to
+  # and hit before the xApp ever got to subscribing to KPM. Disabling RC
+  # advertisement here sidestepped it entirely and is what got real
+  # E2SM-KPM subscribe+indicate working end-to-end -- see this file's
+  # own `metrics:` block below for what was still needed after that to
+  # get real per-UE KPM data out. This lab's actual RC-based throttling
+  # now runs on the split CU/DU config instead (du_split.yaml.j2 /
+  # oran_bridge/rc_actuator_xapp.py); not re-tested against this exact
+  # colocated config since the RIC migration.
   e2sm_rc_enabled: false
   addr: {{ ric_addr | default('10.10.0.4') }}
   port: 36421

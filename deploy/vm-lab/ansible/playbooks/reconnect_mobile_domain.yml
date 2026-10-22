@@ -103,7 +103,7 @@
     - ansible.builtin.include_tasks: tasks/power_on.yml
       vars: { pon_vm: ric, pon_ip: 10.10.0.4 }
 
-    - name: Stop any FlexRIC daemons that would steal sctp/36421
+    - name: Stop any pre-migration RIC daemons that would steal sctp/36421
       ansible.builtin.shell: systemctl stop near-rt-ric kpm-telemetry-api 2>/dev/null; true
       changed_when: false
 

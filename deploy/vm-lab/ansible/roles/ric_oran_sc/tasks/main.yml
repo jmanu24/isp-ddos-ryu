@@ -2,10 +2,11 @@
 # ric_oran_sc role -- O-RAN SC RIC (github.com/srsran/oran-sc-ric), the
 # DEFINITIVE Near-RT RIC stack for this lab (item 4: unify the mobile
 # deployment procedure). This role REPLACES the previous ric_oran_sc
-# role, which built FlexRIC from source (`dev` branch) -- that approach
-# was abandoned after a real migration (see the oran-sc-ric-migration
-# memory): a from-source FlexRIC build never got its KPM delivery
-# working reliably against srsRAN Project's current E2SM-KPM encoder,
+# role, which built an earlier near-RT RIC implementation from source --
+# that approach was abandoned after a real migration (see the
+# oran-sc-ric-migration memory): that from-source build never got its
+# KPM delivery working reliably against srsRAN Project's current
+# E2SM-KPM encoder,
 # while srsRAN Project's own docs already list O-RAN SC RIC as the
 # other officially-supported RIC integration -- a single `docker compose
 # up` away, with KPM confirmed working end-to-end against this lab's own
@@ -22,12 +23,12 @@
 # docker-compose.yml/routes.rtg verbatim from the real, running `ric` VM
 # (see files/ in this role) rather than reconstructed from memory.
 
-- name: Stop any leftover FlexRIC-era services (previous ric_oran_sc role)
+- name: Stop any leftover pre-migration RIC services (previous ric_oran_sc role)
   # oran-sc-ric's own e2term needs sctp/36421 -- a leftover near-rt-ric
-  # (FlexRIC) process holding it is a real, confirmed conflict (see
-  # reconnect_mobile_domain.yml's own "ric" play, which defensively stops
-  # these every single reconnect for exactly this reason). Harmless no-op
-  # on a VM that never ran the old role.
+  # process from the previous RIC implementation holding it is a real,
+  # confirmed conflict (see reconnect_mobile_domain.yml's own "ric" play,
+  # which defensively stops these every single reconnect for exactly this
+  # reason). Harmless no-op on a VM that never ran the old role.
   ansible.builtin.systemd:
     name: "{{ item }}"
     state: stopped
