@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from eventlet import tpool
 
 import config.settings as settings
+from core.experiment_audit import emit as audit_emit
 from core.log_format import log_line
 from core.models import TelemetryEvent, MitigationAction
 from telemetry.base import DomainAdapter
@@ -22,7 +23,7 @@ _SSH_TIMEOUT_S = 10
 
 def _ssh(user: str, host: str, args: list, timeout: int = _SSH_TIMEOUT_S,
           input_text: str = None) -> subprocess.CompletedProcess:
-    """Same BatchMode/accept-new convention as webtool/peering_ops.py's
+    """Same BatchMode/accept-new convention as the former lab tooling
     _ssh_br -- see that function's docstring.
 
     shlex.join(args), NOT *args -- confirmed on a real run: the ssh
@@ -121,7 +122,7 @@ class BroadbandAdapter(DomainAdapter):
              (which every IPoE subscriber shares), and takes effect
              immediately: no FreeRADIUS reload or restart is involved.
           On unblock specifically, a third step: tells suscriptor's own
-          bng_subscriber_agent.py (over the same FIFO webtool/bng_ops.py
+          bng_subscriber_agent.py (over the same FIFO the former lab tooling
           drives) to "kick" that subscriber into a fresh session
           immediately, rather than leaving it to notice on its own
           (potentially a long time later) that its old, terminate()'d
@@ -464,6 +465,21 @@ class BroadbandAdapter(DomainAdapter):
 
         self._logger.warning(f"[BROADBAND] {'block' if is_block else 'unblock'} mac={mac} "
               f"(src_ip={action.src_ip}, attack_type={action.attack_type})")
+
+        # Unlike mobile/peering, this whole method already runs
+        # synchronously end-to-end and checks real exit status at every
+        # step (accel-cmd's returncode, then _set_mac_rejected's own
+        # SSH'd write-and-verify) -- ok=True here means the subscriber's
+        # session was genuinely terminated over RADIUS AND the persistent
+        # reject marker is confirmed in place, not just "a command was
+        # sent". That is real dataplane installation, so emit it only for
+        # the block path, once we know ok reflects BOTH checks above.
+        if is_block and ok:
+            audit_emit(
+                self._logger, 'mitigation_installed',
+                domain=self.domain_name,
+                action=dict(src_ip=action.src_ip, mac=mac, attack_type=action.attack_type),
+            )
         return ok
 
     def _kick_subscriber(self, src_ip: str) -> None:
